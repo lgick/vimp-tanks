@@ -1,27 +1,55 @@
 {
   "name": "@vimp/tanks",
   "version": "0.1.0",
-  "private": true,
   "description": "VIMP Tanks — игра-плагин для движка VIMP",
+  "homepage": "https://github.com/lgick/vimp-tanks#readme",
+  "bugs": {
+    "url": "https://github.com/lgick/vimp-tanks/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/lgick/vimp-tanks.git"
+  },
+  "license": "MIT",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "exports": {
     "./data/*": "./src/data/*",
     "./config/*": "./src/config/*",
     "./host/*": "./src/host/*",
     "./client/*": "./src/client/*"
   },
+  "publishConfig": {
+    "access": "restricted"
+  },
   "scripts": {
     "build": "rm -rf dist && npm run build:client && npm run build:host && npm run build:assets && npm run build:manifest",
     "build:client": "vite build --mode client",
     "build:host": "vite build --mode host",
-    "build:assets": "node ../../scripts/export-maps.js && node ../../scripts/copy-game-sounds.js",
-    "build:manifest": "node ../../scripts/build-game-manifest.js"
+    "build:assets": "node ./scripts/export-maps.js && node ./scripts/copy-game-sounds.js",
+    "build:manifest": "node ./scripts/build-game-manifest.js",
+    "audio:process": "node ./scripts/process-audio.js",
+    "core:build": "npm run core:build:web && npm run core:build:node",
+    "core:build:web": "wasm-pack build core --release --target web --out-dir pkg-web",
+    "core:build:node": "wasm-pack build core --release --target nodejs --out-dir pkg-node",
+    "core:test": "cargo test --workspace",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "@vimp/engine": "*",
+    "@vimp/engine": "^0.1.0",
     "pixi.js": "^8.14.0"
   },
   "devDependencies": {
-    "vite": "^7.1.11"
+    "@vitest/coverage-v8": "^4.1.9",
+    "eslint": "^9.37.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-no-consecutive-caps": "^1.2.0",
+    "globals": "^16.2.0",
+    "happy-dom": "^20.10.6",
+    "vite": "^7.1.11",
+    "vitest": "^4.1.9"
   }
 }

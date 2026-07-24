@@ -2,14 +2,14 @@ import { ENGINE_API_VERSION } from '@vimp/engine/config/opcodes.js';
 import init, { ClientCore } from '../../core/pkg-web/vimp_tanks_core.js';
 // игровой CSS (панель/полотна/команды) как строка — движок сам вставляет
 // его в DOM (поле styles контракта); ?inline не даёт Vite auto-inject
-// <style> при сборке (см. games/tanks/vite.config.js — сборка без index.html)
+// <style> при сборке (см. vite.config.js — сборка без index.html)
 import styles from './tanks.css?inline';
 import parts from './parts/index.js';
 import bakers from './bakers/index.js';
 
 // ClientPlugin танков: рендеры сущностей (parts), процедурные текстуры
 // (bakers) и игровые хуки клиентского ядра (ClientCore). default export
-// client-entry игры (games/tanks/vite.config.js --mode client, Этап 6.1);
+// client-entry игры (vite.config.js --mode client, Этап 6.1);
 // грузится динамически по GameManifest мастера (Этап 6.3, main.js).
 // Движок (main.js) не знает игровых методов ядра —
 // set_model/sync_panel/try_fire/cycle_weapon зовутся только отсюда.

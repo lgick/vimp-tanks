@@ -8,7 +8,7 @@ import systemMessages from './systemMessages.js';
 import createModules from './createModules.js';
 
 // HostPlugin танков (Worker-safe): вся игровая половина хоста одним объектом.
-// default export host-entry игры (games/tanks/vite.config.js --mode host,
+// default export host-entry игры (vite.config.js --mode host,
 // Этап 6.1); host.worker.js грузит его динамически по entries.host
 // GameManifest (Этап 6.4). Танки не используют 'custom'-события ядра —
 // onCoreEvent не задан, движок роутит стандартный словарь

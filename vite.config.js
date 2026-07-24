@@ -5,7 +5,7 @@ import path from 'node:path';
 // host-entry (worker-safe) собираются ДВУМЯ независимыми прогонами
 // (`vite build --mode client|host`), а не одним multi-entry рollup-графом —
 // общие чанки между ними утащили бы DOM-код (pixi.js) в worker-safe
-// host-бандл (риск #3 PLAN.md). wasm-glue (games/tanks/core/pkg-web/) —
+// host-бандл (риск #3 PLAN.md). wasm-glue (core/pkg-web/) —
 // общий для обоих entry: Vite хеширует .wasm по содержимому через
 // встроенный `new URL('*.wasm', import.meta.url)`-ассет паттерн внутри
 // самого wasm-pack-глюe-модуля, поэтому оба прогона выпускают файл с
@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
 
   if (!entry) {
     throw new Error(
-      `games/tanks build: unknown --mode "${mode}" (expected "client" or "host")`,
+      `tanks build: unknown --mode "${mode}" (expected "client" or "host")`,
     );
   }
 

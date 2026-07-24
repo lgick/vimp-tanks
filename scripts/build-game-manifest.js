@@ -4,14 +4,14 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_API_VERSION } from '@vimp/engine/config/opcodes.js';
 import hostDefaults from '@vimp/engine/config/hostDefaults.js';
-import gameConfig from '../games/tanks/src/config/game.js';
+import gameConfig from '../src/config/game.js';
 
 // Генерация GameManifest (docs/{en,ru}/plugin-api.md) после сборки
-// client/host-бандлов игры (games/tanks/vite.config.js, уже хеширует имена
+// client/host-бандлов игры (vite.config.js, уже хеширует имена
 // entry-файлов и общий .wasm-ассет) и постшагов maps:export/copy-game-sounds.
-// Запуск (в порядке зависимостей) — см. games/tanks/package.json "build".
+// Запуск (в порядке зависимостей) — см. package.json "build".
 
-const distDir = new URL('../games/tanks/dist/', import.meta.url);
+const distDir = new URL('../dist/', import.meta.url);
 const distPath = fileURLToPath(distDir);
 const assetsPath = path.join(distPath, 'assets');
 const mapsPath = path.join(distPath, 'maps');

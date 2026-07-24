@@ -4,12 +4,16 @@ version = "0.1.0"
 edition = "2024"
 description = "VIMP Tanks — игровая симуляция (танки/оружие/боты) + wasm-bindgen ABI (GameCore/ClientCore) поверх vimp-engine-core."
 license = "MIT"
+repository = "https://github.com/lgick/vimp-tanks"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-vimp-engine-core = { path = "../../../packages/engine/core" }
+# TODO(A3.2): временная git-зависимость — vimp-engine-core ещё не
+# опубликован в registry; заменить на vimp-engine-core = "x.y.z" после
+# `cargo publish -p vimp-engine-core`.
+vimp-engine-core = { git = "https://github.com/lgick/vimp-engine", branch = "engine" }
 indexmap = { workspace = true }
 rapier2d = { workspace = true }
 serde = { workspace = true }
