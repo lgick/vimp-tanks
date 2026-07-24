@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import hostPlugin from '@vimp/tanks/host/index.js';
+import hostPlugin from '../../src/host/index.js';
 
 // HostPlugin танков — статическая сборка игровой половины хоста (этап 3);
 // фиксируем поверхность, которую дергает движок (HostGame/host.worker).

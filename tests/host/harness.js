@@ -30,13 +30,13 @@ export const decodeShot = buffer =>
 export const loadConfig = async () => {
   const config = (await import('@vimp/engine/lib/config.js')).default;
 
-  config.set('auth', (await import('@vimp/tanks/config/auth.js')).default);
+  config.set('auth', (await import('../../src/config/auth.js')).default);
   config.set('wsports', (await import('@vimp/engine/config/wsports.js')).default);
 
   // merge движок+игра — зеркало applyRoomOverrides из host.worker.js
   const hostDefaults = (await import('@vimp/engine/config/hostDefaults.js'))
     .default;
-  const tanksGameConfig = (await import('@vimp/tanks/config/game.js')).default;
+  const tanksGameConfig = (await import('../../src/config/game.js')).default;
 
   config.set('game', { ...hostDefaults, ...tanksGameConfig });
 
@@ -148,7 +148,7 @@ export const createHost = async ({ seed = 42, game = {}, opts = {} } = {}) => {
 
   const config = await loadConfig();
   const HostGame = (await import('@vimp/engine/host/HostGame.js')).default;
-  const hostPlugin = (await import('@vimp/tanks/host/index.js')).default;
+  const hostPlugin = (await import('../../src/host/index.js')).default;
   const core = makeCore({ seed });
   const socket = new FakeSocketManager();
   const gameConfig = { ...config.get('game'), ...game };

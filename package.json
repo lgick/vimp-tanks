@@ -15,12 +15,6 @@
   "files": [
     "dist"
   ],
-  "exports": {
-    "./data/*": "./src/data/*",
-    "./config/*": "./src/config/*",
-    "./host/*": "./src/host/*",
-    "./client/*": "./src/client/*"
-  },
   "publishConfig": {
     "access": "restricted"
   },

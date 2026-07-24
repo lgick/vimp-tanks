@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import clientPlugin from '@vimp/tanks/client/index.js';
+import clientPlugin from '../../src/client/index.js';
 
 // ClientPlugin танков: хуки игровых методов клиентского ядра
 // (движок main.js зовёт их, не зная set_model/sync_panel/try_fire).

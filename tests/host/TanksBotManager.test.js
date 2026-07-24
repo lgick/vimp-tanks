@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import TanksBotManager from '@vimp/tanks/host/TanksBotManager.js';
+import TanksBotManager from '../../src/host/TanksBotManager.js';
 import ParticipantManager from '@vimp/engine/host/meta/player/ParticipantManager.js';
 
 // Юнит-тесты игрового scripted-модуля: реальный ParticipantManager +

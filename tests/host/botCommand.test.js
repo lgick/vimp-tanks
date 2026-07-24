@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import botCommand from '@vimp/tanks/host/botCommand.js';
+import botCommand from '../../src/host/botCommand.js';
 
 // Игровая чат-команда /bot (танки): валидация, немедленное исполнение при
 // одном активном игроке, голосование при нескольких. Вызывается движковым
