@@ -7,7 +7,7 @@ setup (running the master server, the lobby), see the engine's own
 
 ## Requirements
 
-- **Node.js 22**, npm;
+- **Node.js 24**, npm;
 - **Rust toolchain** (`rustup` + `wasm-pack`) — required to build this
   plugin's WASM core, which the engine's browser host and every client
   load.
