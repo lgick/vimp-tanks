@@ -1,6 +1,6 @@
 import { Container, Ticker } from 'pixi.js';
 import TrackMark from './TrackMark.js';
-import { normalizeAngle } from '@vimp/engine/lib/math.js';
+import { normalizeAngle } from 'vimp-engine/lib/math.js';
 
 export default class Tracks extends Container {
   constructor(data, assets) {

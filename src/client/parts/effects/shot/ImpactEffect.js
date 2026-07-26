@@ -1,6 +1,6 @@
 import { Sprite } from 'pixi.js';
 import BaseEffect from '../BaseEffect.js';
-import { lerp, randomRange } from '@vimp/engine/lib/math.js';
+import { lerp, randomRange } from 'vimp-engine/lib/math.js';
 
 // диаметр "запеченной" текстуры частицы
 // рассчитывается как (radius + blur) * 2 из client.js (4 + 1) * 2 = 10

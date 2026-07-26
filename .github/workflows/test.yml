@@ -11,7 +11,7 @@ on:
 # integration гоняет сквозные тесты на реальном ядре (нужны оба таргета —
 # node-таргет для tests/core/helpers.js, web-таргет — для того же импорта
 # плагина, что и в tanks-job). Перенесено из CI движка (A3.5/A3.6 плана
-# отделения движка) — @vimp/engine ставится здесь из npm registry, а не из
+# отделения движка) — vimp-engine ставится здесь из npm registry, а не из
 # workspace-симлинка.
 jobs:
   lint:

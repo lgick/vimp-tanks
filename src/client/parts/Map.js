@@ -1,5 +1,5 @@
 import { Container, Sprite, Assets, Spritesheet, Rectangle } from 'pixi.js';
-import { degToRad } from '@vimp/engine/lib/math.js';
+import { degToRad } from 'vimp-engine/lib/math.js';
 
 export default class Map extends Container {
   constructor(data, _assets, dependencies) {

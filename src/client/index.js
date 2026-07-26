@@ -1,4 +1,4 @@
-import { ENGINE_API_VERSION } from '@vimp/engine/config/opcodes.js';
+import { ENGINE_API_VERSION } from 'vimp-engine/config/opcodes.js';
 import init, { ClientCore } from '../../core/pkg-web/vimp_tanks_core.js';
 // игровой CSS (панель/полотна/команды) как строка — движок сам вставляет
 // его в DOM (поле styles контракта); ?inline не даёт Vite auto-inject

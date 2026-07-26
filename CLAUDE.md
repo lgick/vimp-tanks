@@ -5,7 +5,7 @@ Guidance for Claude Code when working in this repository.
 ## Project Overview
 
 `vimp-tanks` — a team-based tank deathmatch, a game plugin for the
-[VIMP engine](https://github.com/lgick/vimp-engine) (`@vimp/engine`,
+[VIMP engine](https://github.com/lgick/vimp-engine) (`vimp-engine`,
 `vimp-engine-core`). This repo owns only game rules: physics entities
 (tanks, weapons, bots), rendering parts, config, and maps. Transport,
 Worker infrastructure, master server, and the client MVC/render framework

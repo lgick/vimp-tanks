@@ -28,13 +28,13 @@ export const decodeShot = buffer =>
 // Загружает реальные конфиги в свежий синглтон config (зеркало init
 // host.worker.js). Должна вызываться после vi.resetModules().
 export const loadConfig = async () => {
-  const config = (await import('@vimp/engine/lib/config.js')).default;
+  const config = (await import('vimp-engine/lib/config.js')).default;
 
   config.set('auth', (await import('../../src/config/auth.js')).default);
-  config.set('wsports', (await import('@vimp/engine/config/wsports.js')).default);
+  config.set('wsports', (await import('vimp-engine/config/wsports.js')).default);
 
   // merge движок+игра — зеркало applyRoomOverrides из host.worker.js
-  const hostDefaults = (await import('@vimp/engine/config/hostDefaults.js'))
+  const hostDefaults = (await import('vimp-engine/config/hostDefaults.js'))
     .default;
   const tanksGameConfig = (await import('../../src/config/game.js')).default;
 
@@ -147,7 +147,7 @@ export const createHost = async ({ seed = 42, game = {}, opts = {} } = {}) => {
   vi.useFakeTimers();
 
   const config = await loadConfig();
-  const HostGame = (await import('@vimp/engine/host/HostGame.js')).default;
+  const HostGame = (await import('vimp-engine/host/HostGame.js')).default;
   const hostPlugin = (await import('../../src/host/index.js')).default;
   const core = makeCore({ seed });
   const socket = new FakeSocketManager();

@@ -83,7 +83,7 @@ npm run core:test         # cargo test --workspace (crate этого репоз�
 тестовые аксессоры остаются рукописными.
 
 ```js
-import { buildCoreConfig } from '@vimp/engine/lib/coreConfig.js';
+import { buildCoreConfig } from 'vimp-engine/lib/coreConfig.js';
 const { GameCore } = require('../core/pkg-node/vimp_tanks_core.js'); // nodejs-таргет
 
 const core = new GameCore(JSON.stringify(buildCoreConfig({ seed: 42 })));

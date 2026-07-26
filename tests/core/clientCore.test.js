@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import hostDefaults from '@vimp/engine/config/hostDefaults.js';
+import hostDefaults from 'vimp-engine/config/hostDefaults.js';
 import {
   coreAvailable,
   makeCore,

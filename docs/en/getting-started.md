@@ -20,7 +20,7 @@ cd vimp-tanks
 npm install
 ```
 
-`@vimp/engine` is a regular npm dependency here (not a workspace symlink)
+`vimp-engine` is a regular npm dependency here (not a workspace symlink)
 — this plugin only imports its public `exports` surface (`./lib/*`,
 `./config/*`, `./host/*`).
 
@@ -88,7 +88,7 @@ parity run (`npm run core:test`).
 
 CI (`.github/workflows/test.yml`) runs two jobs: `lint` (eslint only);
 `tanks` (`cargo test -p vimp-tanks-core` + `core:build:web` + `core:build:node`
-+ both Vitest projects — `@vimp/engine` is installed from the npm registry
++ both Vitest projects — `vimp-engine` is installed from the npm registry
 here, not a workspace symlink).
 
 ---

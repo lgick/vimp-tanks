@@ -1,7 +1,7 @@
 # Architecture (game plugin)
 
 `vimp-tanks` is a **dynamic plugin** for the [VIMP engine](https://github.com/lgick/vimp-engine)
-(published as `@vimp/engine` / `vimp-engine-core`): a team-based tank
+(published as `vimp-engine` / `vimp-engine-core`): a team-based tank
 deathmatch running entirely on the engine's P2P infrastructure (authoritative
 browser host, WebRTC clients, Node.js master for lobby/signaling). This repo
 owns only game rules — physics, transport, Worker handoff, and the client

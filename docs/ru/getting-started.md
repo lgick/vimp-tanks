@@ -21,7 +21,7 @@ cd vimp-tanks
 npm install
 ```
 
-`@vimp/engine` здесь — обычная npm-зависимость (не workspace-симлинк) —
+`vimp-engine` здесь — обычная npm-зависимость (не workspace-симлинк) —
 этот плагин импортирует только публичную поверхность его `exports`
 (`./lib/*`, `./config/*`, `./host/*`).
 
@@ -92,7 +92,7 @@ npm run dev
 
 CI (`.github/workflows/test.yml`) гоняет два job'а: `lint` (только
 eslint); `tanks` (`cargo test -p vimp-tanks-core` + `core:build:web` +
-`core:build:node` + оба Vitest-проекта — `@vimp/engine` здесь ставится из
+`core:build:node` + оба Vitest-проекта — `vimp-engine` здесь ставится из
 npm registry, а не из workspace-симлинка).
 
 ---

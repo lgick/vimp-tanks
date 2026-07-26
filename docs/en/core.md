@@ -83,7 +83,7 @@ args); `new` (config parsing) and non-`#[wasm_bindgen]` test accessors
 stay hand-written.
 
 ```js
-import { buildCoreConfig } from '@vimp/engine/lib/coreConfig.js';
+import { buildCoreConfig } from 'vimp-engine/lib/coreConfig.js';
 const { GameCore } = require('../core/pkg-node/vimp_tanks_core.js'); // nodejs target
 
 const core = new GameCore(JSON.stringify(buildCoreConfig({ seed: 42 })));

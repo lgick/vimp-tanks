@@ -1,6 +1,6 @@
 import { Graphics } from 'pixi.js';
 import BaseEffect from '../BaseEffect.js';
-import { lerp, clamp } from '@vimp/engine/lib/math.js';
+import { lerp, clamp } from 'vimp-engine/lib/math.js';
 
 export default class TracerEffect extends BaseEffect {
   constructor(startX, startY, endX, endY, onComplete) {

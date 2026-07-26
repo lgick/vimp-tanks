@@ -33,7 +33,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@vimp/engine": "^0.1.0",
+    "vimp-engine": "^0.1.0",
     "pixi.js": "^8.14.0"
   },
   "devDependencies": {

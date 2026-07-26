@@ -1,6 +1,6 @@
 import { Container, Ticker } from 'pixi.js';
 import ParticlePool from './ParticlePool.js';
-import { lerp, randomRange } from '@vimp/engine/lib/math.js';
+import { lerp, randomRange } from 'vimp-engine/lib/math.js';
 
 // глобальные переменные для ветра
 const globalWindX = 0;

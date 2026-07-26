@@ -1,4 +1,4 @@
-import { ENGINE_API_VERSION } from '@vimp/engine/config/opcodes.js';
+import { ENGINE_API_VERSION } from 'vimp-engine/config/opcodes.js';
 import init, { GameCore } from '../../core/pkg-web/vimp_tanks_core.js';
 import gameConfig from '../config/game.js';
 import clientConfig from '../config/client.js';

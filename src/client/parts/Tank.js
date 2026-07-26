@@ -1,5 +1,5 @@
 import { Container, Sprite } from 'pixi.js';
-import { lerp, clamp } from '@vimp/engine/lib/math.js';
+import { lerp, clamp } from 'vimp-engine/lib/math.js';
 
 // скорость (высота тона) на холостом ходу
 const MIN_ENGINE_RATE = 1;

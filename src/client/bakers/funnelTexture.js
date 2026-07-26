@@ -1,5 +1,5 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import { randomRange } from '@vimp/engine/lib/math.js';
+import { randomRange } from 'vimp-engine/lib/math.js';
 
 // создаёт процедурную текстуру размытой кляксы для эффекта воронки
 // params.baseRadius - Базовый радиус фигуры.
