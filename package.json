@@ -1,5 +1,5 @@
 {
-  "name": "@vimp/tanks",
+  "name": "@vimp-games/tanks",
   "version": "0.1.0",
   "description": "VIMP Tanks — игра-плагин для движка VIMP",
   "homepage": "https://github.com/lgick/vimp-tanks#readme",
@@ -16,7 +16,7 @@
     "dist"
   ],
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "scripts": {
     "build": "rm -rf dist && npm run build:client && npm run build:host && npm run build:assets && npm run build:manifest",
