@@ -10,10 +10,7 @@ repository = "https://github.com/lgick/vimp-tanks"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# TODO(A3.2): временная git-зависимость — vimp-engine-core ещё не
-# опубликован в registry; заменить на vimp-engine-core = "x.y.z" после
-# `cargo publish -p vimp-engine-core`.
-vimp-engine-core = { git = "https://github.com/lgick/vimp-engine", branch = "engine" }
+vimp-engine-core = "0.1.0"
 indexmap = { workspace = true }
 rapier2d = { workspace = true }
 serde = { workspace = true }
