@@ -13,6 +13,9 @@ export default function warmUpRenderer(renderer) {
     return;
   }
 
-  renderer.render(new Container());
+  const container = new Container();
+
+  renderer.render(container);
+  container.destroy();
   warmedUpRenderers.add(renderer);
 }

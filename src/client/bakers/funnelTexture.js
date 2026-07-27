@@ -1,6 +1,5 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
 import { randomRange } from 'vimp-engine/lib/math.js';
-import warmUpRenderer from './warmUpRenderer.js';
 
 // создаёт процедурную текстуру размытой кляксы для эффекта воронки
 // params.baseRadius - Базовый радиус фигуры.
@@ -10,8 +9,6 @@ import warmUpRenderer from './warmUpRenderer.js';
 // renderer - Рендерер PIXI.
 export default function funnelTexture(params, renderer) {
   const { baseRadius, irregularity, blur, numPoints } = params;
-
-  warmUpRenderer(renderer);
 
   const graphics = new Graphics();
   const canvasSize = (baseRadius + irregularity + blur) * 2;
