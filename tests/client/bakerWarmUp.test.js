@@ -41,7 +41,17 @@ describe('bakers/index.js оборачивает каждый baker прогре
     ],
     ['trackMarkTexture', { width: 4, length: 8, color: 0xffffff }],
     ['bombTexture', { colorOuter: 0x000000, colorInner: 0xffffff }],
+    [
+      'tankTexture',
+      { colors: { teamId1: 0xff0000, teamId2: 0x0000ff } },
+    ],
   ];
+
+  it('покрывает каждый baker из bakers/index.js', () => {
+    expect(cases.map(([name]) => name).sort()).toEqual(
+      Object.keys(bakers).sort(),
+    );
+  });
 
   it.each(cases)('%s', (name, params) => {
     const order = [];
