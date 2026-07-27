@@ -1,4 +1,5 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
+import warmUpRenderer from './warmUpRenderer.js';
 
 // создает текстуру размытого круга для частицы дыма танка
 // params.radius - Радиус круга
@@ -7,6 +8,9 @@ import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
 // renderer - PIXI рендерер
 export default function tankSmokeParticleTexture(params, renderer) {
   const { radius, blur, color } = params;
+
+  warmUpRenderer(renderer);
+
   const graphics = new Graphics();
 
   graphics.circle(radius + blur, radius + blur, radius);

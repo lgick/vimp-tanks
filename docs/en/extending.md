@@ -87,7 +87,12 @@ Steps:
    `parts/index.js` — it lands in the engine's `Factory` registry.
 2. Add it to `gameSets`/`entitiesOnCanvas` (`src/config/client.js`).
 3. If it needs a procedural texture, add a baker in `src/client/bakers/`
-   (follow the existing ones) and an entry in `bakedAssets`.
+   (follow the existing ones) and an entry in `bakedAssets`. If the baker
+   applies a PixiJS `Filter` before `generateTexture`, call
+   `warmUpRenderer(renderer)` (`src/client/bakers/warmUpRenderer.js`) first —
+   baking runs before the engine's first render pass, and PixiJS v8 binds
+   its root render target lazily on that first `render()` call, so
+   filtering an unrendered target crashes deep in the filter pipeline.
 4. If it needs services (`renderer`, `soundManager`), add the class to
    `componentDependencies`.
 

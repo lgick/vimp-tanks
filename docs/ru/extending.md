@@ -87,7 +87,12 @@
 2. Пропишите её в `gameSets`/`entitiesOnCanvas` (`src/config/client.js`).
 3. Если нужна процедурная текстура, добавьте baker в
    `src/client/bakers/` (по образцу существующих) и запись в
-   `bakedAssets`.
+   `bakedAssets`. Если baker применяет PixiJS `Filter` перед
+   `generateTexture`, сначала вызовите `warmUpRenderer(renderer)`
+   (`src/client/bakers/warmUpRenderer.js`) — бейкинг идёт до первого
+   рендер-прохода движка, а PixiJS v8 биндит корневой render target лениво,
+   при первом вызове `render()`, поэтому фильтрация нерендеренного target
+   падает внутри filter-пайплайна.
 4. Если нужны сервисы (`renderer`, `soundManager`), добавьте класс в
    `componentDependencies`.
 

@@ -1,4 +1,5 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
+import warmUpRenderer from './warmUpRenderer.js';
 
 // создает текстуру размытого круга для частиц от попаданий
 // params.radius - Радиус круга
@@ -7,6 +8,9 @@ import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
 // renderer - PIXI рендерер
 export default function impactParticleTexture(params, renderer) {
   const { radius, blur, color } = params;
+
+  warmUpRenderer(renderer);
+
   const graphics = new Graphics();
 
   // Добавляем blur к радиусу, чтобы текстура не обрезалась по краям
