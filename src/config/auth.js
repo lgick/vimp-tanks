@@ -53,7 +53,7 @@ export default {
       options: {
         control: 'select',
         label: 'Model',
-        options: Object.keys(models), // choices for control: 'select', not to be confused with the outer PS_AUTH_DATA `options` key
+        options: Object.keys(models), // варианты для control: 'select', не путать с внешним ключом протокола `options` (PS_AUTH_DATA)
         validator: 'isValidModel',
         storage: 'model',
       },

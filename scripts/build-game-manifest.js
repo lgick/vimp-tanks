@@ -90,7 +90,13 @@ const manifest = {
     list: mapNames,
   },
   roomDefaults: Object.fromEntries(
-    roomForm.map(({ name }) => [name, roomValues[name]]),
+    roomForm.map(({ name }) => {
+      if (!(name in roomValues)) {
+        throw new Error(`roomForm field "${name}" has no value source`);
+      }
+
+      return [name, roomValues[name]];
+    }),
   ),
   roomForm,
 };
