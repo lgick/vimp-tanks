@@ -67,6 +67,6 @@ or `src/data/models.js`.
 
 ## Deployment
 
-This repo has no deployment of its own — it publishes `@vimp/tanks` (npm,
+This repo has no deployment of its own — it publishes `@vimp-games/tanks` (npm,
 ships `dist/`) for the engine's master/host/client to consume. CI builds
 and tests the crate + JS; see `.github/workflows/test.yml`.

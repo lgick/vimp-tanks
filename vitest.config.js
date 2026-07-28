@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-// Конфигурация Vitest для @vimp/tanks (перенесено из монорепо движка,
+// Конфигурация Vitest для @vimp-games/tanks (перенесено из монорепо движка,
 // Этап A3 плана отделения движка). Два проекта:
 //   - tanks:       игровые модули (host-плагин, ClientPlugin) в happy-dom
 //   - integration: интеграция поверх реального Rust-ядра
