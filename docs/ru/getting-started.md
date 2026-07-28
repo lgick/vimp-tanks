@@ -1,6 +1,6 @@
 # Локальная настройка (игра-плагин)
 
-Этот репозиторий собирает `@vimp/tanks` — игру-плагин для
+Этот репозиторий собирает `@vimp-games/tanks` — игру-плагин для
 [движка VIMP](https://github.com/lgick/vimp-engine). Про локальную
 настройку движковой стороны (запуск мастер-сервера, лобби) — см.
 [getting-started.md](https://github.com/lgick/vimp-engine/blob/main/docs/ru/getting-started.md)
@@ -67,10 +67,10 @@ JS-бандлы клиента/хоста, экспортированный JSON
 ```bash
 # в vimp-tanks/
 npm run build          # или минимум npm run core:build + build:client + build:host
-npm link                # регистрирует @vimp/tanks глобально
+npm link                # регистрирует @vimp-games/tanks глобально
 
 # в vimp-engine/
-npm link @vimp/tanks    # или: "@vimp/tanks": "file:../vimp-tanks" в package.json
+npm link @vimp-games/tanks    # или: "@vimp-games/tanks": "file:../vimp-tanks" в package.json
 npm run dev
 ```
 

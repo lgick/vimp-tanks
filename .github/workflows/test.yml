@@ -102,7 +102,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # web-таргет нужен harness.js (динамический import @vimp/tanks/host/index.js
+      # web-таргет нужен harness.js (динамический import ../../src/host/index.js
       # статически грузит pkg-web) наравне с node-таргетом (JS↔WASM хелперы
       # tests/core/helpers.js) — сборка только node-таргета ловится этим
       # шагом молча в других раскладках CI, поэтому оба явно

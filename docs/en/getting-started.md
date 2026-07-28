@@ -1,6 +1,6 @@
 # Local Setup (game plugin)
 
-This repository builds `@vimp/tanks`, a game plugin for the
+This repository builds `@vimp-games/tanks`, a game plugin for the
 [VIMP engine](https://github.com/lgick/vimp-engine). For engine-side local
 setup (running the master server, the lobby), see the engine's own
 [getting-started.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/getting-started.md).
@@ -65,10 +65,10 @@ To develop against a local, unpublished copy of this plugin:
 ```bash
 # in vimp-tanks/
 npm run build          # or at minimum npm run core:build + build:client + build:host
-npm link                # registers @vimp/tanks globally
+npm link                # registers @vimp-games/tanks globally
 
 # in vimp-engine/
-npm link @vimp/tanks    # or: "@vimp/tanks": "file:../vimp-tanks" in package.json
+npm link @vimp-games/tanks    # or: "@vimp-games/tanks": "file:../vimp-tanks" in package.json
 npm run dev
 ```
 

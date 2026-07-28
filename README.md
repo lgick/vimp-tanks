@@ -6,7 +6,7 @@ A team-based tank deathmatch — the reference game plugin for the
 - **Game rules**: two teams, hitscan bullets and bombs, bots, votes, chat, statistics.
 - **Rust core**: tank/weapon/bot simulation compiled to WASM, running on the engine's browser host and every client (physics via `rapier2d`, shared with the engine's `vimp-engine-core` crate).
 - **Client**: PixiJS rendering parts, procedural textures, spatial audio — plugged into the engine's MVC/render framework.
-- **Packaged as a plugin**: published as `@vimp/tanks` (npm) with a `dist/manifest.json`, loaded dynamically at runtime by any engine instance — never a build-time dependency of the engine.
+- **Packaged as a plugin**: published as `@vimp-games/tanks` (npm) with a `dist/manifest.json`, loaded dynamically at runtime by any engine instance — never a build-time dependency of the engine.
 
 ## Quick start
 
