@@ -21,7 +21,8 @@ export default {
   // по явному url, а не через import.meta.url-резолюцию глюe-модуля
   // (риск #3 PLAN.md — важно для рабочего Worker'а)
   async createCore(coreConfigJson, { wasmUrl }) {
-    await init(wasmUrl);
+    // eslint-disable-next-line camelcase -- wasm-bindgen init() option name
+    await init({ module_or_path: wasmUrl });
 
     return new GameCore(coreConfigJson);
   },

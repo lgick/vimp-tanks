@@ -10,6 +10,11 @@ import path from 'node:path';
 // встроенный `new URL('*.wasm', import.meta.url)`-ассет паттерн внутри
 // самого wasm-pack-глюe-модуля, поэтому оба прогона выпускают файл с
 // одинаковым hashed-именем (общий HTTP-кеш, без явного shared-чанка).
+// pixi.js — общий singleton, поставляется движком через import map:
+// externalized ниже (rollupOptions.external), а не вшивается в бандл, иначе
+// движок и плагин получат по независимой копии PixiJS (свои реестры
+// расширений/пайпов, счётчики uid) — межэкземплярные операции (baker'ы
+// отдают Container/Filter движковому renderer'у) падают в рантайме.
 const entries = {
   client: path.resolve(import.meta.dirname, 'src/client/index.js'),
   host: path.resolve(import.meta.dirname, 'src/host/index.js'),
@@ -42,6 +47,7 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: entry,
         preserveEntrySignatures: 'strict',
+        external: [/^pixi\.js(\/.*)?$/],
         output: {
           format: 'es',
           entryFileNames: `${mode}-[hash].js`,

@@ -24,6 +24,16 @@ npm install
 — this plugin only imports its public `exports` surface (`./lib/*`,
 `./config/*`, `./host/*`).
 
+`pixi.js` is a **peer dependency**, not bundled: the client build
+externalizes it (`vite.config.js`), and at runtime it must resolve to the
+same module instance the engine uses, supplied via an import map on the
+host page. Two independent PixiJS copies (engine + plugin each bundling
+their own) crash at runtime — each copy has its own extension/pipe
+registry and uid counters, and objects created by one copy (e.g. this
+plugin's baker `Container`/`Filter` instances) aren't valid input to the
+other's renderer. See the engine's own getting-started for the import map
+setup.
+
 ## Rust toolchain
 
 ```bash

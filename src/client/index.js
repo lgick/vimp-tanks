@@ -19,7 +19,8 @@ export default {
 
   // wasmUrl — из GameManifest.entries.wasm (общий с host-плагином ассет)
   async createClientCore(clientConfigJson, { wasmUrl }) {
-    const wasm = await init(wasmUrl);
+    // eslint-disable-next-line camelcase -- wasm-bindgen init() option name
+    const wasm = await init({ module_or_path: wasmUrl });
 
     return { core: new ClientCore(clientConfigJson), memory: wasm.memory };
   },

@@ -77,6 +77,12 @@ textures are baked at startup from `src/client/bakers/`.
 
 ## Key invariants
 
+- **Single PixiJS instance**: engine and plugin must share one PixiJS
+  module instance at runtime. `pixi.js` is a peer dependency and is
+  externalized from the client build (`vite.config.js`); the host page
+  resolves it via an import map. Bundling a second copy in either side
+  breaks interop between engine-owned renderer/filter systems and this
+  plugin's PixiJS objects (bakers, `parts/`).
 - **Motion replica parity**: authoritative motion (Rapier, in `core/`) and
   the client prediction replica share the tick formulas (`core/src/motion.rs`);
   integration parity is locked in by cargo tests (`client::predictor::parity`)
