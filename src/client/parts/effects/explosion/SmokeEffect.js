@@ -1,5 +1,9 @@
+import { ParticleContainer, Rectangle } from 'pixi.js';
 import ParticlePool from '../../ParticlePool.js';
 import BaseEffect from '../BaseEffect.js';
+
+// область разлёта частиц дыма взрыва вокруг локального центра эффекта (0, 0)
+const BOUNDS_AREA = new Rectangle(-200, -400, 400, 800);
 
 export default class SmokeEffect extends BaseEffect {
   constructor(assets) {
@@ -7,6 +11,20 @@ export default class SmokeEffect extends BaseEffect {
 
     this.explosionTexture = assets.explosionTexture;
 
+    this._particleContainer = new ParticleContainer({
+      texture: this.explosionTexture,
+      boundsArea: BOUNDS_AREA,
+      dynamicProperties: {
+        position: true,
+        vertex: true,
+        rotation: true,
+        color: true,
+      },
+    });
+    this.addChild(this._particleContainer);
+
+    // симуляция каждой частицы хранится отдельно от Particle
+    // (у Particle нет customData)
     this._particles = [];
     this._isSpawning = true;
 
@@ -35,15 +53,13 @@ export default class SmokeEffect extends BaseEffect {
 
   _createParticle() {
     // получение из пула вместо new Sprite
-    const particle = ParticlePool.get(this.explosionTexture);
-
-    particle.anchor.set(0.5);
+    const view = ParticlePool.get(this.explosionTexture);
 
     // вариация цвета
     const grayLevel = 0.2 + Math.random() * 0.4;
     const colorVal = Math.floor(grayLevel * 255);
 
-    particle.tint = (colorVal << 16) | (colorVal << 8) | colorVal;
+    view.tint = (colorVal << 16) | (colorVal << 8) | colorVal;
 
     // размер
     const startScale =
@@ -54,16 +70,18 @@ export default class SmokeEffect extends BaseEffect {
     const aspectX = 0.6 + Math.random() * 0.8;
     const aspectY = 0.6 + Math.random() * 0.8;
 
-    particle.scale.set(startScale * aspectX, startScale * aspectY);
+    view.scaleX = startScale * aspectX;
+    view.scaleY = startScale * aspectY;
 
-    particle.alpha = this._startAlpha + Math.random() * 0.1;
-    particle.rotation = Math.random() * Math.PI * 2;
+    view.alpha = this._startAlpha + Math.random() * 0.1;
+    view.rotation = Math.random() * Math.PI * 2;
 
     // начальная позиция
-    particle.x = (Math.random() - 0.5) * this._initialOffsetX;
-    particle.y = (Math.random() - 0.5) * this._initialOffsetY;
+    view.x = (Math.random() - 0.5) * this._initialOffsetX;
+    view.y = (Math.random() - 0.5) * this._initialOffsetY;
 
-    particle.customData = {
+    const particle = {
+      view,
       life: 0,
       maxLife: this._particleMaxLifeMs * (0.7 + Math.random() * 0.6),
       aspectRatioX: aspectX,
@@ -82,7 +100,7 @@ export default class SmokeEffect extends BaseEffect {
       startScale,
     };
 
-    this.addChild(particle);
+    this._particleContainer.addParticle(view);
     this._particles.push(particle);
   }
 
@@ -106,46 +124,47 @@ export default class SmokeEffect extends BaseEffect {
 
     for (let i = this._particles.length - 1; i >= 0; i -= 1) {
       const particle = this._particles[i];
-      const data = particle.customData;
+      const view = particle.view;
 
-      data.life += deltaMs;
+      particle.life += deltaMs;
 
-      if (data.life >= data.maxLife) {
+      if (particle.life >= particle.maxLife) {
         // возвращение в пул
-        ParticlePool.release(particle);
+        this._particleContainer.removeParticle(view);
+        ParticlePool.release(view);
         this._particles.splice(i, 1);
       } else {
-        const progress = data.life / data.maxLife;
+        const progress = particle.life / particle.maxLife;
 
         // физика
-        data.vy *= 0.98;
-        data.vx *= 0.95;
+        particle.vy *= 0.98;
+        particle.vx *= 0.95;
 
         const sway =
-          Math.sin(data.life * data.swaySpeed + data.swayOffset) * data.swayAmp;
+          Math.sin(particle.life * particle.swaySpeed + particle.swayOffset) *
+          particle.swayAmp;
 
-        particle.x += (data.vx + sway) * (deltaMs / 16);
-        particle.y += data.vy * (deltaMs / 16);
-        particle.rotation += data.rotationSpeed * (deltaMs / 16);
+        view.x += (particle.vx + sway) * (deltaMs / 16);
+        view.y += particle.vy * (deltaMs / 16);
+        view.rotation += particle.rotationSpeed * (deltaMs / 16);
 
         // масштаб
         const ease = 1 - Math.pow(1 - progress, 3);
         const currentBaseScale =
-          data.startScale + (data.targetScale - data.startScale) * ease;
+          particle.startScale +
+          (particle.targetScale - particle.startScale) * ease;
 
-        particle.scale.set(
-          currentBaseScale * data.aspectRatioX,
-          currentBaseScale * data.aspectRatioY,
-        );
+        view.scaleX = currentBaseScale * particle.aspectRatioX;
+        view.scaleY = currentBaseScale * particle.aspectRatioY;
 
         // альфа
         if (progress < 0.1) {
-          particle.alpha = (progress / 0.1) * this._startAlpha;
+          view.alpha = (progress / 0.1) * this._startAlpha;
         } else if (progress > 0.4) {
           const fadeP = (progress - 0.4) / 0.6;
-          particle.alpha = this._startAlpha * (1 - fadeP);
+          view.alpha = this._startAlpha * (1 - fadeP);
         } else {
-          particle.alpha = this._startAlpha;
+          view.alpha = this._startAlpha;
         }
       }
     }
@@ -163,15 +182,14 @@ export default class SmokeEffect extends BaseEffect {
   destroy(options) {
     // при уничтожении эффекта возвращение живых частиц в пул
     for (let i = 0; i < this._particles.length; i += 1) {
-      ParticlePool.release(this._particles[i]);
+      ParticlePool.release(this._particles[i].view);
     }
 
     this._particles = [];
 
-    // super.destroy вызовет destroyChildren.
-    // так как выполненен ParticlePool.release, там внутри removeChild;
-    // children у контейнера уже пуст (или почти пуст),
-    // и Pixi не будет пытаться удалить спрайты повторно
+    // super.destroy уничтожит ParticleContainer как обычного ребёнка
+    // (children: true из BaseEffect); частицы, уже возвращённые в пул,
+    // повторно не трогаются
     super.destroy(options);
   }
 }

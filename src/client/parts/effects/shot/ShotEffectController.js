@@ -151,6 +151,6 @@ export default class ShotEffectController extends Container {
     }
 
     // children:true уничтожит все, что еще осталось
-    super.destroy({ children: true, texture: true, baseTexture: true });
+    super.destroy({ children: true });
   }
 }

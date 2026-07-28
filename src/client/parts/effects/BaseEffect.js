@@ -69,7 +69,7 @@ export default class BaseEffect extends Container {
     super.destroy({
       children: true,
       texture: false,
-      baseTexture: false,
+      textureSource: false,
       ...options,
     });
   }

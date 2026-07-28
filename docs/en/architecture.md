@@ -75,6 +75,27 @@ Rendering is built from engine MVC components + this plugin's PixiJS
 entities (`src/client/parts/`) on two canvases (`vimp`, `radar`); procedural
 textures are baked at startup from `src/client/bakers/`.
 
+### Texture and particle lifecycle
+
+- **Texture ownership**: baked assets (`bakedAssets` in `src/config/client.js`)
+  are generated once at startup and shared for the whole session — parts
+  that use them call `destroy({ texture: false, textureSource: false })` so
+  their own teardown never frees a texture another part still uses. The one
+  exception is `Map.js`'s `mapSprite`, whose texture is generated per map
+  instance via `renderer.generateTexture(...)` and is exclusively owned by
+  it — its `destroy()` passes `textureSource: true` to release the GPU
+  source when the map changes.
+- **Particle systems**: `Smoke.js` and `SmokeEffect.js` render their
+  particles through `ParticleContainer` + `Particle` (wrapped in a plain
+  `Container` per part, since `ParticleContainer` only accepts particles,
+  not display objects). Per-particle simulation state (velocity, age,
+  sway, …) lives in a parallel plain-object array alongside the `Particle`
+  instances, since `Particle` has no `customData`. `ParticlePool.js` pools
+  `Particle` instances for reuse; callers are responsible for calling
+  `container.removeParticle(...)` before returning a particle to the pool.
+  `ImpactEffect.js` stays on a plain `Container` + `Sprite` — at 2-4
+  particles per shot, `ParticleContainer` overhead isn't worth it.
+
 ## Key invariants
 
 - **Single PixiJS instance**: engine and plugin must share one PixiJS

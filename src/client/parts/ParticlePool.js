@@ -1,39 +1,32 @@
-import { Sprite } from 'pixi.js';
+import { Particle } from 'pixi.js';
 
 const pool = [];
 
 export default {
   get(texture) {
     if (pool.length > 0) {
-      const sprite = pool.pop();
-      sprite.texture = texture;
+      const particle = pool.pop();
+      particle.texture = texture;
       // Сброс базовых параметров, чтобы не наследовать состояние с прошлой жизни
-      sprite.alpha = 1;
-      sprite.scale.set(1);
-      sprite.rotation = 0;
-      sprite.tint = 0xffffff;
-      sprite.anchor.set(0.5);
-      sprite.visible = true;
-      return sprite;
+      particle.alpha = 1;
+      particle.scaleX = 1;
+      particle.scaleY = 1;
+      particle.rotation = 0;
+      particle.tint = 0xffffff;
+      particle.anchorX = 0.5;
+      particle.anchorY = 0.5;
+      return particle;
     }
-    return new Sprite(texture);
+    return new Particle({ texture, anchorX: 0.5, anchorY: 0.5 });
   },
 
-  release(sprite) {
-    if (!sprite) {
+  // вызывающий обязан сам удалить частицу из ParticleContainer
+  // (container.removeParticle) перед возвратом в пул, если она ещё жива в сцене
+  release(particle) {
+    if (!particle) {
       return;
     }
 
-    // Удаляем со сцены, чтобы он не рисовался, пока лежит в пуле
-    if (sprite.parent) {
-      sprite.parent.removeChild(sprite);
-    }
-
-    // Очищаем customData, если есть ссылки, чтобы не держать память
-    if (sprite.customData) {
-      sprite.customData = null;
-    }
-
-    pool.push(sprite);
+    pool.push(particle);
   },
 };

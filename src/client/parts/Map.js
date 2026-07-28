@@ -155,14 +155,18 @@ export default class Map extends Container {
 
   destroy(options) {
     if (this.mapSprite) {
-      this.mapSprite.destroy({ children: true, texture: true });
+      this.mapSprite.destroy({
+        children: true,
+        texture: true,
+        textureSource: true,
+      });
       this.mapSprite = null;
     }
 
     super.destroy({
       children: true,
       texture: false,
-      baseTexture: false,
+      textureSource: false,
       ...options,
     });
 

@@ -109,8 +109,6 @@ export default class ExplosionEffectController extends Container {
 
     super.destroy({
       children: true,
-      texture: true,
-      baseTexture: true,
     });
   }
 }

@@ -228,7 +228,7 @@ export default class TracerEffect extends BaseEffect {
     }
 
     // BaseEffect по умолчанию использует
-    // { children: true, texture: false, baseTexture: false }
+    // { children: true, texture: false, textureSource: false }
     // для Graphics-объектов это подходит
     super.destroy(options);
   }

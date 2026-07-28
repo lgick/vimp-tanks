@@ -69,7 +69,7 @@ export default class TankRadar extends Container {
     super.destroy({
       children: true,
       texture: false, // текстуры общие
-      baseTexture: false,
+      textureSource: false,
       ...options,
     });
 

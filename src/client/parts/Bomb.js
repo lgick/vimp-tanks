@@ -110,7 +110,7 @@ export default class Bomb extends Container {
     super.destroy({
       children: true,
       texture: false,
-      baseTexture: false,
+      textureSource: false,
       ...options,
     });
 

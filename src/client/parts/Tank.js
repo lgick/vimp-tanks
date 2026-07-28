@@ -216,7 +216,7 @@ export default class Tank extends Container {
     super.destroy({
       children: true,
       texture: false, // текстуры общие, не должны уничтожаться
-      baseTexture: false,
+      textureSource: false,
       ...options,
     });
   }

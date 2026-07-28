@@ -95,6 +95,14 @@ Entities can be subclassed and shown on different canvases: for example,
 a simplified radar class is created for the radar (like `MapRadar` from
 `Map`).
 
+If the entity spawns many short-lived sprites (dozens or more), follow the
+`Smoke`/`SmokeEffect` pattern: a `ParticleContainer` + `Particle` wrapped in
+a plain `Container`, per-particle simulation state in a parallel array (not
+`customData`, which `Particle` doesn't have), and `ParticlePool.js` for
+reuse — see [architecture.md](architecture.md#texture-and-particle-lifecycle).
+For a handful of sprites per effect (like `ImpactEffect`'s 2-4 shrapnel
+particles), a plain `Container` + `Sprite` is simpler and cheap enough.
+
 ## Tests
 
 New code is covered by tests in `tests/` (the layout mirrors `src/`).

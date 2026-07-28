@@ -1,6 +1,10 @@
-import { Container, Ticker } from 'pixi.js';
+import { Container, ParticleContainer, Rectangle, Ticker } from 'pixi.js';
 import ParticlePool from './ParticlePool.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
+
+// щедрый отступ вокруг эмиттера для boundsArea:
+// покрывает разлёт частиц с учётом скорости танка и порыва при смене состояния
+const BOUNDS_PADDING = 400;
 
 // глобальные переменные для ветра
 const globalWindX = 0;
@@ -75,7 +79,21 @@ export default class Smoke extends Container {
 
     this._particles = [];
 
-    this._particleContainer = new Container();
+    this._particleContainer = new ParticleContainer({
+      texture: this._smokeTexture,
+      boundsArea: new Rectangle(
+        this._emitterX - BOUNDS_PADDING,
+        this._emitterY - BOUNDS_PADDING,
+        BOUNDS_PADDING * 2,
+        BOUNDS_PADDING * 2,
+      ),
+      dynamicProperties: {
+        position: true,
+        vertex: true,
+        rotation: true,
+        color: true,
+      },
+    });
     this.addChild(this._particleContainer);
 
     this._timeSinceLastSpawn = 0;
@@ -94,6 +112,9 @@ export default class Smoke extends Container {
     this._emitterVY = data[5];
     this._engineLoad = data[6];
     this._condition = data[7];
+
+    this._particleContainer.boundsArea.x = this._emitterX - BOUNDS_PADDING;
+    this._particleContainer.boundsArea.y = this._emitterY - BOUNDS_PADDING;
 
     // если состояние изменилось и
     // новое состояние подразумевает наличие дыма (не 3)
@@ -182,8 +203,8 @@ export default class Smoke extends Container {
       particle.age += deltaMs;
 
       if (particle.age >= particle.lifetime) {
-        this._particleContainer.removeChild(particle.graphics);
-        ParticlePool.release(particle.graphics);
+        this._particleContainer.removeParticle(particle.view);
+        ParticlePool.release(particle.view);
         this._particles.splice(i, 1);
         continue;
       }
@@ -216,12 +237,13 @@ export default class Smoke extends Container {
 
       const currentScale = currentSizeFactor * this._particleScaleMultiplier;
 
-      const spr = particle.graphics;
-      spr.x = particle.x;
-      spr.y = particle.y;
-      spr.scale.set(currentScale);
-      spr.alpha = currentAlpha;
-      spr.rotation += particle.rotSpeed * deltaTime;
+      const view = particle.view;
+      view.x = particle.x;
+      view.y = particle.y;
+      view.scaleX = currentScale;
+      view.scaleY = currentScale;
+      view.alpha = currentAlpha;
+      view.rotation += particle.rotSpeed * deltaTime;
     }
   }
 
@@ -311,17 +333,18 @@ export default class Smoke extends Container {
     vx += this._emitterVX;
     vy += this._emitterVY;
 
-    const graphics = ParticlePool.get(this._smokeTexture);
-    graphics.anchor.set(0.5);
-    graphics.tint = SMOKE_CONFIG.particleColor;
-    graphics.x = spawnX;
-    graphics.y = spawnY;
-    graphics.alpha = startAlpha;
-    graphics.scale.set(startSizeFactor * this._particleScaleMultiplier);
-    graphics.rotation = randomRange(0, Math.PI * 2);
+    const view = ParticlePool.get(this._smokeTexture);
+    view.tint = SMOKE_CONFIG.particleColor;
+    view.x = spawnX;
+    view.y = spawnY;
+    view.alpha = startAlpha;
+    const startScale = startSizeFactor * this._particleScaleMultiplier;
+    view.scaleX = startScale;
+    view.scaleY = startScale;
+    view.rotation = randomRange(0, Math.PI * 2);
 
     const particle = {
-      graphics,
+      view,
       x: spawnX,
       y: spawnY,
       vx,
@@ -335,7 +358,7 @@ export default class Smoke extends Container {
       rotSpeed: randomRange(-1, 1),
     };
 
-    this._particleContainer.addChild(graphics);
+    this._particleContainer.addParticle(view);
     this._particles.push(particle);
   }
 
@@ -351,7 +374,7 @@ export default class Smoke extends Container {
 
     // все активные частицы в пул
     for (let i = 0; i < this._particles.length; i += 1) {
-      ParticlePool.release(this._particles[i].graphics);
+      ParticlePool.release(this._particles[i].view);
     }
 
     this._particles = [];
@@ -359,7 +382,7 @@ export default class Smoke extends Container {
     super.destroy({
       children: true,
       texture: false,
-      baseTexture: false,
+      textureSource: false,
       ...options,
     });
   }
