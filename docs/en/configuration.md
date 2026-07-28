@@ -170,15 +170,17 @@ Arrives via `HostPlugin.authSchema`: DOM element ids (`elems`), form
 parameters (`params`), this game's validators (`validators`), and the
 form's texts (`texts`: `title` + help `sections` of
 `{ heading, lines: [{ keys, text, last? } | { separator }] }`) — the
-engine's `auth.pug` template is a neutral shell, `AuthView` fills in this
-game's title and help sections from `texts`. Each parameter: `name`, a
-default value, `validator` (a function name), and a `storage` key for
-localStorage. `isValidModel` (the model exists in `models.js`) is injected
-into the engine's `validateAuth` as the third argument, alongside the
-engine's own `isValidName`. Validation runs on the client (with validators
-from this game's bundle) and is repeated by the host (Worker); only
-`elems`/`params`/`texts` travel over the wire (`AUTH_DATA`, port 1) — the
-validator code doesn't.
+engine's `auth.pug` template is a neutral shell (title, help sections, an
+`Start` button, no `name` field: the nick comes from the verified lobby
+identity token, not the form), `AuthView` fills in this game's title and
+help sections from `texts`. `params` declares only this game's own field,
+`model` (a default value, `validator: 'isValidModel'`, a `storage` key for
+localStorage) — there's no field using the engine's `isValidName`.
+`isValidModel` (the model exists in `models.js`) is injected into the
+engine's `validateAuth` as the third argument. Validation runs on the
+client (with validators from this game's bundle) and is repeated by the
+host (Worker) as the actual authority; only `elems`/`params`/`texts` travel
+over the wire (`AUTH_DATA`, port 1) — the validator code doesn't.
 
 ## src/config/sounds.js — sound catalog
 

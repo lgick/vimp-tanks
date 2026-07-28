@@ -7,7 +7,7 @@ authoritative on the room host (the engine's
 
 ## Player journey
 
-1. **Connecting and auth** — the player enters a name (and tank model); the name is checked by a validator and deduplicated by the host. The room limit (`maxPlayers`) is counted **by humans** (bots yield their slot); a full room replies with `roomFull`, there's no waiting queue (see the engine's host.md).
+1. **Connecting and auth** — the nick is not typed in; it comes from the player's lobby identity (the central auth service, verified by JWT), so the room's start page is informational (title + controls help) with just a **Start** button. The only form parameter is the tank model (default `m1`), validated on the host via `isValidModel`. The room limit (`maxPlayers`) is counted **by humans** (bots yield their slot); a full room replies with `roomFull`, there's no waiting queue (see the engine's host.md).
 2. **Spectator** — once the map loads, the player enters the game as a spectator: sees the world, the camera follows the watched player, `n`/`p` switch the watch target. A team-selection window arrives right away.
 3. **Team selection** — via the vote menu (`m` → Switch team). If the team has no free respawns, the host tries to evict a bot; otherwise the request is denied ("Team ... is full").
 4. **Playing** — at round start the player gets a tank at a respawn. During the first `teamChangeGracePeriod` (10 s) of the round, a team change applies immediately; later, the player finishes the round (or leaves for the spectators), and the change takes effect next round.
