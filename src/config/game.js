@@ -38,10 +38,22 @@ export default {
   mapsInVote: 4, // количество карт в голосовании
   mapSetId: 'c1', // дефолтный id конструкторов создания карт
 
-  // рамки настроек комнаты в лобби (будущий GameManifest.roomDefaults, этап 6)
+  // рамки настроек комнаты в лобби (GameManifest.roomDefaults)
   roomDefaults: {
     maxPlayers: 8, // целевой размер комнаты (рамка P2P-плана)
   },
+
+  // схема формы создания сервера (GameManifest.roomForm, движок v2): имена =
+  // ключи roomDefaults; default НЕ указываем — движок засеивает его из
+  // roomDefaults (mergeRoomDefaults). Границы времени — в МС (unit:'s' сам
+  // делит на 1000 для показа в секундах), не в секундах
+  roomForm: [
+    { name: 'maxPlayers', control: 'range', label: 'Max players', min: 1, max: 32 },
+    { name: 'roundTime', control: 'range', label: 'Round time', unit: 's', min: 10000, max: 3600000 },
+    { name: 'mapTime', control: 'range', label: 'Map time', unit: 's', min: 10000, max: 3600000 },
+    { name: 'friendlyFire', control: 'toggle', label: 'Friendly fire' },
+    { name: 'map', control: 'select', label: 'Map', source: 'maps' },
+  ],
 
   stat: {
     name: {

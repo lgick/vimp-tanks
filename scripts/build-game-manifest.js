@@ -77,6 +77,7 @@ const manifest = {
     friendlyFire: gameConfig.parts.friendlyFire,
     map: gameConfig.currentMap,
   },
+  roomForm: gameConfig.roomForm,
 };
 
 fs.writeFileSync(

@@ -30,6 +30,7 @@
 | `mapsInVote` | `4` | Количество карт в голосовании |
 | `mapSetId` | `'c1'` | Дефолтный snapshot-ключ конструктора карты |
 | `roomDefaults.maxPlayers` | `8` | Рамка настроек комнаты в лобби: кламп лимита, выбранного создателем (также публикуется в `GameManifest.roomDefaults`) |
+| `roomForm` | 5 дескрипторов полей | Схема формы создания комнаты (публикуется как `GameManifest.roomForm`, контракт форм v2 движка): по дескриптору на каждый ключ `roomDefaults` (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), у каждого — `control` (`range`/`toggle`/`select`) и `label`; `default` не указывается — движок засеивает значения из `roomDefaults`. Границы времени (`roundTime`/`mapTime`) — в мс; `map` использует `source: 'maps'`, варианты движок берёт из каталога карт |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Параметры scripted-участников (ботов): префикс имени `Bot<id>` и модель танка по умолчанию |
 | `soundCues` | `roundStart, victory, defeat, frag, death: 'gameOver'` | Маппинг движковых событий на имена звуков этой игры (`SocketManager.sendSoundCue`) |
 | `initialVote` | `'teamChange'` | Голосование, отправляемое игроку после первого кадра |
@@ -174,15 +175,21 @@
 last? } | { separator }] }`) — движковый шаблон `auth.pug` нейтрален
 (заголовок, справочные секции, кнопка `Start`, без поля `name`: ник берётся
 из проверенного токена identity лобби, а не из формы), заголовок и
-подсказки этой игры подставляет `AuthView` из `texts`. `params` объявляет
-только собственное поле игры — `model` (значение по умолчанию,
-`validator: 'isValidModel'`, ключ `storage` для localStorage) — поля,
-использующего движковый `isValidName`, в форме нет. `isValidModel` (модель
-есть в `models.js`) инжектируется в движковый `validateAuth` третьим
-аргументом. Валидация выполняется и на клиенте (валидаторы из бандла этой
-игры), и повторно хостом (Worker) как итоговым авторитетом; по проводу
-(`AUTH_DATA`, порт 1) уходят только `elems`/`params`/`texts` — код
-валидаторов не передаётся.
+подсказки этой игры подставляет `AuthView` из `texts`. `elems` указывает
+`fieldsId: 'auth-fields'` — контейнер, в который движок рендерит контролы
+`params` (контракт форм v2; поля `formId` нет — элементом `<form>`
+владеет движок). `params` объявляет только собственное поле игры —
+`model` (значение по умолчанию, `options`: `control: 'select'` + `label:
+'Model'` + список вариантов из `models.js`, `validator: 'isValidModel'`,
+ключ `storage` для localStorage) — поля, использующего движковый
+`isValidName`, в форме нет. `control` обязателен для каждого поля в
+контракте форм v2: поле с объектом `options`, но без `control`, молча
+пропадёт (`console.error` + skip в `formBuilder.buildForm`), а не
+свалится сборкой. `isValidModel` (модель есть в `models.js`)
+инжектируется в движковый `validateAuth` третьим аргументом. Валидация
+выполняется и на клиенте (валидаторы из бандла этой игры), и повторно
+хостом (Worker) как итоговым авторитетом; по проводу (`AUTH_DATA`, порт 1)
+уходят только `elems`/`params`/`texts` — код валидаторов не передаётся.
 
 ## src/config/sounds.js — каталог звуков
 

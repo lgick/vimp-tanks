@@ -7,9 +7,9 @@ import models from '../data/models.js';
 export default {
   elems: {
     authId: 'auth',
-    formId: 'auth-form',
     errorId: 'auth-error',
     enterId: 'auth-enter',
+    fieldsId: 'auth-fields',
     titleId: 'auth-title',
     informsId: 'auth-informs',
   },
@@ -51,6 +51,9 @@ export default {
       name: 'model',
       value: 'm1',
       options: {
+        control: 'select',
+        label: 'Model',
+        options: Object.keys(models),
         validator: 'isValidModel',
         storage: 'model',
       },

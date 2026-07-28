@@ -29,6 +29,7 @@ Imports maps, models, and weapons from `src/data/`.
 | `mapsInVote` | `4` | How many maps show up in a vote |
 | `mapSetId` | `'c1'` | The default snapshot key for the map constructor |
 | `roomDefaults.maxPlayers` | `8` | The bounds for the lobby's room settings: caps the limit picked by the creator (also published in `GameManifest.roomDefaults`) |
+| `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v2): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`range`/`toggle`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Scripted-participant (bot) parameters: the `Bot<id>` name prefix and the default tank model |
 | `soundCues` | `roundStart, victory, defeat, frag, death: 'gameOver'` | Maps engine events to this game's sound names (`SocketManager.sendSoundCue`) |
 | `initialVote` | `'teamChange'` | The vote sent to a player right after the first frame |
@@ -170,17 +171,24 @@ Arrives via `HostPlugin.authSchema`: DOM element ids (`elems`), form
 parameters (`params`), this game's validators (`validators`), and the
 form's texts (`texts`: `title` + help `sections` of
 `{ heading, lines: [{ keys, text, last? } | { separator }] }`) — the
-engine's `auth.pug` template is a neutral shell (title, help sections, an
+engine's `auth.pug` template is a neutral shell (title, help sections, a
 `Start` button, no `name` field: the nick comes from the verified lobby
 identity token, not the form), `AuthView` fills in this game's title and
-help sections from `texts`. `params` declares only this game's own field,
-`model` (a default value, `validator: 'isValidModel'`, a `storage` key for
+help sections from `texts`. `elems` points at `fieldsId: 'auth-fields'`,
+the container the engine renders `params` controls into (engine forms v2;
+there's no `formId` — the engine owns the `<form>` element). `params`
+declares only this game's own field, `model` (a default value, `options`:
+`control: 'select'` + `label: 'Model'` + the list of choices from
+`models.js`, `validator: 'isValidModel'`, a `storage` key for
 localStorage) — there's no field using the engine's `isValidName`.
-`isValidModel` (the model exists in `models.js`) is injected into the
-engine's `validateAuth` as the third argument. Validation runs on the
-client (with validators from this game's bundle) and is repeated by the
-host (Worker) as the actual authority; only `elems`/`params`/`texts` travel
-over the wire (`AUTH_DATA`, port 1) — the validator code doesn't.
+`control` is required per field under engine forms v2: a field with an
+`options` object but no `control` is silently dropped (`console.error` +
+skip in `formBuilder.buildForm`), not a build error. `isValidModel` (the
+model exists in `models.js`) is injected into the engine's `validateAuth`
+as the third argument. Validation runs on the client (with validators from
+this game's bundle) and is repeated by the host (Worker) as the actual
+authority; only `elems`/`params`/`texts` travel over the wire (`AUTH_DATA`,
+port 1) — the validator code doesn't.
 
 ## src/config/sounds.js — sound catalog
 
