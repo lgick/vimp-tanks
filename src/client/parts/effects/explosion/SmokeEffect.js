@@ -2,8 +2,10 @@ import { ParticleContainer, Rectangle } from 'pixi.js';
 import ParticlePool from '../../ParticlePool.js';
 import BaseEffect from '../BaseEffect.js';
 
-// область разлёта частиц дыма взрыва вокруг локального центра эффекта (0, 0)
-const BOUNDS_AREA = new Rectangle(-200, -400, 400, 800);
+// размеры области разлёта частиц дыма взрыва вокруг локального центра
+// эффекта (0, 0)
+const BOUNDS_WIDTH = 400;
+const BOUNDS_HEIGHT = 800;
 
 export default class SmokeEffect extends BaseEffect {
   constructor(assets) {
@@ -13,7 +15,14 @@ export default class SmokeEffect extends BaseEffect {
 
     this._particleContainer = new ParticleContainer({
       texture: this.explosionTexture,
-      boundsArea: BOUNDS_AREA,
+      // создаётся per-instance, а не как общая константа,
+      // чтобы не делить один мутируемый Rectangle между эффектами
+      boundsArea: new Rectangle(
+        -BOUNDS_WIDTH / 2,
+        -BOUNDS_HEIGHT / 2,
+        BOUNDS_WIDTH,
+        BOUNDS_HEIGHT,
+      ),
       dynamicProperties: {
         position: true,
         vertex: true,

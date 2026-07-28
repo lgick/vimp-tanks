@@ -65,12 +65,15 @@ export default class BaseEffect extends Container {
     }
 
     // уничтожение дочерних элементов по умолчанию, но не текстур,
-    // т.к. они могут быть общими
+    // т.к. они могут быть общими.
+    // children: true идёт после ...options и не переопределяется извне:
+    // отключение children оставило бы уже возвращённые в пул частицы
+    // висеть в живом контейнере (двойное использование)
     super.destroy({
-      children: true,
       texture: false,
       textureSource: false,
       ...options,
+      children: true,
     });
   }
 }

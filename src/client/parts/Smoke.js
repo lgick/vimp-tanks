@@ -379,11 +379,14 @@ export default class Smoke extends Container {
 
     this._particles = [];
 
+    // children: true идёт после ...options и не переопределяется извне:
+    // отключение children оставило бы уже возвращённые в пул частицы
+    // висеть в живом _particleContainer (двойное использование)
     super.destroy({
-      children: true,
       texture: false,
       textureSource: false,
       ...options,
+      children: true,
     });
   }
 }
