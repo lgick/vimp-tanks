@@ -3,7 +3,7 @@ import models from '../data/models.js';
 // Конфиг авторизации игры: форма (elems/params) и игровые валидаторы.
 // params уходят клиенту по AUTH_DATA (порт 1); validators — код, работает
 // на обеих сторонах (хост — validateAuth в Worker'е, клиент — форма).
-// В этапе 6 приедет через HostPlugin.authSchema.
+// Приезжает через HostPlugin.authSchema.
 export default {
   elems: {
     authId: 'auth',
@@ -53,7 +53,7 @@ export default {
       options: {
         control: 'select',
         label: 'Model',
-        options: Object.keys(models),
+        options: Object.keys(models), // choices for control: 'select', not to be confused with the outer PS_AUTH_DATA `options` key
         validator: 'isValidModel',
         storage: 'model',
       },

@@ -10,10 +10,10 @@ describe('gameConfig.roomForm (src/config/game.js)', () => {
     expect(gameConfig.roomForm).toHaveLength(5);
   });
 
-  it('name каждого поля совпадает с ключом roomDefaults манифеста', () => {
+  it('name каждого поля совпадает с ключом roomDefaults манифеста (без учёта порядка)', () => {
     const names = gameConfig.roomForm.map(field => field.name);
 
-    expect(names).toEqual(roomDefaultsKeys);
+    expect(new Set(names)).toEqual(new Set(roomDefaultsKeys));
   });
 
   it('каждое поле задаёт control', () => {

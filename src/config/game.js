@@ -5,8 +5,8 @@ import snapshot from './snapshot.js';
 
 // Игровая половина бывшего src/config/game.js: команды, панель, статистика,
 // клавиши игрока, карты и баланс. Движковые дефолты хоста —
-// src/config/hostDefaults.js; merge выполняет host.worker.js
-// (в этапе 6 этот объект станет HostPlugin.gameConfig).
+// src/config/hostDefaults.js; merge выполняет host.worker.js.
+// Этот объект — HostPlugin.gameConfig.
 export default {
   parts: {
     models,
@@ -45,12 +45,14 @@ export default {
 
   // схема формы создания сервера (GameManifest.roomForm, движок v2): имена =
   // ключи roomDefaults; default НЕ указываем — движок засеивает его из
-  // roomDefaults (mergeRoomDefaults). Границы времени — в МС (unit:'s' сам
-  // делит на 1000 для показа в секундах), не в секундах
+  // roomDefaults (mergeRoomDefaults). min/max для roundTime/mapTime здесь не
+  // указаны — их накладывает build-game-manifest.js из hostDefaults.timers.
+  // roomTimeMin/roomTimeMax (единый источник с клампом в host.worker.js),
+  // не независимая копия чисел. unit:'s' — движок делит мс на 1000 для показа
   roomForm: [
     { name: 'maxPlayers', control: 'range', label: 'Max players', min: 1, max: 32 },
-    { name: 'roundTime', control: 'range', label: 'Round time', unit: 's', min: 10000, max: 3600000 },
-    { name: 'mapTime', control: 'range', label: 'Map time', unit: 's', min: 10000, max: 3600000 },
+    { name: 'roundTime', control: 'range', label: 'Round time', unit: 's' },
+    { name: 'mapTime', control: 'range', label: 'Map time', unit: 's' },
     { name: 'friendlyFire', control: 'toggle', label: 'Friendly fire' },
     { name: 'map', control: 'select', label: 'Map', source: 'maps' },
   ],

@@ -55,6 +55,25 @@ for (const name of mapNames) {
   mapsHash.update(name).update(fs.readFileSync(path.join(mapsPath, `${name}.json`)));
 }
 
+// значения по каждому ключу roomForm; единственный источник имён — сам
+// roomForm (game.js), это защищает roomDefaults от рассинхрона с ним
+const roomValues = {
+  maxPlayers: gameConfig.roomDefaults.maxPlayers,
+  roundTime: hostDefaults.timers.roundTime,
+  mapTime: hostDefaults.timers.mapTime,
+  friendlyFire: gameConfig.parts.friendlyFire,
+  map: gameConfig.currentMap,
+};
+
+// границы roundTime/mapTime в форме — те же клампы, что применяет хост
+// (host.worker.js), а не независимая копия чисел
+const { roomTimeMin, roomTimeMax } = hostDefaults.timers;
+const roomForm = gameConfig.roomForm.map(field =>
+  field.name === 'roundTime' || field.name === 'mapTime'
+    ? { ...field, min: roomTimeMin, max: roomTimeMax }
+    : field,
+);
+
 const manifest = {
   id: 'tanks',
   engineApi: ENGINE_API_VERSION,
@@ -70,14 +89,10 @@ const manifest = {
     version: mapsHash.digest('hex').slice(0, 16),
     list: mapNames,
   },
-  roomDefaults: {
-    maxPlayers: gameConfig.roomDefaults.maxPlayers,
-    roundTime: hostDefaults.timers.roundTime,
-    mapTime: hostDefaults.timers.mapTime,
-    friendlyFire: gameConfig.parts.friendlyFire,
-    map: gameConfig.currentMap,
-  },
-  roomForm: gameConfig.roomForm,
+  roomDefaults: Object.fromEntries(
+    roomForm.map(({ name }) => [name, roomValues[name]]),
+  ),
+  roomForm,
 };
 
 fs.writeFileSync(
