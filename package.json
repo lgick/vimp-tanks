@@ -1,6 +1,6 @@
 {
   "name": "@vimp-games/tanks",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "VIMP Tanks — игра-плагин для движка VIMP",
   "homepage": "https://github.com/lgick/vimp-tanks#readme",
   "bugs": {
