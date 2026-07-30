@@ -43,17 +43,26 @@ export default {
     maxPlayers: 8, // целевой размер комнаты (рамка P2P-плана)
   },
 
-  // схема формы создания сервера (GameManifest.roomForm, движок v2): имена =
+  // схема формы создания сервера (GameManifest.roomForm, движок v3): имена =
   // ключи roomDefaults; default НЕ указываем — движок засеивает его из
-  // roomDefaults (mergeRoomDefaults). min/max для roundTime/mapTime здесь не
-  // указаны — их накладывает build-game-manifest.js из hostDefaults.timers.
-  // roomTimeMin/roomTimeMax (единый источник с клампом в host.worker.js),
-  // не независимая копия чисел. unit:'s' — движок делит мс на 1000 для показа
+  // roomDefaults (mergeRoomDefaults). regExp для roundTime/mapTime здесь не
+  // указан — его накладывает build-game-manifest.js из hostDefaults.timers
+  // (roomTimeMin/roomTimeMax, единый источник с клампом в host.worker.js,
+  // не независимая копия чисел). unit:'s' — движок делит мс на 1000 для
+  // показа; numeric:true — текстовое поле хранит и валидирует число.
+  // Нативная валидация (regExp→pattern) — не авторитетная граница, только
+  // UX-подсказка: значения всё равно клампятся в host.worker.js
   roomForm: [
-    { name: 'maxPlayers', control: 'range', label: 'Max players', min: 1, max: 32 },
-    { name: 'roundTime', control: 'range', label: 'Round time', unit: 's' },
-    { name: 'mapTime', control: 'range', label: 'Map time', unit: 's' },
-    { name: 'friendlyFire', control: 'toggle', label: 'Friendly fire' },
+    {
+      name: 'maxPlayers',
+      control: 'text',
+      label: 'Max players',
+      numeric: true,
+      regExp: '^([1-9]|[12][0-9]|3[0-2])$', // 1-32
+    },
+    { name: 'roundTime', control: 'text', label: 'Round time', unit: 's', numeric: true },
+    { name: 'mapTime', control: 'text', label: 'Map time', unit: 's', numeric: true },
+    { name: 'friendlyFire', control: 'checkbox', label: 'Friendly fire' },
     { name: 'map', control: 'select', label: 'Map', source: 'maps' },
   ],
 

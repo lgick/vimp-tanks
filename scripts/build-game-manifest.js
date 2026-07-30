@@ -65,12 +65,15 @@ const roomValues = {
   map: gameConfig.currentMap,
 };
 
-// границы roundTime/mapTime в форме — те же клампы, что применяет хост
-// (host.worker.js), а не независимая копия чисел
+// границы roundTime/mapTime в форме (regExp — движок v3 больше не знает
+// min/max у текстовых полей) — та же пара, что клампует хост (host.worker.js),
+// а не независимая копия чисел; digit-count паттерн — UX-подсказка, не
+// авторитетная граница
 const { roomTimeMin, roomTimeMax } = hostDefaults.timers;
+const roomTimeRegExp = `^[0-9]{${String(roomTimeMin / 1000).length},${String(roomTimeMax / 1000).length}}$`;
 const roomForm = gameConfig.roomForm.map(field =>
   field.name === 'roundTime' || field.name === 'mapTime'
-    ? { ...field, min: roomTimeMin, max: roomTimeMax }
+    ? { ...field, regExp: roomTimeRegExp }
     : field,
 );
 
