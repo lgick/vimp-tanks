@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ENGINE_API_VERSION } from 'vimp-engine/config/opcodes.js';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
 import gameConfig from '../src/config/game.js';
+import { rangeToPattern } from './lib/rangeToPattern.js';
 
 // Генерация GameManifest (docs/{en,ru}/plugin-api.md) после сборки
 // client/host-бандлов игры (vite.config.js, уже хеширует имена
@@ -30,72 +31,6 @@ function findOne(dir, pattern) {
   }
 
   return files[0];
-}
-
-// оборачивает паттерн в незахватывающую группу, если внутри есть
-// альтернация ('|') — иначе конкатенация с соседним префиксом/суффиксом
-// свяжется только с первой веткой альтернативы (regex-precedence ловушка:
-// 'a|b|c' с префиксом '9' матчит '9a' или 'b' или 'c', а не '9a'/'9b'/'9c')
-function wrapAlternation(pattern) {
-  return pattern.includes('|') ? `(?:${pattern})` : pattern;
-}
-
-// regExp-паттерн, точно матчащий целые числа в [lo, hi] (lo/hi — строки
-// одинаковой длины, lo <= hi, без ведущих нулей) — рекурсивно откусывает
-// совпадающий префикс, для расходящейся первой цифры разбивает диапазон на
-// "хвост lo-цифры", "полные средние цифры" и "хвост hi-цифры"
-function digitGroupPattern(lo, hi) {
-  if (lo === hi) {
-    return lo;
-  }
-
-  if (lo.length === 1) {
-    return `[${lo}-${hi}]`;
-  }
-
-  if (lo[0] === hi[0]) {
-    return lo[0] + wrapAlternation(digitGroupPattern(lo.slice(1), hi.slice(1)));
-  }
-
-  const restLen = lo.length - 1;
-  const zeros = '0'.repeat(restLen);
-  const nines = '9'.repeat(restLen);
-  const parts = [lo[0] + wrapAlternation(digitGroupPattern(lo.slice(1), nines))];
-
-  const midLo = Number(lo[0]) + 1;
-  const midHi = Number(hi[0]) - 1;
-
-  if (midLo <= midHi) {
-    const midDigit = midLo === midHi ? String(midLo) : `[${midLo}-${midHi}]`;
-    parts.push(`${midDigit}[0-9]{${restLen}}`);
-  }
-
-  parts.push(hi[0] + wrapAlternation(digitGroupPattern(zeros, hi.slice(1))));
-
-  return parts.join('|');
-}
-
-// regExp-паттерн для целого числа в [min, max] (0 <= min <= max) — точная
-// граница вместо "число цифр" (digit-count давал бы 9999 в диапазоне
-// 10-3600); используется вместо min/max атрибутов текстовых полей формы
-// (control:'text' их не поддерживает — только pattern)
-function rangeToPattern(min, max) {
-  if (min > max) {
-    throw new Error(`rangeToPattern: min ${min} > max ${max}`);
-  }
-
-  const groups = [];
-  let lo = min;
-
-  while (lo <= max) {
-    const digits = String(lo).length;
-    const hi = Math.min(max, 10 ** digits - 1);
-
-    groups.push(digitGroupPattern(String(lo), String(hi)));
-    lo = hi + 1;
-  }
-
-  return `^(${groups.join('|')})$`;
 }
 
 const clientFile = findOne(distPath, /^client-.+\.js$/);

@@ -23,6 +23,7 @@ export default defineConfig({
             'tests/host/TanksBotManager.test.js',
             'tests/client/**/*.test.js',
             'tests/config/**/*.test.js',
+            'tests/scripts/**/*.test.js',
           ],
         },
       },
