@@ -21,14 +21,14 @@ export default {
       {
         heading: 'Controls',
         lines: [
-          { keys: 'W, A, S, D', text: 'move the tank' },
-          { keys: 'K, L', text: 'turn the gun' },
-          { keys: 'U', text: 'center the gun' },
-          { keys: 'J', text: 'fire' },
-          { keys: 'N, P', text: 'switch weapon/player', last: true },
-          { keys: 'C', text: 'chat/command line' },
-          { keys: 'M', text: 'menu' },
-          { keys: 'TAB', text: 'stats', last: true },
+          { keys: 'w, a, s, d', text: 'move the tank' },
+          { keys: 'k, l', text: 'turn the gun' },
+          { keys: 'u', text: 'center the gun' },
+          { keys: 'j', text: 'fire' },
+          { keys: 'n, p', text: 'switch weapon/player', last: true },
+          { keys: 'c', text: 'chat/command line' },
+          { keys: 'm', text: 'menu' },
+          { keys: '<Tab>', text: 'stats', last: true },
         ],
       },
       {
