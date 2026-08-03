@@ -201,7 +201,7 @@ export default {
           // map
           m: ['Current map: {0}', 'Next map: {0}'],
           // command
-          c: ['Command not found'],
+          c: ['Command not found', 'Your rank: {0}'],
           // name
           n: ['Invalid name', '{0} changed name to {1}'],
           // bots
