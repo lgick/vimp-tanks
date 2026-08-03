@@ -31,8 +31,8 @@ host page. Two independent PixiJS copies (engine + plugin each bundling
 their own) crash at runtime — each copy has its own extension/pipe
 registry and uid counters, and objects created by one copy (e.g. this
 plugin's baker `Container`/`Filter` instances) aren't valid input to the
-other's renderer. See the engine's own getting-started for the import map
-setup.
+other's renderer. The import map itself is set up on the engine side — see
+its [client.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/client.md).
 
 ## Rust toolchain
 
@@ -60,20 +60,44 @@ dynamically import.
 
 ## Playing a match locally against a local engine checkout
 
-To develop against a local, unpublished copy of this plugin:
+To develop against a local, unpublished copy of this plugin, build it once
+and link the two checkouts **into each other**:
 
 ```bash
-# in vimp-tanks/
-npm run build          # or at minimum npm run core:build + build:client + build:host
-npm link                # registers @vimp-games/tanks globally
+cd vimp-tanks && npm run core:build && npm run build   # WASM + dist/ (manifest, maps, sounds)
 
-# in vimp-engine/
-npm link @vimp-games/tanks    # or: "@vimp-games/tanks": "file:../vimp-tanks" in package.json
-npm run dev
+cd vimp-tanks && npm link                     # registers @vimp-games/tanks globally
+cd vimp-engine/packages/engine && npm link    # registers vimp-engine globally
+
+cd vimp-engine && npm link @vimp-games/tanks  # engine ← plugin
+cd vimp-tanks && npm link vimp-engine         # plugin ← engine
+
+cd vimp-engine && npm run dev
 ```
 
+The reverse link matters as much as the forward one: without it this
+plugin's `vimp-engine/*` imports resolve to a registry copy inside its own
+`node_modules` — a second module instance with its own, silently skewed
+`ENGINE_API_VERSION`. Note that `npm install` in either repository replaces
+the symlinks with registry copies, so the two `npm link <name>` commands have
+to be repeated afterwards.
+
+In dev the engine serves this plugin's `src/**` and `core/pkg-web/*.wasm`
+straight through Vite `/@fs/` (HMR), so client/host JS edits need no rebuild
+at all; `dist/` is still read once at master startup for the manifest, maps
+and sounds — hence the initial `npm run build`. Full breakdown of what to
+rebuild after which edit — the engine's
+[getting-started.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/getting-started.md#development-loop).
+
+`pixi.js` needs no import-map work in dev either: Vite resolves this
+plugin's bare `pixi.js` to the same optimized copy the engine itself uses.
+The import map (see Install above) is what keeps that single-instance
+guarantee in production builds.
+
 Then open several browser tabs against the engine's dev server — one
-creates a room, the rest join from the lobby. See the engine's
+creates a room, the rest join from the lobby (note that all tabs of one
+browser profile share the identity token, i.e. the same player). See the
+engine's
 [getting-started.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/getting-started.md#local-multiplayer).
 
 Bots are easiest to add with the chat command `/bot 5` (see

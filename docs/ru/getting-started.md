@@ -32,8 +32,8 @@ import map на host-странице. Две независимые копии 
 плагин, каждый со своей вшитой копией) падают в рантайме: у каждой копии
 свой реестр расширений/пайпов и свои счётчики uid, объекты одной копии
 (например, `Container`/`Filter` из baker'ов этого плагина) не валидны для
-рендерера другой. Настройка import map — на стороне движка, см. его
-собственный getting-started.
+рендерера другой. Сам import map настраивается на стороне движка — см. его
+[client.md](https://github.com/lgick/vimp-engine/blob/main/docs/ru/client.md).
 
 ## Rust-тулчейн
 
@@ -62,20 +62,43 @@ JS-бандлы клиента/хоста, экспортированный JSON
 ## Игра локально против локальной копии движка
 
 Чтобы разрабатывать против локальной, неопубликованной копии этого
-плагина:
+плагина, соберите его один раз и свяжите оба чекаута **друг с другом**:
 
 ```bash
-# в vimp-tanks/
-npm run build          # или минимум npm run core:build + build:client + build:host
-npm link                # регистрирует @vimp-games/tanks глобально
+cd vimp-tanks && npm run core:build && npm run build   # WASM + dist/ (манифест, карты, звуки)
 
-# в vimp-engine/
-npm link @vimp-games/tanks    # или: "@vimp-games/tanks": "file:../vimp-tanks" в package.json
-npm run dev
+cd vimp-tanks && npm link                     # регистрирует @vimp-games/tanks глобально
+cd vimp-engine/packages/engine && npm link    # регистрирует vimp-engine глобально
+
+cd vimp-engine && npm link @vimp-games/tanks  # движок ← плагин
+cd vimp-tanks && npm link vimp-engine         # плагин ← движок
+
+cd vimp-engine && npm run dev
 ```
 
+Обратный линк важен не меньше прямого: без него импорты `vimp-engine/*` из
+этого плагина резолвятся в registry-копию внутри его собственного
+`node_modules` — второй экземпляр модулей со своим, молча разъезжающимся
+`ENGINE_API_VERSION`. Учтите, что `npm install` в любом из репозиториев
+заменяет симлинки registry-копиями, поэтому две команды `npm link <имя>`
+после установки нужно повторить.
+
+В dev движок отдаёт `src/**` и `core/pkg-web/*.wasm` этого плагина напрямую
+через Vite `/@fs/` (HMR), поэтому правки JS клиента/хоста вообще не требуют
+пересборки; `dist/` всё равно читается один раз при старте мастера — ради
+манифеста, карт и звуков, отсюда начальный `npm run build`. Полный разбор,
+что пересобирать после какой правки — в
+[getting-started.md](https://github.com/lgick/vimp-engine/blob/main/docs/ru/getting-started.md#цикл-разработки)
+движка.
+
+С `pixi.js` в dev тоже ничего настраивать не нужно: Vite резолвит
+bare-специфер `pixi.js` из этого плагина в ту же оптимизированную копию,
+которой пользуется сам движок. Import map (см. «Установку» выше) держит эту
+гарантию единственного экземпляра в прод-сборках.
+
 Затем откройте несколько вкладок браузера на дев-сервере движка — одна
-создаёт комнату, остальные заходят из лобби. См.
+создаёт комнату, остальные заходят из лобби (учтите: все вкладки одного
+профиля браузера делят identity-токен, то есть это один и тот же игрок). См.
 [getting-started.md](https://github.com/lgick/vimp-engine/blob/main/docs/ru/getting-started.md#локальный-мультиплеер)
 движка.
 
