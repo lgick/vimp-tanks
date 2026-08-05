@@ -6,6 +6,7 @@ import init, { ClientCore } from '../../core/pkg-web/vimp_tanks_core.js';
 import styles from './tanks.css?inline';
 import parts from './parts/index.js';
 import bakers from './bakers/index.js';
+import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 
 // ClientPlugin танков: рендеры сущностей (parts), процедурные текстуры
 // (bakers) и игровые хуки клиентского ядра (ClientCore). default export
@@ -19,6 +20,14 @@ export default {
 
   // wasmUrl — из GameManifest.entries.wasm (общий с host-плагином ассет)
   async createClientCore(clientConfigJson, { wasmUrl }) {
+    // node-сборка ядра (headless-раннер): памяти WASM наружу нет и она не
+    // нужна — hot читается копией (hot_values), а не вьюхой
+    if (isNodeCore(wasmUrl)) {
+      const node = await loadNodeCore(wasmUrl);
+
+      return { core: new node.ClientCore(clientConfigJson), memory: null };
+    }
+
     // eslint-disable-next-line camelcase -- wasm-bindgen init() option name
     const wasm = await init({ module_or_path: wasmUrl });
 

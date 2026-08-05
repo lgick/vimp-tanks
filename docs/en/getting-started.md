@@ -125,6 +125,43 @@ CI (`.github/workflows/test.yml`) runs two jobs: `lint` (eslint only);
 + both Vitest projects — `vimp-engine` is installed from the npm registry
 here, not a workspace symlink).
 
+## Debug scenarios (headless match)
+
+The engine ships a headless runner (`vimp-sim`) that closes the loop
+"host → binary frame → `ClientCore` → hot buffer → scene" in one Node
+process and checks 12 contracts. It needs a built plugin (`dist/` with
+`entries.wasmNode`) and `core/pkg-node/`:
+
+```bash
+npm run core:build:node          # Node build of the core
+npm run build                    # dist/ + manifest.json (with wasmNode)
+npm run sim:scenarios            # every tests/scenarios/*.json, one verdict
+npm run sim:scenarios -- --determinism   # + byte-identical repeat run
+npm run sim -- --scenario tests/scenarios/movement.json   # a single one
+```
+
+Exit code is the verdict, so this is the loop to run after touching motion,
+the snapshot schema or the panel. The scenarios:
+
+| File | Covers |
+| --- | --- |
+| `movement.json` | driving, turning, turret; prediction drift with tight thresholds |
+| `combat.json` | two players, both weapons, explosions, a map with dynamic bodies (`c1`) |
+| `round.json` | bots, friendly fire, death → round end → respawn (invariant 10) |
+
+Threshold calibration and the scenario format live in the engine's
+[debugging.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/debugging.md).
+
+The runner exercises the **real** core, so it needs the same
+`vimp-engine-core` version the engine build expects. When working against a
+local engine checkout, patch cargo locally — do **not** commit this:
+
+```toml
+# Cargo.toml, workspace root
+[patch.crates-io]
+vimp-engine-core = { path = "../vimp/packages/engine/core" }
+```
+
 ---
 
 [Next: Architecture →](architecture.md)

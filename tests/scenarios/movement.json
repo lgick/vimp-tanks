@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "seed": 3812,
+  "map": "pool mini",
+  "participants": [{ "id": "p1", "name": "P1", "model": "m1" }],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    { "tick": 40, "op": "key", "who": "p1", "action": "down", "name": "forward" },
+    { "tick": 160, "op": "key", "who": "p1", "action": "down", "name": "right" },
+    { "tick": 260, "op": "key", "who": "p1", "action": "up", "name": "right" },
+    { "tick": 300, "op": "key", "who": "p1", "action": "up", "name": "forward" },
+    { "tick": 320, "op": "key", "who": "p1", "action": "down", "name": "back" },
+    { "tick": 420, "op": "key", "who": "p1", "action": "up", "name": "back" },
+    { "tick": 440, "op": "key", "who": "p1", "action": "down", "name": "gunRight" },
+    { "tick": 480, "op": "key", "who": "p1", "action": "up", "name": "gunRight" },
+    { "tick": 500, "op": "key", "who": "p1", "action": "down", "name": "gunCenter" }
+  ],
+  "unusedSnapshotKeys": ["w1", "w2", "w2e", "c1", "c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "ticks": 600,
+  "dumpTicks": [40, 600]
+}

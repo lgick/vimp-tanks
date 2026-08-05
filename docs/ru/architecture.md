@@ -21,10 +21,13 @@ src/
   config/    — игровые половины конфигов (game.js, client.js, auth.js,
                sounds.js, snapshot.js)
   data/      — статические данные: maps/, models.js, weapons.js
+  nodeCore.js — одна ветка на обе половины плагина: браузерный wasm-ассет
+               против node-глюe (headless-прогоны)
 core/        — vimp-tanks-core (Rust → WASM, pkg-web/pkg-node): танки,
                оружие, боты, предикт, спавн снарядов (см. core.md)
-tests/       — поведение host-плагина, JS↔WASM-харнесс
-scripts/     — обработка аудио, экспорт карт в JSON
+tests/       — поведение host-плагина, JS↔WASM-харнесс, scenarios/
+               (headless-прогоны отладки, см. getting-started.md)
+scripts/     — обработка аудио, экспорт карт в JSON, манифест, раннер сценариев
 ```
 
 `src/config/` и `src/data/` читаются Worker'ом хоста движка, клиентским
@@ -42,6 +45,11 @@ scripts/     — обработка аудио, экспорт карт в JSON
 - **Клиент**: клиент движка динамически импортирует `entries.client`
   (`src/client/index.js`, дефолтный экспорт `ClientPlugin`) после выбора
   комнаты и вызывает `createClientCore()`.
+- **Обе точки входа получают `wasmUrl` в двух видах**: хешированный
+  `.wasm`-ассет в браузере и `file:`-URL node-глюe (`entries.wasmNode`) под
+  headless-раннером движка. Ветка живёт в `src/nodeCore.js` и намеренно
+  общая для обеих половин — headless-прогон на другом ядре, чем у браузера,
+  ничего бы не доказывал.
 - **Мастер**: код плагина никогда не исполняет — он лишь отдаёт
   `dist/manifest.json` этого пакета и экспортированный JSON карт под
   `/games/tanks/*`.

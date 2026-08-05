@@ -33,6 +33,12 @@ function findOne(dir, pattern) {
   return files[0];
 }
 
+// node-сборка ядра (core:build:node) для headless-прогонов движка
+// (`vimp-sim`): в отличие от остальных entries это путь на диске
+// относительно манифеста, а не URL. Поле опционально — без pkg-node
+// собранный плагин остаётся валидным, просто не прогоняется headless.
+const NODE_CORE_ENTRY = '../core/pkg-node/vimp_tanks_core.js';
+
 const clientFile = findOne(distPath, /^client-.+\.js$/);
 const hostFile = findOne(distPath, /^host-.+\.js$/);
 const wasmFile = findOne(assetsPath, /\.wasm$/);
@@ -84,6 +90,8 @@ const roomForm = gameConfig.roomForm.map(field =>
   field.name in fieldRegExp ? { ...field, regExp: fieldRegExp[field.name] } : field,
 );
 
+const hasNodeCore = fs.existsSync(path.resolve(distPath, NODE_CORE_ENTRY));
+
 const manifest = {
   id: 'tanks',
   engineApi: ENGINE_API_VERSION,
@@ -93,6 +101,7 @@ const manifest = {
     client: `/games/tanks/${clientFile}`,
     host: `/games/tanks/${hostFile}`,
     wasm: `/games/tanks/assets/${wasmFile}`,
+    ...(hasNodeCore ? { wasmNode: NODE_CORE_ENTRY } : {}),
   },
   assetsBase: '/games/tanks/',
   maps: {
@@ -119,3 +128,10 @@ fs.writeFileSync(
 console.log(`manifest written: ${path.join(distPath, 'manifest.json')}`);
 console.log(`  version: ${version}`);
 console.log(`  maps: ${mapNames.join(', ')}`);
+
+if (!hasNodeCore) {
+  console.warn(
+    `  wasmNode: пропущен (нет ${NODE_CORE_ENTRY}) — headless-прогон ` +
+      'потребует `npm run core:build:node` или флага --core',
+  );
+}

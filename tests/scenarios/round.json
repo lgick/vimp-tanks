@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "seed": 4242,
+  "map": "pool mini",
+  "room": { "friendlyFire": true },
+  "participants": [{ "id": "p1", "name": "P1", "model": "m1" }],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    { "tick": 60, "op": "chat", "who": "p1", "text": "/bot 1 team2" },
+    { "tick": 200, "op": "key", "who": "p1", "action": "down", "name": "nextWeapon" },
+    { "tick": 240, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 290, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 340, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 390, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 440, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 490, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 540, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 590, "op": "key", "who": "p1", "action": "down", "name": "fire" }
+  ],
+  "unusedSnapshotKeys": ["c1", "c2"],
+  "divergence": null,
+  "ticks": 1800,
+  "dumpTicks": [600, 1800]
+}

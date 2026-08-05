@@ -128,6 +128,44 @@ eslint); `tanks` (`cargo test -p vimp-tanks-core` + `core:build:web` +
 `core:build:node` + оба Vitest-проекта — `vimp-engine` здесь ставится из
 npm registry, а не из workspace-симлинка).
 
+## Отладочные сценарии (headless-матч)
+
+В движке есть headless-раннер (`vimp-sim`): он замыкает контур
+«хост → бинарный кадр → `ClientCore` → hot-буфер → сцена» в одном
+Node-процессе и проверяет 12 контрактов. Нужен собранный плагин (`dist/` с
+`entries.wasmNode`) и `core/pkg-node/`:
+
+```bash
+npm run core:build:node          # node-сборка ядра
+npm run build                    # dist/ + manifest.json (с wasmNode)
+npm run sim:scenarios            # все tests/scenarios/*.json, один вердикт
+npm run sim:scenarios -- --determinism   # + побайтово совпадающий повтор
+npm run sim -- --scenario tests/scenarios/movement.json   # один сценарий
+```
+
+Код возврата и есть вердикт, поэтому это рабочий цикл после правок
+движения, снапшот-схемы или панели. Сценарии:
+
+| Файл | Что покрывает |
+| --- | --- |
+| `movement.json` | езда, повороты, башня; дрейф предикта с тугими порогами |
+| `combat.json` | двое игроков, оба оружия, взрывы, карта с динамикой (`c1`) |
+| `round.json` | боты, friendly fire, смерть → конец раунда → респаун (инвариант 10) |
+
+Калибровка порогов и формат сценария — в
+[debugging.md](https://github.com/lgick/vimp-engine/blob/main/docs/ru/debugging.md)
+движка.
+
+Раннер крутит **настоящее** ядро, поэтому ему нужна та же версия
+`vimp-engine-core`, что и сборке движка. При работе с локальным чекаутом
+движка патчите cargo локально — коммитить это **нельзя**:
+
+```toml
+# Cargo.toml, корень workspace
+[patch.crates-io]
+vimp-engine-core = { path = "../vimp/packages/engine/core" }
+```
+
 ---
 
 [Следующая: Архитектура →](architecture.md)

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "seed": 7719,
+  "map": "canopy",
+  "participants": [
+    { "id": "p1", "name": "P1", "model": "m1" },
+    { "id": "p2", "name": "P2", "model": "m1" }
+  ],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p2", "team": "team2" },
+    { "tick": 60, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 90, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 120, "op": "key", "who": "p1", "action": "down", "name": "nextWeapon" },
+    { "tick": 150, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 240, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 300, "op": "key", "who": "p2", "action": "down", "name": "forward" },
+    { "tick": 340, "op": "key", "who": "p2", "action": "up", "name": "forward" },
+    { "tick": 400, "op": "key", "who": "p2", "action": "down", "name": "fire" }
+  ],
+  "unusedSnapshotKeys": ["c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "ticks": 600,
+  "dumpTicks": [160, 600]
+}

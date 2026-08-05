@@ -226,6 +226,19 @@ formulas; integration parity is locked in by the cargo tests
 ⚠️ **Any edit to motion in the core or `models.js` requires running
 `npm run core:test`.**
 
+**Prediction drift (level 1).** `TanksClient` implements both optional
+`GameClientDef` methods the engine's divergence detector uses:
+`predicted_state()` returns the replica's `TankState` in the player-block
+layout (`x, y, angle, vx, vy, angvel, gunRotation, throttle` — the same
+order `TankState::from_array` reads, so no conversion table exists to drift),
+and `replayed_inputs()` reports the local-time window the last
+reconciliation replayed. The engine samples them right before
+`on_server_state` overwrites the prediction, so a report names the exact
+component and delta instead of "movement feels wrong". Both are debug-only:
+without the `divergence` section in the client config the engine never calls
+them. Scenarios that watch drift: `tests/scenarios/` (see
+[getting-started.md](getting-started.md#debug-scenarios-headless-match)).
+
 ## Determinism
 
 - `rapier2d` is built with `enhanced-determinism` (bit-for-bit across

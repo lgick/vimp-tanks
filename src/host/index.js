@@ -6,6 +6,7 @@ import authSchema from '../config/auth.js';
 import botCommand from './botCommand.js';
 import systemMessages from './systemMessages.js';
 import createModules from './createModules.js';
+import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 
 // HostPlugin танков (Worker-safe): вся игровая половина хоста одним объектом.
 // default export host-entry игры (vite.config.js --mode host,
@@ -21,6 +22,12 @@ export default {
   // по явному url, а не через import.meta.url-резолюцию глюe-модуля
   // (риск #3 PLAN.md — важно для рабочего Worker'а)
   async createCore(coreConfigJson, { wasmUrl }) {
+    if (isNodeCore(wasmUrl)) {
+      const node = await loadNodeCore(wasmUrl);
+
+      return new node.GameCore(coreConfigJson);
+    }
+
     // eslint-disable-next-line camelcase -- wasm-bindgen init() option name
     await init({ module_or_path: wasmUrl });
 

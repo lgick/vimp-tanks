@@ -82,6 +82,16 @@ impl GameClientDef for TanksClient {
             .on_server_state(state, centering, server_time, offset, local_now);
     }
 
+    // уровень 1 детектора рассинхрона: раскладка TankState совпадает с
+    // player-блоком, поэтому сравнение идёт покомпонентно, а не по камере
+    fn predicted_state(&self) -> Option<[f32; PLAYER_STATE_LEN]> {
+        self.predictor.predicted_state()
+    }
+
+    fn replayed_inputs(&self) -> Option<(f64, f64, usize)> {
+        self.predictor.replayed_inputs()
+    }
+
     fn set_server_offset(&mut self, offset: Option<f64>) {
         self.shot.set_server_offset(offset);
     }

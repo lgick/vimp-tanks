@@ -57,6 +57,19 @@ impl TankState {
             throttle: s[7],
         }
     }
+
+    pub fn to_array(self) -> [f32; PLAYER_STATE_LEN] {
+        [
+            self.x,
+            self.y,
+            self.angle,
+            self.vx,
+            self.vy,
+            self.angvel,
+            self.gun_rotation,
+            self.throttle,
+        ]
+    }
 }
 
 /// Предсказанное состояние для рендера (со сглаживающей визуальной ошибкой).
@@ -115,6 +128,11 @@ pub struct Predictor {
 
     visual_error: [f32; 3], // x, y, angle
 
+    // окно локального времени истории ввода, переигранное последним
+    // реконсилем: (начало, конец, число вводов) — уровень 1 детектора
+    // рассинхрона движка
+    replayed: Option<(f64, f64, usize)>,
+
     accumulator: f64,
     last_update_time: Option<f64>,
 }
@@ -163,6 +181,7 @@ impl Predictor {
             history: VecDeque::new(),
             base_keys_mask: 0,
             visual_error: [0.0; 3],
+            replayed: None,
             accumulator: 0.0,
             last_update_time: None,
         }
@@ -200,12 +219,26 @@ impl Predictor {
         self.keys_mask = 0; // сервер сбрасывает клавиши при респауне (resetKeys)
         self.one_shot_pending = 0;
         self.visual_error = [0.0; 3];
+        self.replayed = None;
         self.accumulator = 0.0;
     }
 
     /// Есть ли предсказанное состояние для рендера.
     pub fn has_state(&self) -> bool {
         self.active && self.has_state && self.model.is_some()
+    }
+
+    /// Предсказанное состояние в раскладке player-блока (уровень 1 детектора
+    /// рассинхрона). Снимается движком перед `on_server_state`, то есть до
+    /// затирания предикта авторитетным состоянием.
+    pub fn predicted_state(&self) -> Option<[f32; PLAYER_STATE_LEN]> {
+        self.has_state().then(|| self.state.to_array())
+    }
+
+    /// Окно локального времени истории ввода, переигранное последним
+    /// реконсилем: (начало, конец, число вводов).
+    pub fn replayed_inputs(&self) -> Option<(f64, f64, usize)> {
+        self.replayed
     }
 
     /// Изменение клавиши: обновляет живую маску и историю ввода.
@@ -303,6 +336,8 @@ impl Predictor {
             history_index += 1;
         }
 
+        let replayed_from = history_index;
+
         while t + self.step_ms <= server_now_est {
             t += self.step_ms;
 
@@ -322,6 +357,13 @@ impl Predictor {
 
         // остаток времени доиграет update() своим аккумулятором
         self.accumulator = server_now_est - t;
+
+        // окно переигранного ввода — в локальном времени (история хранит его)
+        self.replayed = Some((
+            server_time - offset,
+            t - offset,
+            history_index - replayed_from,
+        ));
 
         let Some(old) = old else {
             self.pending_reset = false;
@@ -682,6 +724,42 @@ mod tests {
 
         assert_eq!(p.visual_error, [0.0; 3]);
         assert_eq!(p.state.x, 99.0);
+    }
+
+    #[test]
+    fn predicted_state_mirrors_player_block_layout() {
+        let mut p = make_predictor();
+
+        assert!(p.predicted_state().is_none()); // состояния ещё нет
+
+        let state = [1.0, 2.0, 0.3, 4.0, 5.0, 0.6, 0.7, 0.8];
+
+        p.on_server_state(state, false, 0.0, 0.0, 0.0);
+        assert_eq!(p.predicted_state(), Some(state));
+
+        p.set_active(false);
+        assert!(p.predicted_state().is_none());
+    }
+
+    #[test]
+    fn replayed_inputs_reports_local_window() {
+        let mut p = make_predictor();
+
+        assert!(p.replayed_inputs().is_none());
+
+        // offset 50: серверное время кадра 100 → локальное 50
+        p.apply_input("down", "forward", 60.0);
+        p.on_server_state([0.0; 8], false, 100.0, 50.0, 200.0);
+
+        let (from, to, count) = p.replayed_inputs().unwrap();
+
+        assert!((from - 50.0).abs() < 1e-9);
+        assert!(to > from && to <= 200.0);
+        assert_eq!(count, 1);
+
+        // сброс забывает окно
+        p.reset();
+        assert!(p.replayed_inputs().is_none());
     }
 
     #[test]

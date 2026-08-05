@@ -26,7 +26,7 @@ in the same change. Area → page:
 | `core/` (Rust: tanks.rs, tank.rs, motion.rs, bomb.rs, bots/, client/, WASM ABI) | `core.md` |
 | `src/host/*`, `src/client/*` plugin wiring | `architecture.md` |
 | new maps/weapons/sounds/client entities | `extending.md` |
-| build/link/test setup | `getting-started.md` |
+| build/link/test setup, debug scenarios (`tests/scenarios/`) | `getting-started.md` |
 
 Engine-side concepts (transport, master, Worker infra, generic core traits,
 the plugin contract itself) are documented in the engine's own repo, not
@@ -44,7 +44,12 @@ npm run build              # full plugin build → dist/ (client+host bundles, a
 npx eslint .               # lint
 npm test                   # Vitest, single run
 npm run test:watch
+npm run sim:scenarios      # headless debug scenarios (tests/scenarios/*.json)
+npm run sim -- --scenario tests/scenarios/movement.json   # a single one
 ```
+
+`sim:*` need a built plugin (`npm run build`) and `core/pkg-node/`; they run
+the engine's headless runner over the real core.
 
 Requires the Rust toolchain (`rustup` + `wasm-pack`) to build the core. See
 `docs/en/getting-started.md` for linking a local checkout against a local

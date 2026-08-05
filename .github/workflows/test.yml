@@ -111,3 +111,13 @@ jobs:
 
       - name: JS↔WASM integration tests (реальное ядро танков)
         run: npx vitest run --project integration
+
+      # headless-прогон отладочных сценариев на собранном плагине: ловит
+      # класс отказов, невидимый юнит-тестам (пустая сцена, перепутанные
+      # поля схемы, дрейф предикта). Нужен собранный dist/ — манифест несёт
+      # entries.wasmNode на core/pkg-node
+      - name: Build plugin (dist/ + manifest)
+        run: npm run build
+
+      - name: Debug scenarios (vimp-sim)
+        run: npm run sim:scenarios -- --determinism

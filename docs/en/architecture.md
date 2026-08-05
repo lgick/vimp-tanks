@@ -21,10 +21,13 @@ src/
   config/    — game config halves (game.js, client.js, auth.js, sounds.js,
                snapshot.js)
   data/      — static data: maps/, models.js, weapons.js
+  nodeCore.js — one branch shared by both plugin halves: browser wasm
+               asset vs Node glue (headless runs)
 core/        — vimp-tanks-core (Rust → WASM, pkg-web/pkg-node): tanks,
                weapons, bots, prediction, shot spawning (see core.md)
-tests/       — host-plugin behavior, JS↔WASM harness
-scripts/     — audio processing, map export to JSON
+tests/       — host-plugin behavior, JS↔WASM harness, scenarios/ (headless
+               debug runs, see getting-started.md)
+scripts/     — audio processing, map export to JSON, manifest, scenario runner
 ```
 
 `src/config/` and `src/data/` are read by the engine's host Worker, the
@@ -42,6 +45,11 @@ direct import.
 - **Client**: the engine's client dynamically imports `entries.client`
   (`src/client/index.js`, the `ClientPlugin` default export) after a room is
   picked, and calls `createClientCore()`.
+- **Both entries take `wasmUrl` in two shapes**: the hashed `.wasm` asset in
+  a browser, and a `file:` URL of the Node glue (`entries.wasmNode`) under
+  the engine's headless runner. The branch lives in `src/nodeCore.js` and is
+  shared by both halves on purpose — a headless run on a different core than
+  the browser's would prove nothing.
 - **Master**: never executes plugin code — it only serves this package's
   `dist/manifest.json` and the exported map JSON under `/games/tanks/*`.
 
