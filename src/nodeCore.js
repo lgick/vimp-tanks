@@ -12,7 +12,9 @@
  * @param {string} [wasmUrl]
  * @returns {boolean} Это путь к nodejs-глюe, а не к .wasm-ассету.
  */
-export const isNodeCore = wasmUrl => (wasmUrl ?? '').endsWith('.js');
+export const isNodeCore = wasmUrl =>
+  // сравнивается путь, а не весь URL: у ассета бывает ?v=… кэш-бастер
+  (wasmUrl ?? '').split(/[?#]/)[0].endsWith('.js');
 
 /**
  * @param {string} wasmUrl - file:-URL nodejs-глюe (CommonJS).

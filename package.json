@@ -13,8 +13,7 @@
   "license": "MIT",
   "type": "module",
   "files": [
-    "dist",
-    "core/pkg-node"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -25,6 +24,8 @@
     "build:host": "vite build --mode host",
     "build:assets": "node ./scripts/export-maps.js && node ./scripts/copy-game-sounds.js",
     "build:manifest": "node ./scripts/build-game-manifest.js",
+    "check:pack": "node ./scripts/check-pack.js",
+    "prepack": "node ./scripts/check-pack.js",
     "audio:process": "node ./scripts/process-audio.js",
     "core:build": "npm run core:build:web && npm run core:build:node",
     "core:build:web": "wasm-pack build core --release --target web --out-dir pkg-web",

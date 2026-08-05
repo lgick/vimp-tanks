@@ -37,7 +37,14 @@ function findOne(dir, pattern) {
 // (`vimp-sim`): в отличие от остальных entries это путь на диске
 // относительно манифеста, а не URL. Поле опционально — без pkg-node
 // собранный плагин остаётся валидным, просто не прогоняется headless.
-const NODE_CORE_ENTRY = '../core/pkg-node/vimp_tanks_core.js';
+//
+// Глюe копируется внутрь dist/: core/pkg-node/ лежит в .gitignore, а npm
+// применяет ignore-правила и к каталогам, добавленным через files, — в
+// опубликованном 0.4.0 манифест объявлял wasmNode, которого в тарболе не
+// было, и vimp-sim падал сырым ERR_MODULE_NOT_FOUND.
+const NODE_CORE_SRC = fileURLToPath(new URL('../core/pkg-node/', import.meta.url));
+const NODE_CORE_DIR = 'core-node';
+const NODE_CORE_ENTRY = `./${NODE_CORE_DIR}/vimp_tanks_core.js`;
 
 const clientFile = findOne(distPath, /^client-.+\.js$/);
 const hostFile = findOne(distPath, /^host-.+\.js$/);
@@ -90,7 +97,23 @@ const roomForm = gameConfig.roomForm.map(field =>
   field.name in fieldRegExp ? { ...field, regExp: fieldRegExp[field.name] } : field,
 );
 
-const hasNodeCore = fs.existsSync(path.resolve(distPath, NODE_CORE_ENTRY));
+const hasNodeCore = fs.existsSync(NODE_CORE_SRC);
+
+if (hasNodeCore) {
+  fs.rmSync(path.join(distPath, NODE_CORE_DIR), {
+    recursive: true,
+    force: true,
+  });
+
+  fs.cpSync(NODE_CORE_SRC, path.join(distPath, NODE_CORE_DIR), {
+    recursive: true,
+    // wasm-pack кладёт рядом свой `.gitignore` с `*`, а npm применяет
+    // ignore-файлы и внутри dist — с ним каталог снова не доехал бы до
+    // тарбола. package.json остаётся: без него Node прочтёт CommonJS-глюe
+    // как ESM (в корне пакета "type": "module").
+    filter: src => path.basename(src) !== '.gitignore',
+  });
+}
 
 const manifest = {
   id: 'tanks',
@@ -129,9 +152,11 @@ console.log(`manifest written: ${path.join(distPath, 'manifest.json')}`);
 console.log(`  version: ${version}`);
 console.log(`  maps: ${mapNames.join(', ')}`);
 
-if (!hasNodeCore) {
+if (hasNodeCore) {
+  console.log(`  wasmNode: ${NODE_CORE_ENTRY}`);
+} else {
   console.warn(
-    `  wasmNode: пропущен (нет ${NODE_CORE_ENTRY}) — headless-прогон ` +
+    `  wasmNode: пропущен (нет ${NODE_CORE_SRC}) — headless-прогон ` +
       'потребует `npm run core:build:node` или флага --core',
   );
 }
