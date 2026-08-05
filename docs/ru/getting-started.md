@@ -57,7 +57,11 @@ npm run build            # полная сборка плагина: JS-банд
 JS-бандлы клиента/хоста, экспортированный JSON карт и обработанные
 звуковые ассеты (`npm run audio:process`, нужен ffmpeg) — всё, что мастер
 движка отдаёт под `/games/tanks/*` и что динамически импортируют Worker
-хоста/клиент.
+хоста/клиент. Если собран `core/pkg-node/`, `build:manifest` дополнительно
+копирует его в `dist/core-node/` и объявляет `entries.wasmNode` на эту
+копию: публикуется только `dist`, поэтому манифест с путём наружу работал
+бы в чекауте и ломался в установленном пакете (`npm run check:pack`
+страхует это и висит на `prepack`).
 
 ## Игра локально против локальной копии движка
 
@@ -132,14 +136,15 @@ npm registry, а не из workspace-симлинка).
 
 В движке есть headless-раннер (`vimp-sim`): он замыкает контур
 «хост → бинарный кадр → `ClientCore` → hot-буфер → сцена» в одном
-Node-процессе и проверяет 12 контрактов. Нужен собранный плагин (`dist/` с
-`entries.wasmNode`) и `core/pkg-node/`:
+Node-процессе и проверяет 12 контрактов. Нужен собранный плагин — `dist/` с
+`entries.wasmNode`, то есть `core/pkg-node/`, собранный **до**
+`npm run build`, который копирует его в `dist/core-node/`:
 
 ```bash
-npm run core:build:node          # node-сборка ядра
-npm run build                    # dist/ + manifest.json (с wasmNode)
+npm run core:build:node          # node-сборка ядра → core/pkg-node/
+npm run build                    # dist/ + manifest.json (копирует dist/core-node/)
 npm run sim:scenarios            # все tests/scenarios/*.json, один вердикт
-npm run sim:scenarios -- --determinism   # + побайтово совпадающий повтор
+npm run sim:scenarios -- --determinism   # + совпадающий повтор (хеши кадров)
 npm run sim -- --scenario tests/scenarios/movement.json   # один сценарий
 ```
 

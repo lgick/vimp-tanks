@@ -56,7 +56,11 @@ npm run build            # full plugin build: client+host JS bundles, assets, ma
 client/host JS bundles, exported map JSON, and processed sound assets
 (`npm run audio:process`, needs ffmpeg) — everything the engine's master
 serves under `/games/tanks/*` and everything the host Worker/client
-dynamically import.
+dynamically import. If `core/pkg-node/` is built, `build:manifest` also
+copies it into `dist/core-node/` and declares `entries.wasmNode` on that
+copy: `dist` is the only published content, so a manifest pointing outside
+it would work in this checkout and break in the installed package
+(`npm run check:pack` guards that, and it also runs on `prepack`).
 
 ## Playing a match locally against a local engine checkout
 
@@ -129,14 +133,15 @@ here, not a workspace symlink).
 
 The engine ships a headless runner (`vimp-sim`) that closes the loop
 "host → binary frame → `ClientCore` → hot buffer → scene" in one Node
-process and checks 12 contracts. It needs a built plugin (`dist/` with
-`entries.wasmNode`) and `core/pkg-node/`:
+process and checks 12 contracts. It needs a built plugin — `dist/` with
+`entries.wasmNode`, i.e. `core/pkg-node/` built **before** `npm run build`,
+which copies it into `dist/core-node/`:
 
 ```bash
-npm run core:build:node          # Node build of the core
-npm run build                    # dist/ + manifest.json (with wasmNode)
+npm run core:build:node          # Node build of the core → core/pkg-node/
+npm run build                    # dist/ + manifest.json (copies dist/core-node/)
 npm run sim:scenarios            # every tests/scenarios/*.json, one verdict
-npm run sim:scenarios -- --determinism   # + byte-identical repeat run
+npm run sim:scenarios -- --determinism   # + an identical repeat run (frame hashes)
 npm run sim -- --scenario tests/scenarios/movement.json   # a single one
 ```
 

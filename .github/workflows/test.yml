@@ -114,8 +114,8 @@ jobs:
 
       # headless-прогон отладочных сценариев на собранном плагине: ловит
       # класс отказов, невидимый юнит-тестам (пустая сцена, перепутанные
-      # поля схемы, дрейф предикта). Нужен собранный dist/ — манифест несёт
-      # entries.wasmNode на core/pkg-node
+      # поля схемы, дрейф предикта). Нужен собранный dist/: build:manifest
+      # копирует core/pkg-node в dist/core-node и объявляет entries.wasmNode
       - name: Build plugin (dist/ + manifest)
         run: npm run build
 
