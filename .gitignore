@@ -5,3 +5,6 @@ dist
 core/pkg-node/
 core/pkg-web/
 target/
+
+# отчёты headless-прогонов (npm run sim)
+.debug/
