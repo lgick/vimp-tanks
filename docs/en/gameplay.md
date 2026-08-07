@@ -64,29 +64,33 @@ Plain text is a message to the team/everyone (length capped by the host, 60 char
 | `/rank` | engine | Your current rank (loaded from the auth service) |
 | `/bot <N> [team]` | this game | Spawn N bots (into a team, or spread evenly); `/bot 0 [team]` — remove bots |
 | `/nr` | engine | New round — **dev mode only** |
-| `/ban <reason>` | engine | Report the room host (P2P social moderation) — **does not reach the host**, see below |
+| `/like <reason>` · `/unlike <reason>` | engine | Vote for/against the room's hoster (server rating) — **does not reach the host**, see below |
 
 `/bot` is only available to active players. If more than one human is
 active, a vote runs instead of immediate execution; executing the command
 restarts the round.
 
-**`/ban <reason>`** is the sole anti-cheat measure: the browser host runs the
-simulation on its own machine and can physically cheat (a modified client
-edits WASM memory bypassing the core's logic), so moderation is social, not
-technical. The command is intercepted **on the client** and goes straight to
-the master server over the signaling WS (bypassing the host — its
-`CommandProcessor` could filter out a complaint about itself), not through
-the game protocol. A reason is required (otherwise a local chat hint appears)
-and is never shown publicly. Available only to guests of a room (the host
-player has no such option); a disconnected master connection shows an error
-message in chat. The master only counts reports from players who actually
-connected to that room. Once the threshold of unique-by-IP reports is
-reached, the master bans the room: it disappears from the server list, and
-the host's signaling WS closes (new players can't reach it; already
-connected P2P peers stay — there's no host migration). Details — the
-engine's
-[master.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/master.md#ban-social-moderation)
-(`/ban` social moderation).
+**`/like <reason>` · `/unlike <reason>`** (the server rating) is the sole
+anti-cheat measure: the browser host runs the simulation on its own machine
+and can physically cheat (a modified client edits WASM memory bypassing the
+core's logic), so moderation is social, not technical. The command is
+intercepted **on the client** and goes straight to the master server over the
+signaling WS (bypassing the host — its `CommandProcessor` could filter out a
+vote against itself), not through the game protocol. A reason is required
+(otherwise a local chat hint appears) and is never shown publicly. Available
+only to guests of a room (the host player has no such option) and only to a
+signed-in player — the vote carries their identity token; a disconnected
+master connection shows an error message in chat. The master accepts a vote
+only from a session that actually connected to that room, and proxies it to
+the central auth service, which keeps one row per `(hoster, voter)` pair (an
+opinion can change, `like`↔`unlike`, it doesn't accumulate) and recomputes
+the hoster's score, clamped to `−10..10`. That score is what the server list
+shows as the room's `rating`. On reaching `blockAt` (`−10`) the hoster is
+blocked globally: their active rooms' signaling WS closes and they can't
+register new ones (already connected P2P peers stay — there's no host
+migration). Details — the engine's
+[master.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/master.md#server-rating-likeunlike)
+(server rating).
 
 ## Controls
 
