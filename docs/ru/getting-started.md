@@ -115,8 +115,9 @@ bare-специфер `pixi.js` из этого плагина в ту же оп
 прогон на два проекта:
 
 - `tanks` — `tests/host/{hostPlugin,botCommand,TanksBotManager}.test.js`,
-  `tests/client/tanksClientPlugin.test.js`, `tests/config/**` (окружение
-  happy-dom);
+  `tests/client/tanksClientPlugin.test.js`, `tests/config/**`,
+  `tests/scripts/**` (хелперы build-скриптов, напр.
+  `tests/scripts/rangeToPattern.test.js`) — окружение happy-dom;
 - `integration` — `tests/host/HostGame.test.js` + `tests/core/**`
   (реальное ядро, окружение node; **пропускается**, если `core/pkg-node/`
   не собран).

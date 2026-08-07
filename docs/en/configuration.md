@@ -29,7 +29,7 @@ Imports maps, models, and weapons from `src/data/`.
 | `mapsInVote` | `4` | How many maps show up in a vote |
 | `mapSetId` | `'c1'` | The default snapshot key for the map constructor |
 | `roomDefaults.maxPlayers` | `8` | The bounds for the lobby's room settings: caps the limit picked by the creator (also published in `GameManifest.roomDefaults`) |
-| `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v2): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`text`/`checkbox`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog |
+| `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v3): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`text`/`checkbox`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Scripted-participant (bot) parameters: the `Bot<id>` name prefix and the default tank model |
 | `soundCues` | `roundStart, victory, defeat, frag, death: 'gameOver'` | Maps engine events to this game's sound names (`SocketManager.sendSoundCue`) |
 | `initialVote` | `'teamChange'` | The vote sent to a player right after the first frame |
@@ -175,13 +175,13 @@ engine's `auth.pug` template is a neutral shell (title, help sections, a
 `Start` button, no `name` field: the nick comes from the verified lobby
 identity token, not the form), `AuthView` fills in this game's title and
 help sections from `texts`. `elems` points at `fieldsId: 'auth-fields'`,
-the container the engine renders `params` controls into (engine forms v2;
+the container the engine renders `params` controls into (engine forms v3;
 there's no `formId` — the engine owns the `<form>` element). `params`
 declares only this game's own field, `model` (a default value, `options`:
 `control: 'select'` + `label: 'Model'` + the list of choices from
 `models.js`, `validator: 'isValidModel'`, a `storage` key for
 localStorage) — there's no field using the engine's `isValidName`.
-`control` is required per field under engine forms v2: a field with an
+`control` is required per field under engine forms v3: a field with an
 `options` object but no `control` is silently dropped (`console.error` +
 skip in `formBuilder.buildForm`), not a build error. `isValidModel` (the
 model exists in `models.js`) is injected into the engine's `validateAuth`

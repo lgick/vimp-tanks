@@ -30,7 +30,7 @@
 | `mapsInVote` | `4` | Количество карт в голосовании |
 | `mapSetId` | `'c1'` | Дефолтный snapshot-ключ конструктора карты |
 | `roomDefaults.maxPlayers` | `8` | Рамка настроек комнаты в лобби: кламп лимита, выбранного создателем (также публикуется в `GameManifest.roomDefaults`) |
-| `roomForm` | 5 дескрипторов полей | Схема формы создания комнаты (публикуется как `GameManifest.roomForm`, контракт форм v2 движка): по дескриптору на каждый ключ `roomDefaults` (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), у каждого — `control` (`text`/`checkbox`/`select`) и `label`; `default` не указывается — движок засеивает значения из `roomDefaults`. Границы времени (`roundTime`/`mapTime`) — в мс; `map` использует `source: 'maps'`, варианты движок берёт из каталога карт |
+| `roomForm` | 5 дескрипторов полей | Схема формы создания комнаты (публикуется как `GameManifest.roomForm`, контракт форм v3 движка): по дескриптору на каждый ключ `roomDefaults` (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), у каждого — `control` (`text`/`checkbox`/`select`) и `label`; `default` не указывается — движок засеивает значения из `roomDefaults`. Границы времени (`roundTime`/`mapTime`) — в мс; `map` использует `source: 'maps'`, варианты движок берёт из каталога карт |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Параметры scripted-участников (ботов): префикс имени `Bot<id>` и модель танка по умолчанию |
 | `soundCues` | `roundStart, victory, defeat, frag, death: 'gameOver'` | Маппинг движковых событий на имена звуков этой игры (`SocketManager.sendSoundCue`) |
 | `initialVote` | `'teamChange'` | Голосование, отправляемое игроку после первого кадра |
@@ -177,13 +177,13 @@ last? } | { separator }] }`) — движковый шаблон `auth.pug` не
 из проверенного токена identity лобби, а не из формы), заголовок и
 подсказки этой игры подставляет `AuthView` из `texts`. `elems` указывает
 `fieldsId: 'auth-fields'` — контейнер, в который движок рендерит контролы
-`params` (контракт форм v2; поля `formId` нет — элементом `<form>`
+`params` (контракт форм v3; поля `formId` нет — элементом `<form>`
 владеет движок). `params` объявляет только собственное поле игры —
 `model` (значение по умолчанию, `options`: `control: 'select'` + `label:
 'Model'` + список вариантов из `models.js`, `validator: 'isValidModel'`,
 ключ `storage` для localStorage) — поля, использующего движковый
 `isValidName`, в форме нет. `control` обязателен для каждого поля в
-контракте форм v2: поле с объектом `options`, но без `control`, молча
+контракте форм v3: поле с объектом `options`, но без `control`, молча
 пропадёт (`console.error` + skip в `formBuilder.buildForm`), а не
 свалится сборкой. `isValidModel` (модель есть в `models.js`)
 инжектируется в движковый `validateAuth` третьим аргументом. Валидация

@@ -113,8 +113,9 @@ Stack: **Vitest** + happy-dom + coverage-v8. `vitest.config.js` splits the
 run into two projects:
 
 - `tanks` — `tests/host/{hostPlugin,botCommand,TanksBotManager}.test.js`,
-  `tests/client/tanksClientPlugin.test.js`, `tests/config/**` (happy-dom
-  environment);
+  `tests/client/tanksClientPlugin.test.js`, `tests/config/**`,
+  `tests/scripts/**` (build-script helpers, e.g.
+  `tests/scripts/rangeToPattern.test.js`) — happy-dom environment;
 - `integration` — `tests/host/HostGame.test.js` + `tests/core/**` (real
   core, node environment; **skipped** if `core/pkg-node/` isn't built).
 
