@@ -30,7 +30,7 @@
 | `mapsInVote` | `4` | Количество карт в голосовании |
 | `mapSetId` | `'c1'` | Дефолтный snapshot-ключ конструктора карты |
 | `roomDefaults.maxPlayers` | `8` | Рамка настроек комнаты в лобби: кламп лимита, выбранного создателем (также публикуется в `GameManifest.roomDefaults`) |
-| `roomForm` | 5 дескрипторов полей | Схема формы создания комнаты (публикуется как `GameManifest.roomForm`, контракт форм v2 движка): по дескриптору на каждый ключ `roomDefaults` (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), у каждого — `control` (`range`/`toggle`/`select`) и `label`; `default` не указывается — движок засеивает значения из `roomDefaults`. Границы времени (`roundTime`/`mapTime`) — в мс; `map` использует `source: 'maps'`, варианты движок берёт из каталога карт |
+| `roomForm` | 5 дескрипторов полей | Схема формы создания комнаты (публикуется как `GameManifest.roomForm`, контракт форм v2 движка): по дескриптору на каждый ключ `roomDefaults` (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), у каждого — `control` (`text`/`checkbox`/`select`) и `label`; `default` не указывается — движок засеивает значения из `roomDefaults`. Границы времени (`roundTime`/`mapTime`) — в мс; `map` использует `source: 'maps'`, варианты движок берёт из каталога карт |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Параметры scripted-участников (ботов): префикс имени `Bot<id>` и модель танка по умолчанию |
 | `soundCues` | `roundStart, victory, defeat, frag, death: 'gameOver'` | Маппинг движковых событий на имена звуков этой игры (`SocketManager.sendSoundCue`) |
 | `initialVote` | `'teamChange'` | Голосование, отправляемое игроку после первого кадра |

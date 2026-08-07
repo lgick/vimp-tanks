@@ -71,7 +71,7 @@ Steps:
 1. Add an entry in `src/config/sounds.js`: `file`, `priority`, `volume`,
    optionally `loop`.
 2. Put the source file into `assets/audio-raw/` and run `npm run
-   game:build` — `audio:process` normalizes it (ffmpeg) and emits
+   build:assets` — `audio:process` normalizes it (ffmpeg) and emits
    **`.webm` and `.mp3`** (the codec list — `codecList`) into
    `dist/sounds/`, served via `assetsBase`.
 3. Playback: UI/system sounds — `soundManager.playSystemSound(name)`;

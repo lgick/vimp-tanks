@@ -71,7 +71,7 @@
 1. Добавьте запись в `src/config/sounds.js`: `file`, `priority`,
    `volume`, опционально `loop`.
 2. Положите исходный файл в `assets/audio-raw/` и выполните `npm run
-   game:build` — `audio:process` нормализует его (ffmpeg) и выпускает
+   build:assets` — `audio:process` нормализует его (ffmpeg) и выпускает
    **`.webm` и `.mp3`** (список кодеков — `codecList`) в `dist/sounds/`,
    раздаваемый через `assetsBase`.
 3. Воспроизведение: UI/системные звуки — `soundManager.playSystemSound(name)`;

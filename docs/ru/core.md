@@ -70,7 +70,7 @@ npm run core:test         # cargo test --workspace (crate этого репоз�
 половина (`vimp_engine_core::config::EngineConfig`) обобщённая, игровая
 (`TanksConfig`) парсится этим crate. Конфиг `GameCore` собирает
 движковый `packages/engine/src/lib/coreConfig.js` (`buildCoreConfig()`),
-карты экспортируются в JSON скриптом `npm run maps:export` (общий шаг с
+карты экспортируются в JSON скриптом `npm run build:assets` (общий шаг с
 раздачей карт без пересборки клиента).
 
 Обвязка wasm-bindgen для обоих классов (механические 1:1-делегации в

@@ -70,7 +70,7 @@ half (`vimp_engine_core::config::EngineConfig`) is generic, the game half
 (`TanksConfig`) is parsed by this crate. The `GameCore` config is
 assembled by the engine's `packages/engine/src/lib/coreConfig.js`
 (`buildCoreConfig()`), and maps are exported to JSON via
-`npm run maps:export` (a step shared with serving maps without a client
+`npm run build:assets` (a step shared with serving maps without a client
 rebuild).
 
 The wasm-bindgen boilerplate for both classes (mechanical 1:1 delegations
