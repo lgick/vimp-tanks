@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Texture, Ticker } from 'pixi.js';
 import Bomb from '../../../src/client/parts/Bomb.js';
 
@@ -16,7 +16,25 @@ const makeSoundManager = () => ({
 // [x, y, rotation, size, durationMs, ownerId]
 const params = [10, 20, 0, 16, 3000, 1];
 
-const makeBomb = soundManager => new Bomb(params, assets, { soundManager });
+// созданные бомбы держат слушатель Ticker.shared до destroy() — иначе они
+// копятся между тестами и ломают счётчик тикера
+const created = [];
+
+const makeBomb = soundManager => {
+  const bomb = new Bomb(params, assets, { soundManager });
+
+  created.push(bomb);
+
+  return bomb;
+};
+
+afterEach(() => {
+  for (const bomb of created.splice(0)) {
+    if (!bomb.destroyed) {
+      bomb.destroy();
+    }
+  }
+});
 
 describe('Bomb: звук постановки', () => {
   it('регистрирует сэмпл постановки в позиции бомбы', () => {
