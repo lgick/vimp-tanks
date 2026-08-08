@@ -213,6 +213,7 @@ impl GameClientDef for TanksClient {
     fn reset(&mut self) {
         self.predictor.reset();
         self.shot.reset();
+        self.my_tank_meta = None;
     }
 
     fn cycle_item(&mut self, back: bool) {
@@ -499,6 +500,25 @@ mod tests {
     }
 
     #[test]
+    fn reset_disables_prediction_overlay() {
+        let mut state = make_state();
+
+        state.set_model("m1");
+        state.set_active(true);
+
+        state.push_frame(&frame_bytes(1000.0, 1, 10.0, 3, true, false), 1000.0);
+        state.sample(1150.0);
+        assert!(state.hot()[0] as u32 & HOT_HAS_PREDICTED != 0);
+
+        // CLEAR: мира больше нет — предсказанный хвост исчезает даже до того,
+        // как доедет keyset наблюдателя (регрессия «призрака» после смены карты)
+        state.reset();
+        state.sample(1200.0);
+
+        assert!(state.hot()[0] as u32 & HOT_HAS_PREDICTED == 0);
+    }
+
+    #[test]
     fn try_fire_gated_by_own_tank_state() {
         let mut state = make_state();
 
@@ -534,9 +554,16 @@ mod tests {
         // ввод перед телепортом
         state.apply_input("down", "forward", 1160.0);
 
-        // forceReset: история должна быть сброшена, состояние взято без replay
+        // forceReset: история сброшена, предикт до следующего player-блока
+        // ничего не рендерит (старая позиция — не то, что нужно показывать)
         state.push_frame(&frame_bytes(1200.0, 2, 500.0, 3, true, true), 1200.0);
         state.sample(1350.0);
+
+        assert!(state.hot()[0] as u32 & HOT_HAS_PREDICTED == 0);
+
+        // следующий кадр: состояние взято без replay
+        state.push_frame(&frame_bytes(1300.0, 3, 500.0, 3, true, false), 1300.0);
+        state.sample(1450.0);
 
         let hot = state.hot().to_vec();
         let p = &hot[hot.len() - 12..];

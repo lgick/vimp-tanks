@@ -214,6 +214,9 @@ impl Predictor {
     /// из следующего player-блока без replay.
     pub fn reset(&mut self) {
         self.pending_reset = true;
+        // до прихода следующего player-блока рендерить нечего: иначе предикт
+        // дорисовывает актора в позиции уже несуществующего мира
+        self.has_state = false;
         self.history.clear();
         self.base_keys_mask = 0;
         self.keys_mask = 0; // сервер сбрасывает клавиши при респауне (resetKeys)
@@ -587,6 +590,24 @@ mod tests {
 
         p.apply_input("down", "unknown", 3.0); // неизвестная клавиша
         assert_eq!(p.history.len(), 3);
+    }
+
+    #[test]
+    fn reset_drops_predicted_state() {
+        let mut p = make_predictor();
+
+        seed(&mut p, 0.0);
+        p.update(0.0);
+        assert!(p.has_state());
+
+        // CLEAR/смена карты: рендерить нечего до следующего player-блока
+        p.reset();
+
+        assert!(!p.has_state());
+        assert!(p.render_state().is_none());
+
+        seed(&mut p, 100.0);
+        assert!(p.has_state());
     }
 
     #[test]

@@ -267,6 +267,21 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(hot[1]).toBeCloseTo(x, 3);
     });
 
+    it('после CLEAR predicted-хвоста в hot-буфере нет', () => {
+      const { client } = setup();
+
+      expect(client.hot_values()[0] & HAS_PREDICTED).toBeTruthy();
+
+      // полный CLEAR: мира больше нет — предикт не должен пересоздавать
+      // сущность на полотне (баг «призрака» после смены карты)
+      client.reset();
+      client.sample(1200);
+
+      // (обнуление my_game_id — движковая половина того же фикса, она
+      // проверяется cargo-тестом крейта)
+      expect(client.hot_values()[0] & HAS_PREDICTED).toBeFalsy();
+    });
+
     it('реплика движения сходится с ядром на реальном конфиге', () => {
       const { core, client } = setup();
 

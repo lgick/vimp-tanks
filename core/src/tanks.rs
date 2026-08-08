@@ -587,13 +587,18 @@ impl GameSim<TanksGame> for TanksSim {
             }
         }
 
+        // все сконфигурированные модели, а не только модели живых танков:
+        // иначе сразу после смены карты живых нет и частичный CLEAR не
+        // чистит модельный набор на клиенте
+        for name in self.models.keys() {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+
         let tanks: Vec<Tank> = self.tanks.drain(..).map(|(_, tank)| tank).collect();
 
         for tank in tanks {
-            if !names.contains(&tank.model) {
-                names.push(tank.model.clone());
-            }
-
             world.remove_body(tank.body);
         }
 

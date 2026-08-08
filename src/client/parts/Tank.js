@@ -176,9 +176,14 @@ export default class Tank extends Container {
     this.gun.rotation = data[3];
     this._engineLoad = data[6];
 
-    // обновление звуковой логики
-    if (this._soundId && this._condition > 0) {
-      this._soundManager.updateSoundData(this._soundId, this._getSoundData());
+    // обновление звуковой логики; страховка: живой танк без регистрации
+    // (её мог снять частичный CLEAR) возвращает звук на следующем кадре
+    if (this._condition > 0) {
+      if (this._soundId === null) {
+        this._initSounds();
+      } else {
+        this._soundManager.updateSoundData(this._soundId, this._getSoundData());
+      }
     }
 
     const newCondition = data[7];

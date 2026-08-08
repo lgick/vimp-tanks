@@ -51,6 +51,11 @@ use super::predictor::RenderState;
 // старше — хост выстрел отклонил, запись не должна съедать чужие дубли
 const PENDING_MAX_AGE: f64 = 2000.0;
 
+// максимальный возраст алиаса своей бомбы (мс). Алиас снимается по null
+// детонации; этот срок — только страховка от утечки, если null потерялся,
+// поэтому он с запасом больше любого разумного weapon.time.
+const BOMB_ALIAS_MAX_AGE: f64 = 60_000.0;
+
 /// Данные карты для raycast (MAP_DATA клиента; лишние поля игнорируются).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,6 +129,12 @@ pub struct ShotPredictor {
     pending_tracers: VecDeque<PendingShot>,
     pending_bombs: VecDeque<PendingBomb>,
     expired_local_bombs: Vec<(String, String)>, // (localId, weapon)
+
+    // подтверждённые свои бомбы: авторитетный id → (локальный id, время
+    // подтверждения). Сущность на полотне живёт под локальным id от спавна
+    // до детонации — иначе её пришлось бы удалить и создать заново, что
+    // рвёт одноразовый звук и перезапускает таймер.
+    bomb_aliases: IndexMap<String, (String, f64)>,
     local_bomb_seq: u32,
 
     // оценка (serverTime − localNow) интерполятора: RTT-компенсация бомбы
@@ -152,6 +163,7 @@ impl ShotPredictor {
             pending_tracers: VecDeque::new(),
             pending_bombs: VecDeque::new(),
             expired_local_bombs: Vec::new(),
+            bomb_aliases: IndexMap::new(),
             local_bomb_seq: 0,
             server_offset: None,
             rng: Rng::new(seed),
@@ -482,7 +494,7 @@ impl ShotPredictor {
                         .map(|(id, _)| id.clone())
                         .collect();
 
-                    for _ in confirmed {
+                    for auth_id in confirmed {
                         let Some(index) = self
                             .pending_bombs
                             .iter()
@@ -493,8 +505,31 @@ impl ShotPredictor {
 
                         let pending = self.pending_bombs.remove(index).unwrap();
 
-                        // локальная бомба уступает место авторитетной сущности
-                        bombs.insert(pending.local_id, Value::Null);
+                        // авторитетная строка не доезжает до клиента: сущность
+                        // уже стоит под локальным id, дальше он и остаётся её
+                        // именем — до самой детонации
+                        bombs.remove(&auth_id);
+                        self.bomb_aliases
+                            .insert(auth_id, (pending.local_id, local_now));
+                    }
+
+                    // всё остальное под известным алиасом (в первую очередь
+                    // null детонации) переименовывается в локальный id
+                    let aliased: Vec<String> = bombs
+                        .keys()
+                        .filter(|id| self.bomb_aliases.contains_key(*id))
+                        .cloned()
+                        .collect();
+
+                    for auth_id in aliased {
+                        let value = bombs.remove(&auth_id).unwrap();
+                        let (local_id, _) = self.bomb_aliases[&auth_id].clone();
+
+                        if value.is_null() {
+                            self.bomb_aliases.shift_remove(&auth_id);
+                        }
+
+                        bombs.insert(local_id, value);
                     }
                 }
                 _ => {}
@@ -507,6 +542,7 @@ impl ShotPredictor {
         self.pending_tracers.clear();
         self.pending_bombs.clear();
         self.expired_local_bombs.clear();
+        self.bomb_aliases.clear();
         self.cooldown_until.clear();
         self.ammo.clear();
         self.tanks.clear();
@@ -646,6 +682,11 @@ impl ShotPredictor {
             self.expired_local_bombs
                 .push((expired.local_id, expired.weapon));
         }
+
+        // страховка от утечки, если null детонации потерялся
+        let alias_min_time = local_now - BOMB_ALIAS_MAX_AGE;
+
+        self.bomb_aliases.retain(|_, (_, time)| *time >= alias_min_time);
     }
 }
 
@@ -894,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_remaps_own_bomb_to_local_null() {
+    fn filter_aliases_own_bomb_to_local_id() {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
@@ -907,12 +948,62 @@ mod tests {
 
         shot.filter_frame_game(map, Some(2), 100.0);
 
-        // авторитетная сущность остаётся, локальная гасится null'ом
-        assert!(map["w2"]["a1"].is_array());
-        assert!(map["w2"]["L1"].is_null());
+        // сущность уже стоит под L1: авторитетная строка не доезжает, чтобы
+        // клиенту не пришлось удалять и создавать бомбу заново
+        assert!(map["w2"].get("a1").is_none());
+        assert!(map["w2"].get("L1").is_none());
 
         // гейт снят: следующая бомба разрешена
         assert!(shot.try_fire(&render_at(0.0, 0.0), 2, 1000.0).is_some());
+    }
+
+    #[test]
+    fn filter_renames_detonation_null_to_local_id() {
+        let mut shot = make_shot();
+
+        shot.cycle_weapon(false);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+
+        let mut game = serde_json::json!({ "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] } });
+
+        shot.filter_frame_game(game.as_object_mut().unwrap(), Some(2), 100.0);
+
+        // детонация приходит под авторитетным id — клиент должен получить её
+        // под тем именем, под которым сущность живёт на полотне
+        let mut game = serde_json::json!({ "w2": { "a1": null } });
+        let map = game.as_object_mut().unwrap();
+
+        shot.filter_frame_game(map, Some(2), 400.0);
+
+        assert!(map["w2"].get("a1").is_none());
+        assert!(map["w2"]["L1"].is_null());
+
+        // алиас снят вместе с сущностью
+        assert!(shot.bomb_aliases.is_empty());
+    }
+
+    #[test]
+    fn bomb_alias_expires_by_age() {
+        let mut shot = make_shot();
+
+        shot.cycle_weapon(false);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+
+        let mut game = serde_json::json!({ "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] } });
+
+        shot.filter_frame_game(game.as_object_mut().unwrap(), Some(2), 100.0);
+        assert_eq!(shot.bomb_aliases.len(), 1);
+
+        // null детонации потерялся — алиас не должен жить вечно
+        let mut game = serde_json::json!({ "w2": {} });
+
+        shot.filter_frame_game(
+            game.as_object_mut().unwrap(),
+            Some(2),
+            100.0 + BOMB_ALIAS_MAX_AGE + 1.0,
+        );
+
+        assert!(shot.bomb_aliases.is_empty());
     }
 
     #[test]

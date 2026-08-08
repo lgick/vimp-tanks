@@ -196,8 +196,20 @@ exists. Its config is assembled by the engine's
 | `apply_input(action, key, localNow)` | records input into the predictor's history |
 | `try_fire(localNow)` | a local visual shot; gates (cooldown/ammo/pending bomb/alive/active) are internal; returns spawn JSON or `undefined` |
 | `cycle_weapon(back)` | a local weapon-cycle switch (authoritative confirmation comes via the panel) |
-| `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR |
+| `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR. `reset()` also drops the local tank's meta, so the prediction overlay disappears right away instead of waiting for the spectator keyset |
 | `decode_frame(bytes)` | a plain v3 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
+
+**Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
+immediately under a local id (`L1`, `L2`, …) while the request travels to
+the host. When the authoritative entity arrives, `shot.rs` does **not**
+swap one for the other: the authoritative row is dropped from the frame and
+its id is recorded as an **alias** of the local one (`bomb_aliases`).
+Everything that later arrives under the authoritative id — first of all the
+detonation `null` — is renamed to the local id, so the entity lives under a
+single name from spawn to detonation. Deleting and recreating it would
+restart its timer and cut off the one-shot "planted" sample. The alias is
+removed by the detonation `null`; `BOMB_ALIAS_MAX_AGE` (60 s, well above
+any sane `weapon.time`) is only a leak guard for a lost `null`.
 
 **Hot buffer layout** (flat, reusable Float32):
 `[0]` — flags (`HOT_FLAGS` in the engine's `opcodes.js`: game/camera/

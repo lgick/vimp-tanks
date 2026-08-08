@@ -361,6 +361,14 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       expect(core.position_of(1)).toHaveLength(0);
     });
 
+    it('remove_players_and_shots отдаёт ключи моделей и без живых игроков', () => {
+      // сразу после смены карты живых танков нет, но частичный CLEAR всё
+      // равно должен чистить модельный набор на клиенте
+      const names = JSON.parse(core.remove_players_and_shots());
+
+      expect(names).toEqual(expect.arrayContaining(['m1', 'w1', 'w2', 'w2e']));
+    });
+
     it('clear готовит мир к новой карте', () => {
       core.load_map(JSON.stringify(poolMini));
       core.spawn_actor(1, 'm1', 1, 78, 312, 0);
