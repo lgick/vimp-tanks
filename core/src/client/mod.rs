@@ -195,7 +195,9 @@ impl GameClientDef for TanksClient {
     /// Смена режима игрок/спектатор (KEYSET_DATA).
     fn set_active(&mut self, active: bool) {
         self.predictor.set_active(active);
-        self.shot.reset();
+        // не полный reset: keyset обгоняет детонацию (meta приходит сразу,
+        // state — через буфер интерполяции), алиасы бомб должны дожить
+        self.shot.reset_local();
     }
 
     /// Данные карты (MAP_DATA): мир raycast + сброс предикта.

@@ -104,8 +104,12 @@ export default class Tank extends Container {
     this._soundManager = dependencies.soundManager;
     this._soundId = null;
 
-    const engineConfig = this._soundManager.getSoundConfig('tankEngine') || {};
-    this._baseEngineVolume = engineConfig.volume || 0;
+    const engineConfig = this._soundManager.getSoundConfig('tankEngine');
+
+    this._baseEngineVolume = engineConfig?.volume || 0;
+    // без конфига registerSound вернёт null: страховка в update() иначе
+    // пыталась бы регистрировать звук каждый кадр для каждого танка
+    this._hasEngineSound = !!engineConfig;
 
     // первоначальная установка визуального состояния
     this.create();
@@ -113,7 +117,7 @@ export default class Tank extends Container {
 
   // запускает звуки двигателя танка
   _initSounds() {
-    if (this._soundId || this._condition === 0) {
+    if (this._soundId || this._condition === 0 || !this._hasEngineSound) {
       return;
     }
 

@@ -107,6 +107,13 @@ struct PendingBomb {
     local_id: String,
 }
 
+// подтверждённая своя бомба: локальный id, под которым она живёт на
+// полотне, и время подтверждения (страховка от утечки алиаса по возрасту)
+struct BombAlias {
+    local_id: String,
+    time: f64,
+}
+
 pub struct ShotPredictor {
     weapons: IndexMap<String, WeaponConfig>,
     models: IndexMap<String, ModelConfig>,
@@ -134,7 +141,7 @@ pub struct ShotPredictor {
     // подтверждения). Сущность на полотне живёт под локальным id от спавна
     // до детонации — иначе её пришлось бы удалить и создать заново, что
     // рвёт одноразовый звук и перезапускает таймер.
-    bomb_aliases: IndexMap<String, (String, f64)>,
+    bomb_aliases: IndexMap<String, BombAlias>,
     local_bomb_seq: u32,
 
     // оценка (serverTime − localNow) интерполятора: RTT-компенсация бомбы
@@ -500,7 +507,7 @@ impl ShotPredictor {
                             .iter()
                             .position(|p| p.weapon == weapon_name)
                         else {
-                            break;
+                            continue;
                         };
 
                         let pending = self.pending_bombs.remove(index).unwrap();
@@ -509,8 +516,13 @@ impl ShotPredictor {
                         // уже стоит под локальным id, дальше он и остаётся её
                         // именем — до самой детонации
                         bombs.remove(&auth_id);
-                        self.bomb_aliases
-                            .insert(auth_id, (pending.local_id, local_now));
+                        self.bomb_aliases.insert(
+                            auth_id,
+                            BombAlias {
+                                local_id: pending.local_id,
+                                time: local_now,
+                            },
+                        );
                     }
 
                     // всё остальное под известным алиасом (в первую очередь
@@ -523,7 +535,7 @@ impl ShotPredictor {
 
                     for auth_id in aliased {
                         let value = bombs.remove(&auth_id).unwrap();
-                        let (local_id, _) = self.bomb_aliases[&auth_id].clone();
+                        let local_id = self.bomb_aliases[&auth_id].local_id.clone();
 
                         if value.is_null() {
                             self.bomb_aliases.shift_remove(&auth_id);
@@ -537,16 +549,34 @@ impl ShotPredictor {
         }
     }
 
-    /// Полный сброс (смена карты/clear/keySet).
-    pub fn reset(&mut self) {
+    /// Сброс режима игрок/наблюдатель: локальные ставки на выстрелы
+    /// аннулируются, но подтверждённые бомбы продолжают жить под своими
+    /// локальными id — их снимет авторитетный null детонации, который
+    /// приходит позже keyset (state идёт через буфер интерполяции).
+    pub fn reset_local(&mut self) {
         self.pending_tracers.clear();
-        self.pending_bombs.clear();
-        self.expired_local_bombs.clear();
-        self.bomb_aliases.clear();
+        self.drain_pending_bombs_to_expired();
         self.cooldown_until.clear();
         self.ammo.clear();
         self.tanks.clear();
         self.current_weapon = self.model.as_ref().map(|m| m.current_weapon.clone());
+    }
+
+    /// Полный сброс (смена карты/clear): мира больше нет.
+    pub fn reset(&mut self) {
+        self.reset_local();
+        self.bomb_aliases.clear();
+        // после CLEAR полотно чистится целиком — доставлять null некому
+        self.expired_local_bombs.clear();
+    }
+
+    // хоронит неподтверждённые локальные бомбы: null по локальному id
+    // инжектится в ближайший кадр, иначе спрайт останется на полотне
+    fn drain_pending_bombs_to_expired(&mut self) {
+        for pending in std::mem::take(&mut self.pending_bombs) {
+            self.expired_local_bombs
+                .push((pending.local_id, pending.weapon));
+        }
     }
 
     // собирает данные трассера: реплика формул Tank::muzzle_position/
@@ -686,7 +716,8 @@ impl ShotPredictor {
         // страховка от утечки, если null детонации потерялся
         let alias_min_time = local_now - BOMB_ALIAS_MAX_AGE;
 
-        self.bomb_aliases.retain(|_, (_, time)| *time >= alias_min_time);
+        self.bomb_aliases
+            .retain(|_, alias| alias.time >= alias_min_time);
     }
 }
 
@@ -1078,5 +1109,47 @@ mod tests {
         assert!(shot.pending_bombs.is_empty());
         // кулдаун сброшен
         assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 1.0).is_some());
+    }
+
+    #[test]
+    fn reset_local_keeps_bomb_alias() {
+        let mut shot = make_shot();
+
+        shot.cycle_weapon(false);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+
+        let mut game = serde_json::json!({ "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] } });
+
+        shot.filter_frame_game(game.as_object_mut().unwrap(), Some(2), 100.0);
+        assert_eq!(shot.bomb_aliases.len(), 1);
+
+        // смерть игрока: keyset приходит раньше детонации, алиас обязан дожить
+        shot.reset_local();
+
+        let mut game = serde_json::json!({ "w2": { "a1": null } });
+        let map = game.as_object_mut().unwrap();
+
+        shot.filter_frame_game(map, Some(2), 400.0);
+
+        assert!(map["w2"].get("a1").is_none());
+        assert!(map["w2"]["L1"].is_null());
+    }
+
+    #[test]
+    fn reset_buries_unconfirmed_local_bomb() {
+        let mut shot = make_shot();
+
+        shot.cycle_weapon(false);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0); // pending L1, без подтверждения
+
+        shot.reset_local();
+
+        let mut game = serde_json::json!({});
+        let map = game.as_object_mut().unwrap();
+
+        shot.filter_frame_game(map, Some(2), 100.0);
+
+        // локальная бомба похоронена: null по локальному id
+        assert!(map["w2"]["L1"].is_null());
     }
 }

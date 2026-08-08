@@ -211,6 +211,17 @@ restart its timer and cut off the one-shot "planted" sample. The alias is
 removed by the detonation `null`; `BOMB_ALIAS_MAX_AGE` (60 s, well above
 any sane `weapon.time`) is only a leak guard for a lost `null`.
 
+`set_active` (KEYSET) therefore resets only the *local* half of the
+predictor (`ShotPredictor::reset_local`) and keeps the aliases: KEYSET
+travels on the reliable `meta` channel and is applied on arrival, while the
+detonation rides a state frame through the interpolation buffer and lands
+~`interpolation.delay` later. Dropping the aliases on a keyset (which is
+what a player's death sends) would leave the bomb sprite on the canvas
+forever. Unconfirmed local bombs, in contrast, are buried on any reset: their
+local ids go to `expired_local_bombs` and the next frame gets a `null` for
+each. The full `reset()` (CLEAR) drops the aliases too — the canvas is
+cleared wholesale and there is no one left to deliver a `null` to.
+
 **Hot buffer layout** (flat, reusable Float32):
 `[0]` — flags (`HOT_FLAGS` in the engine's `opcodes.js`: game/camera/
 predicted/frames), `[1..2]` — camera x/y (already resolved by the core:
