@@ -144,9 +144,6 @@ pub struct ShotPredictor {
     bomb_aliases: IndexMap<String, BombAlias>,
     local_bomb_seq: u32,
 
-    // оценка (serverTime − localNow) интерполятора: RTT-компенсация бомбы
-    server_offset: Option<f64>,
-
     rng: Rng,
 }
 
@@ -172,14 +169,8 @@ impl ShotPredictor {
             expired_local_bombs: Vec::new(),
             bomb_aliases: IndexMap::new(),
             local_bomb_seq: 0,
-            server_offset: None,
             rng: Rng::new(seed),
         }
-    }
-
-    /// Обновляет оценку задержки сети (вызывается из рендер-тика).
-    pub fn set_server_offset(&mut self, offset: Option<f64>) {
-        self.server_offset = offset;
     }
 
     /// Модель танка пользователя (известна при авторизации).
@@ -413,21 +404,13 @@ impl ShotPredictor {
                     local_id: local_id.clone(),
                 });
 
-                // RTT/2-компенсация: экстраполяция позиции на время
-                // до обработки хостом
-                let mut spawn_x = render.x;
-                let mut spawn_y = render.y;
-
-                if let Some(offset) = self.server_offset {
-                    let lag_ms = -offset as f32;
-
-                    spawn_x += render.vx * (lag_ms / 1000.0);
-                    spawn_y += render.vy * (lag_ms / 1000.0);
-                }
-
+                // бомба ложится ровно в предсказанную позицию танка:
+                // экстраполировать её вперёд нечем — клиент своей латентности
+                // не знает, а расхождение с хостом закрывает авторитетная
+                // коррекция при подтверждении (см. filter_frame_game)
                 Some(json!({
                     weapon_name: {
-                        local_id: [spawn_x, spawn_y, 0, weapon.size, weapon.time, my_game_id],
+                        local_id: [render.x, render.y, 0, weapon.size, weapon.time, my_game_id],
                     },
                 }))
             }
@@ -512,10 +495,11 @@ impl ShotPredictor {
 
                         let pending = self.pending_bombs.remove(index).unwrap();
 
-                        // авторитетная строка не доезжает до клиента: сущность
-                        // уже стоит под локальным id, дальше он и остаётся её
-                        // именем — до самой детонации
-                        bombs.remove(&auth_id);
+                        // строка не выбрасывается, а остаётся в кадре под
+                        // зарегистрированным алиасом: проход ниже переименует
+                        // её в локальный id, и она одноразово поправит позицию
+                        // на авторитетную (parse уйдёт в update, а не в create
+                        // — таймер и одноразовый звук не рвутся)
                         self.bomb_aliases.insert(
                             auth_id,
                             BombAlias {
@@ -914,22 +898,22 @@ mod tests {
     }
 
     #[test]
-    fn bomb_spawn_gate_and_rtt_compensation() {
+    fn bomb_spawn_gate_and_no_extrapolation() {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false); // w1 → w2
 
         let mut render = render_at(10.0, 0.0);
 
+        // скорость на позицию спавна не влияет: клиент своей латентности не
+        // знает, экстраполировать нечем
         render.vx = 100.0;
-
-        // RTT-компенсация: offset −50 мс → x + vx·0.05
-        shot.set_server_offset(Some(-50.0));
 
         let spawn = shot.try_fire(&render, 3, 0.0).unwrap();
         let bomb = &spawn["w2"]["L1"];
 
-        assert!((bomb[0].as_f64().unwrap() - 15.0).abs() < 1e-3);
+        assert!((bomb[0].as_f64().unwrap() - 10.0).abs() < 1e-3);
+        assert!((bomb[1].as_f64().unwrap()).abs() < 1e-3);
         assert_eq!(bomb[3].as_f64(), Some(8.0)); // size
         assert_eq!(bomb[5].as_u64(), Some(3)); // ownerId
 
@@ -979,10 +963,12 @@ mod tests {
 
         shot.filter_frame_game(map, Some(2), 100.0);
 
-        // сущность уже стоит под L1: авторитетная строка не доезжает, чтобы
-        // клиенту не пришлось удалять и создавать бомбу заново
+        // сущность уже стоит под L1: авторитетная строка приезжает под этим
+        // же именем (update, а не create) и одноразово поправляет позицию —
+        // хост ставит бомбу там, где танк оказался к приходу команды
         assert!(map["w2"].get("a1").is_none());
-        assert!(map["w2"].get("L1").is_none());
+        assert_eq!(map["w2"]["L1"][0].as_f64(), Some(5.0));
+        assert_eq!(map["w2"]["L1"][1].as_f64(), Some(5.0));
 
         // гейт снят: следующая бомба разрешена
         assert!(shot.try_fire(&render_at(0.0, 0.0), 2, 1000.0).is_some());

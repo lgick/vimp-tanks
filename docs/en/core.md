@@ -202,14 +202,25 @@ exists. Its config is assembled by the engine's
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
 immediately under a local id (`L1`, `L2`, …) while the request travels to
 the host. When the authoritative entity arrives, `shot.rs` does **not**
-swap one for the other: the authoritative row is dropped from the frame and
-its id is recorded as an **alias** of the local one (`bomb_aliases`).
-Everything that later arrives under the authoritative id — first of all the
-detonation `null` — is renamed to the local id, so the entity lives under a
-single name from spawn to detonation. Deleting and recreating it would
-restart its timer and cut off the one-shot "planted" sample. The alias is
-removed by the detonation `null`; `BOMB_ALIAS_MAX_AGE` (60 s, well above
-any sane `weapon.time`) is only a leak guard for a lost `null`.
+swap one for the other: its id is recorded as an **alias** of the local one
+(`bomb_aliases`) and the row itself is renamed to the local id instead of
+being dropped. Everything that later arrives under the authoritative id —
+first of all the detonation `null` — is renamed the same way, so the entity
+lives under a single name from spawn to detonation. Deleting and recreating
+it would restart its timer and cut off the one-shot "planted" sample. The
+alias is removed by the detonation `null`; `BOMB_ALIAS_MAX_AGE` (60 s, well
+above any sane `weapon.time`) is only a leak guard for a lost `null`.
+
+**Bomb position.** The local spawn goes exactly to the predicted tank
+position, with no velocity extrapolation: the client does not know its own
+latency (the interpolator's `offset` is a clock difference between the
+host's `Date.now` and the client's `performance.now`, not a network delay —
+taking it for one throws the bomb out of the world as soon as the tank
+moves). The offset from the host — which plants the bomb where the tank has
+got to by the time the command arrives — is closed by the renamed
+confirmation row: it reaches the canvas as an `update` of the existing
+entity, so `Bomb.update` moves the sprite and its sample to the
+authoritative point without recreating anything.
 
 `set_active` (KEYSET) therefore resets only the *local* half of the
 predictor (`ShotPredictor::reset_local`) and keeps the aliases: KEYSET

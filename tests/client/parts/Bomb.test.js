@@ -11,6 +11,7 @@ const makeSoundManager = () => ({
   registerSound: vi.fn(() => Symbol('planted')),
   releaseSound: vi.fn(),
   unregisterSound: vi.fn(),
+  updateSoundData: vi.fn(() => true),
 });
 
 // [x, y, rotation, size, durationMs, ownerId]
@@ -71,5 +72,51 @@ describe('Bomb: звук постановки', () => {
     bomb.destroy({ children: false });
 
     expect(soundManager.releaseSound).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Bomb: авторитетная коррекция позиции', () => {
+  it('update переносит спрайт и позицию сэмпла в присланную точку', () => {
+    const soundManager = makeSoundManager();
+    const bomb = makeBomb(soundManager);
+    const soundId = soundManager.registerSound.mock.results[0].value;
+
+    bomb.update([42, -17, 1.5, 16, 3000, 1]);
+
+    expect(bomb.x).toBe(42);
+    expect(bomb.y).toBe(-17);
+    expect(bomb.rotation).toBe(1.5);
+    expect(soundManager.updateSoundData).toHaveBeenCalledWith(soundId, {
+      position: { x: 42, y: -17 },
+    });
+  });
+
+  it('коррекция не пересоздаёт бомбу: таймер и звук заводятся один раз', () => {
+    const soundManager = makeSoundManager();
+    const before = Ticker.shared.count;
+    const bomb = makeBomb(soundManager);
+
+    bomb.update([42, -17, 0, 16, 3000, 1]);
+
+    expect(soundManager.registerSound).toHaveBeenCalledTimes(1);
+    expect(Ticker.shared.count).toBe(before + 1);
+  });
+
+  it('снятую регистрацию звука не дёргают повторно', () => {
+    const soundManager = makeSoundManager();
+    const bomb = makeBomb(soundManager);
+
+    // регистрацию снял reset(): сэмпл одноразовый, перерегистрировать нечего
+    soundManager.updateSoundData.mockReturnValueOnce(false);
+
+    bomb.update([1, 2, 0, 16, 3000, 1]);
+    bomb.update([3, 4, 0, 16, 3000, 1]);
+
+    expect(soundManager.updateSoundData).toHaveBeenCalledTimes(1);
+
+    // отпускать тоже нечего
+    bomb.destroy();
+
+    expect(soundManager.releaseSound).not.toHaveBeenCalled();
   });
 });

@@ -92,10 +92,6 @@ impl GameClientDef for TanksClient {
         self.predictor.replayed_inputs()
     }
 
-    fn set_server_offset(&mut self, offset: Option<f64>) {
-        self.shot.set_server_offset(offset);
-    }
-
     fn update(&mut self, local_now: f64) {
         self.predictor.update(local_now);
     }
