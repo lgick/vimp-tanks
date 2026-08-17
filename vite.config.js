@@ -20,7 +20,30 @@ const entries = {
   host: path.resolve(import.meta.dirname, 'src/host/index.js'),
 };
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
+  // dev-сервер локального автономного запуска (`npm run dev`, index.html →
+  // src/standalone.js): сборка плагина ниже его не касается
+  if (command === 'serve') {
+    return {
+      server: { open: true },
+      // два экземпляра PixiJS = два реестра расширений и падение рендера
+      resolve: { dedupe: ['pixi.js'] },
+      optimizeDeps: {
+        // движок поставляется ESM-исходниками: пре-бандл ломает его
+        // динамические импорты и общий с SDK модульный boot-конфиг
+        exclude: ['vimp-engine'],
+        // ...но npm-зависимости движка вернуть в пре-бандл обязательно:
+        // как транзитивные импорты исключённого пакета они грузились бы
+        // исходниками, а CJS в браузере не резолвится (`howler` и
+        // eventemitter3 внутри pixi.js — "does not provide an export
+        // named ..."). `pixi.js/unsafe-eval` — отдельный вход: его
+        // импортирует main.js движка, и один пре-бандл на оба входа делит
+        // общие чанки, то есть экземпляр PixiJS остаётся один
+        include: ['pixi.js', 'pixi.js/unsafe-eval', 'howler'],
+      },
+    };
+  }
+
   const entry = entries[mode];
 
   if (!entry) {

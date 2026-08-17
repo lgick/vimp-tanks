@@ -62,6 +62,30 @@ copy: `dist` is the only published content, so a manifest pointing outside
 it would work in this checkout and break in the installed package
 (`npm run check:pack` guards that, and it also runs on `prepack`).
 
+## Playing a match locally (`npm run dev`)
+
+The fastest loop needs neither the engine checkout nor the master server:
+the engine's [standalone SDK](https://github.com/lgick/vimp-engine/blob/main/docs/en/standalone.md)
+runs the authoritative host, the client and this plugin inside one browser
+tab — no lobby screen, no OAuth.
+
+```bash
+npm run core:build      # WASM (only core/pkg-web/ is needed for dev)
+npm run audio:process   # sounds → build/sounds/ (needs ffmpeg; optional)
+npm run dev             # Vite dev server, opens the tab
+```
+
+The tab enters as a guest (`Tanker`, nickname override in
+`localStorage.vimp_dev_nick`), votes itself into `team1` and asks for four
+bots — `index.html` and `src/standalone.js` hold every option
+(`startStandaloneGame`, map, `assetsBase`). Sounds come from `/build/`, so
+without `npm run audio:process` they simply stay silent; the match works
+either way. WebRTC isn't used at all in this mode.
+
+`npm run build` is *not* needed here: Vite serves `src/**` and
+`core/pkg-web/*.wasm` directly. The plugin build and `dist/` are only for
+the master-served contour below.
+
 ## Playing a match locally against a local engine checkout
 
 To develop against a local, unpublished copy of this plugin, build it once

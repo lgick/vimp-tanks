@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VIMP Tanks — dev</title>
+    <!--
+      Стилей движка здесь нет: таблицу (`vimp-engine/style.css`) и игровой
+      CSS импортирует точка входа — Vite соберёт их сам. Ниже — только
+      правила самого контейнера SDK.
+
+      `#game` обязан быть полноэкранным и позиционированным: в него
+      монтируются и каркас интерфейса, и канвасы, а `#panel`/`#stat`/`#vote`
+      движка — `position: absolute` (их containing block — ближайший
+      позиционированный предок). `display` контейнеру не нужен: экраны
+      держит скрытыми правило `.vimp-shell > *` из движкового style.css.
+    -->
+    <style>
+      #game {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <script type="module" src="/src/standalone.js"></script>
+  </body>
+</html>
