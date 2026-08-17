@@ -25,9 +25,12 @@ src/
                asset vs Node glue (headless runs)
 core/        — vimp-tanks-core (Rust → WASM, pkg-web/pkg-node): tanks,
                weapons, bots, prediction, shot spawning (see core.md)
+assets/      — authored inputs: audio-raw/ (raw sounds) and img/ (tile
+               sheets, dynamic-body sprites; the engine ships none of them)
 tests/       — host-plugin behavior, JS↔WASM harness, scenarios/ (headless
                debug runs, see getting-started.md)
-scripts/     — audio processing, map export to JSON, manifest, scenario runner
+scripts/     — audio processing, image copy, map export to JSON, manifest,
+               scenario runner
 ```
 
 `src/config/` and `src/data/` are read by the engine's host Worker, the

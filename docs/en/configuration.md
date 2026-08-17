@@ -130,8 +130,11 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   parameters).
 
 - **`componentDependencies`** — which services get injected into which
-  components (`renderer` → Map; `soundManager` → ExplosionEffect,
-  ShotEffect, Bomb, Tank).
+  components (`renderer` → Map; `assetsBase` → Map; `soundManager` →
+  ExplosionEffect, ShotEffect, Bomb, Tank). `assetsBase` is the engine's
+  asset base for this package: `Map` turns it into
+  `${assetsBase}img/<file>` for the tile sheets and dynamic-body sprites
+  it loads (see [extending.md](extending.md#new-map-image)).
 
 ### `modules.controls.keySetList`
 

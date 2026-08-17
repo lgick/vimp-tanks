@@ -10,6 +10,21 @@ export default class Map extends Container {
     this._assetUrl = null; // URL для возможной выгрузки
 
     this._renderer = dependencies.renderer;
+
+    // База ассетов активной игры — движок отдаёт её сервисом assetsBase
+    // (объявлен в componentDependencies, src/config/client.js). Картинки
+    // карт везёт сам пакет игры: assets/img/ -> dist/img/, а движок ни одного
+    // игрового файла не раздаёт. Без базы вышел бы запрос на
+    // "undefinedimg/tiles.png" — полотно осталось бы пустым без единой
+    // ошибки, поэтому промах ловим здесь и вслух
+    if (typeof dependencies.assetsBase !== 'string') {
+      throw new Error(
+        'Map: сервис assetsBase недоступен. Объявите его в ' +
+          'componentDependencies и запустите игру на vimp-engine >= 0.9.0',
+      );
+    }
+
+    this._imageBase = `${dependencies.assetsBase}img/`;
     this.scale = data.scale;
 
     this.sprite = null;
@@ -17,7 +32,7 @@ export default class Map extends Container {
 
     // если статические данные
     if (data.type === 'static') {
-      this._assetUrl = `/img/${data.spriteSheet.img}`;
+      this._assetUrl = `${this._imageBase}${data.spriteSheet.img}`;
       this._baseTexturePromise = Assets.load(this._assetUrl);
 
       // data состоит из:
@@ -36,7 +51,7 @@ export default class Map extends Container {
     }
     // если динамические данные
     else if (data.type === 'dynamic') {
-      this._assetUrl = `/img/${data.img}`;
+      this._assetUrl = `${this._imageBase}${data.img}`;
       this._baseTexturePromise = Assets.load(this._assetUrl);
 
       this.zIndex = data.layer || 2;

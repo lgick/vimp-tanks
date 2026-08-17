@@ -14,8 +14,10 @@ await startStandaloneGame({
   clientPlugin,
   wasmUrl,
   container: document.getElementById('game'),
-  // звуки в dev лежат в build/sounds (продукт `npm run audio:process`);
-  // SDK читает их как `${assetsBase}sounds/`
+  // dev-корень ассетов игры: build/img (стейджит `predev`, то есть тайлы
+  // видны сразу) и build/sounds (продукт `npm run audio:process`, ffmpeg
+  // нужен только ради звука). Клиент движка читает их как
+  // `${assetsBase}img/` и `${assetsBase}sounds/`
   assetsBase: '/build/',
   playerName: localStorage.getItem('vimp_dev_nick') || 'Tanker',
   playerModel: 'm1',

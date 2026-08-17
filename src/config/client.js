@@ -120,6 +120,9 @@ export default {
     componentDependencies: {
       // Map требует сервис renderer
       renderer: ['Map'],
+      // база ассетов игры: Map строит из неё URL тайл-листов и спрайтов
+      // динамических тел (`${assetsBase}img/<file>`), см. assets/img/
+      assetsBase: ['Map'],
       // компоненты использующие звук
       soundManager: ['ExplosionEffect', 'ShotEffect', 'Bomb', 'Tank'],
     },

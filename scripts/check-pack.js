@@ -6,10 +6,16 @@ import { execFileSync } from 'node:child_process';
 // и внутри каталогов из `files`) — vimp-sim у пользователя падал сырым
 // ERR_MODULE_NOT_FOUND. Регрессия обязана валить publish, а не прогон игрока.
 
+// Тайлы карт — та же история: assets/img/ копируется в dist/img/ скриптом
+// copy-game-images.js, а dist/ целиком в .gitignore. Без картинок карта у
+// игрока отрисуется пустым полотном без единой ошибки в консоли движка.
 const REQUIRED = [
   /^dist\/manifest\.json$/,
   /^dist\/core-node\/vimp_tanks_core\.js$/,
   /^dist\/core-node\/vimp_tanks_core_bg\.wasm$/,
+  /^dist\/img\/tiles\.png$/,
+  /^dist\/img\/tiles3\.png$/,
+  /^dist\/img\/b1\.png$/,
 ];
 
 // --ignore-scripts обязателен: сам скрипт висит на prepack, а npm pack
@@ -29,4 +35,6 @@ if (missing.length) {
   );
 }
 
-console.log(`pack check: ${files.length} files, node core included`);
+console.log(
+  `pack check: ${files.length} files, node core and map images included`,
+);

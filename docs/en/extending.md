@@ -25,6 +25,30 @@ files serve as templates), and every change ends with a green `npx eslint
    becomes its name in votes and room settings. The engine master's map
    catalog reads the same data (a master restart refreshes what it
    serves).
+3. Put every image the map names — `spriteSheet.img` and each
+   `physicsDynamic[].img` — into `assets/img/`. See
+   [New map image](#new-map-image); `npm run build:manifest` fails if a
+   name has no file.
+
+## New map image
+
+Images are part of this package, not of the engine: `Map`
+(`src/client/parts/Map.js`) builds their URLs from the engine's
+`assetsBase` service as `${assetsBase}img/<file>`, exactly the way sounds
+resolve to `${assetsBase}sounds/`.
+
+1. Drop the `.png`/`.jpg` into `assets/img/` (tracked in git — unlike
+   sounds, images need no processing step).
+2. Name it from a map (`spriteSheet.img` or `physicsDynamic[].img`).
+3. `scripts/copy-game-images.js` copies `assets/img/` to `build/img/`
+   (the dev root of `npm run dev`, staged by `predev`) and to `dist/img/`
+   (the packaged asset). It runs inside `npm run build:assets`.
+4. `npm run build:manifest` verifies that every image the maps name exists
+   in `dist/img/` and stops the build otherwise — at runtime a missing
+   file is silent: the map renders as an empty canvas.
+5. If the image is required by a map, add it to the `REQUIRED` list in
+   `scripts/check-pack.js` so a broken publish fails instead of the
+   player's match.
 
 ## New weapon
 

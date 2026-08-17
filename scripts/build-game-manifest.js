@@ -64,9 +64,41 @@ const mapNames = fs
   .sort();
 
 const mapsHash = createHash('sha256');
+// имена картинок, которые карты просят у клиента: spriteSheet.img (тайл-лист
+// статического слоя) и img каждого динамического тела
+const requiredImages = new Set();
 
 for (const name of mapNames) {
-  mapsHash.update(name).update(fs.readFileSync(path.join(mapsPath, `${name}.json`)));
+  const raw = fs.readFileSync(path.join(mapsPath, `${name}.json`));
+
+  mapsHash.update(name).update(raw);
+
+  const map = JSON.parse(raw);
+
+  if (map.spriteSheet?.img) {
+    requiredImages.add(map.spriteSheet.img);
+  }
+
+  for (const body of map.physicsDynamic || []) {
+    if (body.img) {
+      requiredImages.add(body.img);
+    }
+  }
+}
+
+// Картинки живут в пакете игры (assets/img/ -> dist/img/ скриптом
+// copy-game-images.js) и приезжают клиенту как `${assetsBase}img/<file>`.
+// Промах имени движок не диагностирует никак: part просто не дождётся
+// текстуры, и карта отрисуется пустым полотном без ошибки. Ловим на сборке.
+const missingImages = [...requiredImages]
+  .sort()
+  .filter(file => !fs.existsSync(path.join(distPath, 'img', file)));
+
+if (missingImages.length) {
+  throw new Error(
+    `maps reference image(s) missing from dist/img/: ${missingImages.join(', ')} — ` +
+      'add them to assets/img/ and run `npm run build:assets`',
+  );
 }
 
 // значения по каждому ключу roomForm; единственный источник имён — сам
@@ -151,6 +183,7 @@ fs.writeFileSync(
 console.log(`manifest written: ${path.join(distPath, 'manifest.json')}`);
 console.log(`  version: ${version}`);
 console.log(`  maps: ${mapNames.join(', ')}`);
+console.log(`  images: ${[...requiredImages].sort().join(', ')}`);
 
 if (hasNodeCore) {
   console.log(`  wasmNode: ${NODE_CORE_ENTRY}`);

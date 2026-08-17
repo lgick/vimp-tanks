@@ -131,8 +131,11 @@
   генерации).
 
 - **`componentDependencies`** — какие сервисы инжектируются в компоненты
-  (`renderer` → Map; `soundManager` → ExplosionEffect, ShotEffect, Bomb,
-  Tank).
+  (`renderer` → Map; `assetsBase` → Map; `soundManager` → ExplosionEffect,
+  ShotEffect, Bomb, Tank). `assetsBase` — движковая база ассетов этого
+  пакета: `Map` превращает её в `${assetsBase}img/<файл>` для тайл-листов
+  и спрайтов динамических тел, которые он грузит (см.
+  [extending.md](extending.md#новая-картинка-карты)).
 
 ### `modules.controls.keySetList`
 

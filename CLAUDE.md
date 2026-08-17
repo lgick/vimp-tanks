@@ -25,7 +25,8 @@ in the same change. Area → page:
 | game rules (rounds, stats, votes, chat commands, controls, weapons, bots) | `gameplay.md` |
 | `core/` (Rust: tanks.rs, tank.rs, motion.rs, bomb.rs, bots/, client/, WASM ABI) | `core.md` |
 | `src/host/*`, `src/client/*` plugin wiring | `architecture.md` |
-| new maps/weapons/sounds/client entities | `extending.md` |
+| new maps/weapons/sounds/images/client entities | `extending.md` |
+| `assets/*` and the scripts that stage it into `build/`/`dist/` | `extending.md`, `getting-started.md` |
 | build/link/test setup, debug scenarios (`tests/scenarios/`) | `getting-started.md` |
 
 Engine-side concepts (transport, master, Worker infra, generic core traits,

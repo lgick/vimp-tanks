@@ -54,7 +54,8 @@ npm run build            # полная сборка плагина: JS-банд
 ```
 
 `npm run build` производит `dist/manifest.json` (`GameManifest`),
-JS-бандлы клиента/хоста, экспортированный JSON карт и обработанные
+JS-бандлы клиента/хоста, экспортированный JSON карт, картинки карт
+(`assets/img/` → `dist/img/`) и обработанные
 звуковые ассеты (`npm run audio:process`, нужен ffmpeg) — всё, что мастер
 движка отдаёт под `/games/tanks/*` и что динамически импортируют Worker
 хоста/клиент. Если собран `core/pkg-node/`, `build:manifest` дополнительно
@@ -79,9 +80,16 @@ npm run dev             # dev-сервер Vite, открывает вкладк
 Вкладка входит гостем (`Tanker`, ник переопределяется в
 `localStorage.vimp_dev_nick`), голосует за `team1` и просит четырёх ботов —
 все опции лежат в `index.html` и `src/standalone.js`
-(`startStandaloneGame`, карта, `assetsBase`). Звуки берутся из `/build/`,
-поэтому без `npm run audio:process` они просто молчат; матч работает в
-любом случае. WebRTC в этом режиме не используется вовсе.
+(`startStandaloneGame`, карта, `assetsBase`).
+
+`assetsBase` здесь — `/build/`, и под ним лежат оба вида ассетов:
+
+- **картинки карт** — `build/img/`, их стейджит `predev` из `assets/img/`,
+  поэтому они на месте всегда и карта рисуется с первого запуска;
+- **звуки** — `build/sounds/`, продукт `npm run audio:process`. Без ffmpeg
+  они просто молчат; матч работает в любом случае.
+
+WebRTC в этом режиме не используется вовсе.
 
 `npm run build` здесь **не** нужен: Vite отдаёт `src/**` и
 `core/pkg-web/*.wasm` напрямую. Сборка плагина и `dist/` нужны только для

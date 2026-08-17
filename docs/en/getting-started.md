@@ -53,7 +53,8 @@ npm run build            # full plugin build: client+host JS bundles, assets, ma
 ```
 
 `npm run build` produces `dist/manifest.json` (a `GameManifest`), the
-client/host JS bundles, exported map JSON, and processed sound assets
+client/host JS bundles, exported map JSON, the map images (`assets/img/` →
+`dist/img/`) and processed sound assets
 (`npm run audio:process`, needs ffmpeg) — everything the engine's master
 serves under `/games/tanks/*` and everything the host Worker/client
 dynamically import. If `core/pkg-node/` is built, `build:manifest` also
@@ -78,9 +79,16 @@ npm run dev             # Vite dev server, opens the tab
 The tab enters as a guest (`Tanker`, nickname override in
 `localStorage.vimp_dev_nick`), votes itself into `team1` and asks for four
 bots — `index.html` and `src/standalone.js` hold every option
-(`startStandaloneGame`, map, `assetsBase`). Sounds come from `/build/`, so
-without `npm run audio:process` they simply stay silent; the match works
-either way. WebRTC isn't used at all in this mode.
+(`startStandaloneGame`, map, `assetsBase`).
+
+`assetsBase` is `/build/` here, and both kinds of asset live under it:
+
+- **map images** — `build/img/`, staged from `assets/img/` by `predev`, so
+  they are always there and the map is drawn on the first run;
+- **sounds** — `build/sounds/`, the product of `npm run audio:process`.
+  Without ffmpeg they simply stay silent; the match works either way.
+
+WebRTC isn't used at all in this mode.
 
 `npm run build` is *not* needed here: Vite serves `src/**` and
 `core/pkg-web/*.wasm` directly. The plugin build and `dist/` are only for
