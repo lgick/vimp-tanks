@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { copyAssetDir } from './lib/copyAssetDir.js';
 
 // Раскладывает картинки игры (тайл-листы карт и спрайты динамических тел)
 // из assets/img/ по двум потребителям:
@@ -22,14 +22,4 @@ const targetDirs = [
   fileURLToPath(new URL('../dist/img/', import.meta.url)),
 ];
 
-if (!fs.existsSync(sourceDir)) {
-  console.error(`Error: '${sourceDir}' not found.`);
-  process.exit(1);
-}
-
-for (const targetDir of targetDirs) {
-  fs.rmSync(targetDir, { recursive: true, force: true });
-  fs.cpSync(sourceDir, targetDir, { recursive: true });
-
-  console.log(`copied images: ${sourceDir} -> ${targetDir}`);
-}
+copyAssetDir(sourceDir, targetDirs, { label: 'images' });

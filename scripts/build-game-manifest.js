@@ -6,6 +6,10 @@ import { ENGINE_API_VERSION } from 'vimp-engine/config/opcodes.js';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
 import gameConfig from '../src/config/game.js';
 import { rangeToPattern } from './lib/rangeToPattern.js';
+import {
+  collectRequiredImages,
+  collectMissingImages,
+} from './lib/collectMissingImages.js';
 
 // Генерация GameManifest (docs/{en,ru}/plugin-api.md) после сборки
 // client/host-бандлов игры (vite.config.js, уже хеширует имена
@@ -64,35 +68,21 @@ const mapNames = fs
   .sort();
 
 const mapsHash = createHash('sha256');
-// имена картинок, которые карты просят у клиента: spriteSheet.img (тайл-лист
-// статического слоя) и img каждого динамического тела
-const requiredImages = new Set();
+const maps = [];
 
 for (const name of mapNames) {
   const raw = fs.readFileSync(path.join(mapsPath, `${name}.json`));
 
   mapsHash.update(name).update(raw);
-
-  const map = JSON.parse(raw);
-
-  if (map.spriteSheet?.img) {
-    requiredImages.add(map.spriteSheet.img);
-  }
-
-  for (const body of map.physicsDynamic || []) {
-    if (body.img) {
-      requiredImages.add(body.img);
-    }
-  }
+  maps.push(JSON.parse(raw));
 }
 
-// Картинки живут в пакете игры (assets/img/ -> dist/img/ скриптом
-// copy-game-images.js) и приезжают клиенту как `${assetsBase}img/<file>`.
-// Промах имени движок не диагностирует никак: part просто не дождётся
-// текстуры, и карта отрисуется пустым полотном без ошибки. Ловим на сборке.
-const missingImages = [...requiredImages]
-  .sort()
-  .filter(file => !fs.existsSync(path.join(distPath, 'img', file)));
+// гейт картинок: сама логика в scripts/lib/collectMissingImages.js (чистая,
+// под тестом), здесь только проверка на диске
+const requiredImages = collectRequiredImages(maps);
+const missingImages = collectMissingImages(requiredImages, file =>
+  fs.existsSync(path.join(distPath, 'img', file)),
+);
 
 if (missingImages.length) {
   throw new Error(
@@ -183,7 +173,7 @@ fs.writeFileSync(
 console.log(`manifest written: ${path.join(distPath, 'manifest.json')}`);
 console.log(`  version: ${version}`);
 console.log(`  maps: ${mapNames.join(', ')}`);
-console.log(`  images: ${[...requiredImages].sort().join(', ')}`);
+console.log(`  images: ${requiredImages.join(', ')}`);
 
 if (hasNodeCore) {
   console.log(`  wasmNode: ${NODE_CORE_ENTRY}`);

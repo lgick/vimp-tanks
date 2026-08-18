@@ -18,7 +18,7 @@ export default [
 
   // конфиги корня (vite.config.js, eslint.config.js, скрипты сборки)
   {
-    files: ['*.js', '*.cjs', '*.mjs', 'scripts/*.js'],
+    files: ['*.js', '*.cjs', '*.mjs', 'scripts/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',

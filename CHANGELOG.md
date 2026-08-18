@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `src/client/parts/Map.js` builds texture URLs from the engine's
   `assetsBase` service (`${assetsBase}img/<file>`) instead of the hardcoded
-  absolute `/img/<file>`, and throws with a readable message when the service
+  absolute `/img/<file>`, and logs a readable `console.error` (leaving the
+  map empty, the way an asset load failure already behaves) when the service
   is missing. The service is declared in `src/config/client.js`
   (`componentDependencies.assetsBase`). **Requires `vimp-engine` ≥ 0.9.0** —
   earlier engines do not supply the base.

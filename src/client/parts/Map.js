@@ -10,25 +10,36 @@ export default class Map extends Container {
     this._assetUrl = null; // URL для возможной выгрузки
 
     this._renderer = dependencies.renderer;
+    this._imageBase = null;
+
+    this.scale = data.scale;
+
+    this.sprite = null;
+    this.mapSprite = null; // спрайт для "запеченной" карты
 
     // База ассетов активной игры — движок отдаёт её сервисом assetsBase
     // (объявлен в componentDependencies, src/config/client.js). Картинки
     // карт везёт сам пакет игры: assets/img/ -> dist/img/, а движок ни одного
     // игрового файла не раздаёт. Без базы вышел бы запрос на
     // "undefinedimg/tiles.png" — полотно осталось бы пустым без единой
-    // ошибки, поэтому промах ловим здесь и вслух
+    // ошибки, поэтому промах ловим здесь и вслух.
+    //
+    // Логируем, а не бросаем: конструктор вызывается из рендер-тика
+    // (renderTick -> applyGameData -> GameCtrl.parse -> фабрика), где на всём
+    // пути нет ни одного try/catch — исключение оборвало бы создание всех
+    // остальных сущностей этого кадра. Тот же паттерн «громко в лог, ничего
+    // наружу», что у createStatic/createDynamic ниже
     if (typeof dependencies.assetsBase !== 'string') {
-      throw new Error(
-        'Map: сервис assetsBase недоступен. Объявите его в ' +
-          'componentDependencies и запустите игру на vimp-engine >= 0.9.0',
+      console.error(
+        'Map: сервис assetsBase недоступен — карта останется пустой. ' +
+          'Объявите assetsBase в componentDependencies и запустите игру ' +
+          'на vimp-engine >= 0.9.0',
       );
+
+      return;
     }
 
     this._imageBase = `${dependencies.assetsBase}img/`;
-    this.scale = data.scale;
-
-    this.sprite = null;
-    this.mapSprite = null; // спрайт для "запеченной" карты
 
     // если статические данные
     if (data.type === 'static') {

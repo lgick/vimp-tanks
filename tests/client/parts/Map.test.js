@@ -69,8 +69,17 @@ describe('Map: база URL картинок', () => {
     expect(load).toHaveBeenCalledWith('/build/img/tiles.png');
   });
 
-  it('без сервиса assetsBase падает с внятным текстом, а не грузит "undefined"', () => {
-    expect(() => makeMap(staticData, undefined)).toThrow(/assetsBase/);
+  // конструктор зовётся из рендер-тика движка, где перехватчика нет:
+  // исключение оборвало бы создание остальных сущностей кадра, поэтому
+  // промах базы только логируется, а карта остаётся пустой
+  it('без сервиса assetsBase логирует ошибку, а не грузит "undefined"', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const map = makeMap(staticData, undefined);
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('assetsBase'));
     expect(load).not.toHaveBeenCalled();
+    expect(map._assetUrl).toBe(null);
+    expect(map.mapSprite).toBe(null);
   });
 });
