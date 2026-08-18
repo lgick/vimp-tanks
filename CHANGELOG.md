@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `ImpactEffect` shard fade-out comment said 70% of lifetime while the
+  actual `fadeOutStart` value is `0.8` (80%); corrected the comment to
+  match (`src/client/parts/effects/shot/ImpactEffect.js`).
+
 ### Added
 
 - Local standalone launch: `npm run dev` opens a browser tab with a playable
