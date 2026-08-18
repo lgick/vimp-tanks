@@ -46,7 +46,9 @@ function findOne(dir, pattern) {
 // применяет ignore-правила и к каталогам, добавленным через files, — в
 // опубликованном 0.4.0 манифест объявлял wasmNode, которого в тарболе не
 // было, и vimp-sim падал сырым ERR_MODULE_NOT_FOUND.
-const NODE_CORE_SRC = fileURLToPath(new URL('../core/pkg-node/', import.meta.url));
+const NODE_CORE_SRC = fileURLToPath(
+  new URL('../core/pkg-node/', import.meta.url),
+);
 const NODE_CORE_DIR = 'core-node';
 const NODE_CORE_ENTRY = `./${NODE_CORE_DIR}/vimp_tanks_core.js`;
 
@@ -116,7 +118,9 @@ const fieldRegExp = {
 };
 
 const roomForm = gameConfig.roomForm.map(field =>
-  field.name in fieldRegExp ? { ...field, regExp: fieldRegExp[field.name] } : field,
+  field.name in fieldRegExp
+    ? { ...field, regExp: fieldRegExp[field.name] }
+    : field,
 );
 
 const hasNodeCore = fs.existsSync(NODE_CORE_SRC);
@@ -141,7 +145,7 @@ const manifest = {
   id: 'tanks',
   engineApi: ENGINE_API_VERSION,
   version,
-  title: 'VIMP Tanks',
+  title: 'Tanks',
   entries: {
     client: `/games/tanks/${clientFile}`,
     host: `/games/tanks/${hostFile}`,
