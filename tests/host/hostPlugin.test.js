@@ -27,7 +27,14 @@ describe('HostPlugin танков: поверхность', () => {
       expect(typeof command.handler).toBe('function');
     }
 
-    expect(hostPlugin.chatCommands.map(c => c.name)).toContain('/bot');
+    const names = hostPlugin.chatCommands.map(c => c.name);
+
+    // движок своих команд не разбирает — весь набор объявляет игра
+    expect(names).toContain('/bot');
+    expect(names).toEqual(
+      expect.arrayContaining(['/name', '/nr', '/timeleft', '/mapname', '/rank']),
+    );
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('systemMessages — игровая группа кодов b:*', () => {

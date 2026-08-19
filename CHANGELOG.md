@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The chat commands the engine used to own — `/name`, `/nr`, `/timeleft`,
+  `/mapname`, `/rank` — are declared by the game now and registered next to
+  `/bot`, because the engine's `CommandProcessor` no longer parses any command
+  of its own (`src/host/metaCommands.js`, `src/host/index.js`). Behaviour is
+  unchanged for the player: all five keep working exactly as before.
+
 ### Fixed
 
 - `ImpactEffect` shard fade-out comment said 70% of lifetime while the

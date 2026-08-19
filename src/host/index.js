@@ -4,6 +4,13 @@ import gameConfig from '../config/game.js';
 import clientConfig from '../config/client.js';
 import authSchema from '../config/auth.js';
 import botCommand from './botCommand.js';
+import {
+  mapNameCommand,
+  nameCommand,
+  newRoundCommand,
+  rankCommand,
+  timeLeftCommand,
+} from './metaCommands.js';
 import systemMessages from './systemMessages.js';
 import createModules from './createModules.js';
 import { isNodeCore, loadNodeCore } from '../nodeCore.js';
@@ -36,7 +43,17 @@ export default {
 
   gameConfig,
   authSchema,
-  chatCommands: [botCommand],
+  // движок своих команд не разбирает: весь набор объявляет игра
+  // (src/host/metaCommands.js — бывшие движковые /name, /nr, /timeleft,
+  // /mapname, /rank)
+  chatCommands: [
+    botCommand,
+    nameCommand,
+    newRoundCommand,
+    timeLeftCommand,
+    mapNameCommand,
+    rankCommand,
+  ],
   systemMessages,
   createModules,
   buildClientGameConfig: () => clientConfig,

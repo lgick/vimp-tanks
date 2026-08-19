@@ -54,16 +54,16 @@ and creates dynamic votes (e.g. `/bot`) via
 
 ## Chat (`c` key) and commands
 
-Plain text is a message to the team/everyone (length capped by the host, 60 characters). Messages starting with `/` are commands (the engine's `CommandProcessor`, with this game's `/bot` registered via `HostPlugin.chatCommands`):
+Plain text is a message to the team/everyone (length capped by the host, 60 characters). Messages starting with `/` are commands. The engine parses none of its own: the `CommandProcessor` registry is filled entirely by the game through `HostPlugin.chatCommands` (`src/host/metaCommands.js` for the portable ones, `src/host/botCommand.js` for `/bot`), so the same `/timeleft` may be missing in another game:
 
 | Command | Owner | Action |
 | --- | --- | --- |
-| `/name <nick>` | engine | Change name (with validation and a system message) |
-| `/timeleft` | engine | Time remaining on the map |
-| `/mapname` | engine | Current map's name |
-| `/rank` | engine | Your current rank (loaded from the auth service) |
+| `/name <nick>` | this game | Change name (with validation and a system message) |
+| `/timeleft` | this game | Time remaining on the map |
+| `/mapname` | this game | Current map's name |
+| `/rank` | this game | Your current rank (loaded from the auth service) |
 | `/bot <N> [team]` | this game | Spawn N bots (into a team, or spread evenly); `/bot 0 [team]` — remove bots |
-| `/nr` | engine | New round — **dev mode only** |
+| `/nr` | this game | New round — **dev mode only** |
 | `/like <reason>` · `/unlike <reason>` | engine | Vote for/against the room's hoster (server rating) — **does not reach the host**, see below |
 
 `/bot` is only available to active players. If more than one human is
