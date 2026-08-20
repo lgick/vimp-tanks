@@ -17,9 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Tanks no longer sink into geometry on impact. The tank body is built with
+  `soft_ccd_prediction(width.min(height))` (`core/src/tank.rs`): Rapier's
+  default contact prediction distance of 0.002 units is calibrated for a
+  metre-scale world, while a tank covers up to 2.2 units per `1/120` step,
+  so the contact was born only once the hull already overlapped the obstacle
+  (peak penetration 1.26 units in the frame of impact against 0.03 with
+  prediction). Dynamic map objects get the same on the engine side.
+- `brakingFactor` in `src/data/models.js` is `0.3` instead of `10`. The old
+  value compensated for the contact error above; with predictive contacts it
+  made the tank stop far too abruptly.
 - `ImpactEffect` shard fade-out comment said 70% of lifetime while the
   actual `fadeOutStart` value is `0.8` (80%); corrected the comment to
   match (`src/client/parts/effects/shot/ImpactEffect.js`).
+- Blurred-circle sprites no longer show a rectangular edge. The baker sets
+  `filter.padding = blurMargin(blur)` and reserves the same allowance on the
+  canvas (`src/client/bakers/blurMargin.js`): without the padding Pixi renders
+  the blur only within `2 * strength` around the shape and clips it before the
+  frame, whatever the canvas size.
+- Particle scale no longer depends on the blur allowance. The baker returns
+  `{ texture, contentSize }`, where `contentSize` is the diameter of the drawn
+  circle, and `ExplosionEffect`, `Smoke` and `ImpactEffect` derive their scale
+  from it instead of the canvas size — changing `blur` in the config used to
+  silently resize every sprite.
 
 ### Added
 
@@ -39,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   tarball. Both failures are silent at runtime: the map simply renders empty.
 
 ### Changed
+
+- `explosionTexture`, `smokeTexture` and `impactParticleTexture` are baked by
+  a single `blurredCircleTexture` baker (`src/client/bakers/`): the three
+  separate files drew the same shape and differed only in parameters, which
+  now live in `src/config/client.js` (`radius`, `blur`, `quality`, `color`).
+  Bakers of these three assets return `{ texture, contentSize }` instead of a
+  bare texture.
 
 - `src/client/parts/Map.js` builds texture URLs from the engine's
   `assetsBase` service (`${assetsBase}img/<file>`) instead of the hardcoded

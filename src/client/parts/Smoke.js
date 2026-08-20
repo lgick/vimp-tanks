@@ -10,6 +10,11 @@ const BOUNDS_PADDING = 400;
 const globalWindX = 0;
 const globalWindY = 0;
 
+// базовый видимый размер частицы дыма в юнитах мира:
+// нормировка по нарисованному кругу текстуры делает вид частиц независимым
+// от запаса под размытие в запечённом ассете
+const SMOKE_PARTICLE_BASE_SIZE = 8;
+
 const SMOKE_CONFIG = {
   // размеры и жизнь частиц
   particleLifetime: { min: 800, max: 1800 },
@@ -58,7 +63,10 @@ export default class Smoke extends Container {
 
     this.zIndex = 4;
 
-    this._smokeTexture = assets.smokeTexture;
+    const { texture, contentSize } = assets.smokeTexture;
+
+    this._smokeTexture = texture;
+    this._textureScale = SMOKE_PARTICLE_BASE_SIZE / contentSize;
 
     this._emitterX = data[0];
     this._emitterY = data[1];
@@ -235,7 +243,8 @@ export default class Smoke extends Container {
         lifeProgress,
       );
 
-      const currentScale = currentSizeFactor * this._particleScaleMultiplier;
+      const currentScale =
+        currentSizeFactor * this._particleScaleMultiplier * this._textureScale;
 
       const view = particle.view;
       view.x = particle.x;
@@ -338,7 +347,8 @@ export default class Smoke extends Container {
     view.x = spawnX;
     view.y = spawnY;
     view.alpha = startAlpha;
-    const startScale = startSizeFactor * this._particleScaleMultiplier;
+    const startScale =
+      startSizeFactor * this._particleScaleMultiplier * this._textureScale;
     view.scaleX = startScale;
     view.scaleY = startScale;
     view.rotation = randomRange(0, Math.PI * 2);

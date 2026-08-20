@@ -72,7 +72,25 @@ Steps:
    Block packing (`SnapshotPacker`) lives in the engine crate
    (`vimp_engine_core::snapshot`) — this game only supplies rows per its
    `SnapshotConfig` schema.
-3. Create the client-side rendering in `src/client/parts/`.
+3. Create the client-side rendering in `src/client/parts/`. The blast
+   radius from the event data scales the effect: `ExplosionEffectController`
+   hands it to the flash, the crater and the smoke (the reference is
+   `REFERENCE_BLAST_RADIUS = 50` in
+   `parts/effects/explosion/SmokeEffect.js`). Only the sizes and the
+   particle spread area scale with the radius — the crater diameter is a
+   fraction of it (`FUNNEL_TO_BLAST_RATIO` in `FunnelEffect.js`).
+   Lifetimes and alpha stay as they are — they define the character of the
+   effect, not its size.
+
+   The controller raises the flash and the crater with smoke together, in
+   `run()`: the crater appears at the same instant as the flash and
+   underneath it, fading in over `FUNNEL_FADE_IN_DURATION_MS`. Both go onto
+   the scene in a single `addChild`, so the layer order is recomputed by one
+   `sortChildren`. The controller's own destruction hangs on the crater
+   completing, so `run()` on an already-cleared scene destroys the
+   controller itself — otherwise the sound registered in the constructor
+   would never be released. A repeated `run()` is ignored: it would raise a
+   second pair of effects over the first and lose the references to it.
 4. Register the entity in `src/config/client.js`: `parts.gameSets`
    (snapshot key → classes) and `parts.entitiesOnCanvas` (class →
    canvas).
@@ -111,7 +129,20 @@ Steps:
    `parts/index.js` — it lands in the engine's `Factory` registry.
 2. Add it to `gameSets`/`entitiesOnCanvas` (`src/config/client.js`).
 3. If it needs a procedural texture, add a baker in `src/client/bakers/`
-   (follow the existing ones) and an entry in `bakedAssets`.
+   (follow the existing ones) and an entry in `bakedAssets`. When using
+   `BlurFilter`, the canvas size must include a `blurMargin(blur)`
+   allowance around the shape (`bakers/blurMargin.js`) **and** the filter
+   must get `filter.padding = blurMargin(blur)`: without the padding Pixi
+   renders the blur only within `2 * strength` around the shape, without
+   the allowance `generateTexture` clips the blur at the frame — either
+   way the sprite gets a visible rectangular edge. A baker whose canvas is
+   larger than the shape must return the shape size along with the texture
+   (`{ texture, contentSize }`), and consumers must derive scale from
+   `contentSize` — otherwise changing `blur` in the config silently
+   resizes every sprite. Bakers for the same shape are shared:
+   `explosionTexture`/`smokeTexture`/`impactParticleTexture` all map to
+   `blurredCircleTexture` in `bakers/index.js`, differing only by
+   `params`.
 4. If it needs services (`renderer`, `soundManager`), add the class to
    `componentDependencies`.
 

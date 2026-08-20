@@ -251,7 +251,7 @@ mod tests {
                     "currentWeapon": "w1",
                     "size": 2,
                     "accelerationFactor": 1000,
-                    "brakingFactor": 10,
+                    "brakingFactor": 0.3,
                     "maxForwardSpeed": 260,
                     "maxReverseSpeed": -130,
                     "baseTurnTorqueFactor": 215,

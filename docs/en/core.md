@@ -273,6 +273,25 @@ without the `divergence` section in the client config the engine never calls
 them. Scenarios that watch drift: `tests/scenarios/` (see
 [getting-started.md](getting-started.md#debug-scenarios-headless-match)).
 
+## Tank body
+
+`Tank::spawn` (`core/src/tank.rs`) builds a dynamic body sized `size×4 :
+size×3` with damping from `models.js` and a cuboid collider that emits
+collision events (the projectile hits are collected by `TanksSim`).
+
+The body is created with `soft_ccd_prediction(width.min(height))` —
+predictive contacts up to the hull's own thickness. Rapier's default
+prediction distance, 0.002 units, is calibrated for a metre-scale world,
+while a tank covers up to 2.2 units per `1/120` step: without prediction
+the contact was born only once the hull already overlapped the obstacle
+(the measured peak was 1.26 units in the frame of impact against 0.03 with
+prediction), which looked like driving into a wall and being pushed back
+out. Dynamic map objects get the same treatment on the engine side.
+
+Because the contact is now honest, `brakingFactor` no longer has to
+compensate for it — hence the low value in
+[configuration.md](configuration.md#modelsjs).
+
 ## Determinism
 
 - `rapier2d` is built with `enhanced-determinism` (bit-for-bit across
@@ -289,7 +308,7 @@ them. Scenarios that watch drift: `tests/scenarios/` (see
 | --- | --- | --- |
 | Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze), shots (gates/dedup/RTT) |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
 
 `tests/core/` tests are part of `npm test` and **are skipped** if

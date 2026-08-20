@@ -39,6 +39,7 @@ export default {
           params: {
             radius: 50, // радиус круга
             blur: 2, // сила размытия
+            quality: 40, // проходов размытия
             color: 0xffffff, // цвет (белый для удобного tinting)
           },
         },
@@ -48,6 +49,7 @@ export default {
           params: {
             radius: 4,
             blur: 1,
+            quality: 10,
             color: 0xffffff,
           },
         },
@@ -55,10 +57,16 @@ export default {
           name: 'funnelTexture',
           component: 'ExplosionEffect',
           params: {
-            baseRadius: 25,
-            irregularity: 5,
-            blur: 40,
-            numPoints: 12,
+            baseRadius: 25, // базовый радиус пятна
+            irregularity: 4, // неровность краёв
+            // размытие: сильнее ~1/4 радиуса пятно размазывается
+            // на весь холст, а бортик перестаёт читаться
+            blur: 3,
+            numPoints: 20, // точек по контуру (мало - силуэт выходит угловатым)
+            colorFill: 0x1c1c1c, // тёмная выемка (видна на светлых картах)
+            colorRim: 0xb0b0b0, // светлый бортик выброса (виден на тёмных)
+            rimWidth: 4, // толщина бортика
+            variants: 5, // сколько силуэтов запечь (воронка берёт случайный)
           },
         },
         {
@@ -67,6 +75,7 @@ export default {
           params: {
             radius: 3, // базовый радиус частицы дыма
             blur: 1, // размытие для мягкости
+            quality: 40, // проходов размытия
             color: 0xffffff, // цвет для последующего tint'а
           },
         },

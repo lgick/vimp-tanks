@@ -700,8 +700,14 @@ impl TanksSim {
     fn process_hitscan(&mut self, ctx: &mut SimCtx, shooter_id: u32, weapon_index: usize, shot: &ShotCommand) -> TracerRow {
         let weapon = self.weapons[weapon_index].clone();
         let range = weapon.range.unwrap_or(1000.0);
+        // величина импульса — не зависит от дальности оружия (см. weapons.js);
+        // раньше умножалась на вектор луча длиной range, из-за чего дальнобойное
+        // оружие расшвыривало динамику карты кратно сильнее ближнего без единой
+        // настраиваемой причины
         let impulse_magnitude = weapon.impulse_magnitude;
 
+        // вектор луча длиной range; shot.direction остаётся нормализованным —
+        // нужен отдельно (не растянутым) для построения импульса ниже
         let ray_vector = shot.direction * range;
         let end_point_ray = shot.start_point + ray_vector;
         let ray = Ray::new(shot.start_point, ray_vector);
@@ -735,8 +741,10 @@ impl TanksSim {
                 let mut hit_player: Option<u32> = None;
 
                 if let Some(body) = ctx.world.bodies.get_mut(handle) {
+                    // если тело динамическое, то применение физического импульса
+                    // (от нормализованного направления — величина не зависит от range)
                     if impulse_magnitude > 0.0 && body.is_dynamic() {
-                        body.apply_impulse_at_point(ray_vector * impulse_magnitude, impact, true);
+                        body.apply_impulse_at_point(shot.direction * impulse_magnitude, impact, true);
                     }
 
                     if let Some(BodyTag::Player { game_id, .. }) = BodyTag::decode(body.user_data) {

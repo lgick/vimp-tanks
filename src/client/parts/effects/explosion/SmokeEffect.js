@@ -2,26 +2,46 @@ import { ParticleContainer, Rectangle } from 'pixi.js';
 import ParticlePool from '../../ParticlePool.js';
 import BaseEffect from '../BaseEffect.js';
 
-// размеры области разлёта частиц дыма взрыва вокруг локального центра
-// эффекта (0, 0)
+// радиус взрыва, под который подобраны размеры дыма (бомба w2):
+// та же эталонная бомба стоит за геометрией воронки в FunnelEffect
+// у оружия с другим радиусом геометрия султана масштабируется пропорционально,
+// а времена жизни и прозрачность остаются - они задают характер, не габарит
+export const REFERENCE_BLAST_RADIUS = 50;
+
+// размеры области разлёта частиц дыма эталонного взрыва вокруг локального
+// центра эффекта (0, 0); масштабируются вместе с султаном, иначе
+// ParticleContainer отсечёт частицы крупного взрыва
 const BOUNDS_WIDTH = 400;
 const BOUNDS_HEIGHT = 800;
 
 export default class SmokeEffect extends BaseEffect {
-  constructor(assets) {
+  constructor(assets, radius = REFERENCE_BLAST_RADIUS) {
     super();
 
-    this.explosionTexture = assets.explosionTexture;
+    const blastScale = radius / REFERENCE_BLAST_RADIUS;
+
+    this._blastScale = blastScale;
+
+    const { texture, contentSize } = assets.explosionTexture;
+
+    this.explosionTexture = texture;
+
+    // размеры частиц задаются в юнитах мира,
+    // масштаб нормируется по нарисованному кругу (не по холсту с размытием)
+    this._unitScale = 1 / contentSize;
+
+    const boundsWidth = BOUNDS_WIDTH * blastScale;
+    const boundsHeight = BOUNDS_HEIGHT * blastScale;
 
     this._particleContainer = new ParticleContainer({
       texture: this.explosionTexture,
       // создаётся per-instance, а не как общая константа,
       // чтобы не делить один мутируемый Rectangle между эффектами
       boundsArea: new Rectangle(
-        -BOUNDS_WIDTH / 2,
-        -BOUNDS_HEIGHT / 2,
-        BOUNDS_WIDTH,
-        BOUNDS_HEIGHT,
+        -boundsWidth / 2,
+        -boundsHeight / 2,
+        boundsWidth,
+        boundsHeight,
       ),
       dynamicProperties: {
         position: true,
@@ -40,13 +60,15 @@ export default class SmokeEffect extends BaseEffect {
     this._particleSpawnRateMs = 50;
     this._particleMaxLifeMs = 2000;
 
-    // Размеры
-    this._minStartScale = 0.02;
-    this._maxStartScale = 0.05;
+    // Размеры (в юнитах мира)
+    this._minStartSize = 2.1 * blastScale;
+    this._maxStartSize = 5.2 * blastScale;
+    this._minTargetSize = 8.3 * blastScale;
+    this._maxTargetSize = 16.6 * blastScale;
 
     this._startAlpha = 0.1;
-    this._initialOffsetX = 15;
-    this._initialOffsetY = 15;
+    this._initialOffsetX = 15 * blastScale;
+    this._initialOffsetY = 15 * blastScale;
 
     this._lastSpawnTime = 0;
 
@@ -61,7 +83,7 @@ export default class SmokeEffect extends BaseEffect {
   }
 
   _createParticle() {
-    // получение из пула вместо new Sprite
+    // получение из пула вместо new Particle
     const view = ParticlePool.get(this.explosionTexture);
 
     // вариация цвета
@@ -72,8 +94,9 @@ export default class SmokeEffect extends BaseEffect {
 
     // размер
     const startScale =
-      this._minStartScale +
-      Math.random() * (this._maxStartScale - this._minStartScale);
+      (this._minStartSize +
+        Math.random() * (this._maxStartSize - this._minStartSize)) *
+      this._unitScale;
 
     // искажение пропорций
     const aspectX = 0.6 + Math.random() * 0.8;
@@ -96,16 +119,20 @@ export default class SmokeEffect extends BaseEffect {
       aspectRatioX: aspectX,
       aspectRatioY: aspectY,
 
-      // движение
-      vx: (Math.random() - 0.5) * 0.2,
-      vy: -0.3 - Math.random() * 0.4,
+      // движение (скорости - тоже геометрия: иначе крупный султан
+      // поднимался бы непропорционально медленно)
+      vx: (Math.random() - 0.5) * 0.2 * this._blastScale,
+      vy: (-0.3 - Math.random() * 0.4) * this._blastScale,
 
-      // рыскание (Sway)
+      // рыскание (Sway): амплитуда - смещение, частота - характер
       swaySpeed: 0.002 + Math.random() * 0.003,
-      swayAmp: 0.025 + Math.random() * 0.05,
+      swayAmp: (0.025 + Math.random() * 0.05) * this._blastScale,
       swayOffset: Math.random() * 100,
       rotationSpeed: (Math.random() - 0.5) * 0.05,
-      targetScale: 0.08 + Math.random() * 0.08,
+      targetScale:
+        (this._minTargetSize +
+          Math.random() * (this._maxTargetSize - this._minTargetSize)) *
+        this._unitScale,
       startScale,
     };
 

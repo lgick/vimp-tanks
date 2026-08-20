@@ -106,7 +106,7 @@ Key layout is configured in `src/config/client.js` (`modules.controls`), command
 
 The tank carries two weapons (switch with `n`/`p`, the active one is highlighted on the panel):
 
-- **`w1` — bullet (hitscan)**: an instant ray, 40 damage, 1500 range, 200 ammo. The hit is computed by the host as a ray; the client draws the tracer instantly.
+- **`w1` — bullet (hitscan)**: an instant ray, 40 damage, 1500 range, 200 ammo. The hit is computed by the host as a ray; the client draws the tracer instantly. A hit on a dynamic map body applies an impulse of `7500000` along the normalized shot direction — it does **not** scale with the weapon's range.
 - **`w2` — bomb (explosive)**: a physical projectile, planted and detonating on a timer; 70 damage at the epicenter falling off over a 50 radius, 100 ammo.
 
 Health is 100. The tank's `condition` visually degrades with damage (smoke), and it's destroyed at 0. Stats — [configuration.md](configuration.md#weaponsjs).

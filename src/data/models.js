@@ -11,7 +11,7 @@ export default {
     accelerationFactor: 1000,
     // коэффициент торможения
     // (чем выше, тем резче танк останавливается)
-    brakingFactor: 10,
+    brakingFactor: 0.3,
 
     // целевая максимальная скорость вперед (юнитов/с)
     maxForwardSpeed: 260,

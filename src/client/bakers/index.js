@@ -1,19 +1,18 @@
-import explosionTexture from './explosionTexture.js';
+import blurredCircleTexture from './blurredCircleTexture.js';
 import funnelTexture from './funnelTexture.js';
-import smokeTexture from './smokeTexture.js';
 import tankTexture from './tankTexture.js';
 import tankRadarTexture from './tankRadarTexture.js';
 import bombTexture from './bombTexture.js';
 import trackMarkTexture from './trackMarkTexture.js';
-import impactParticleTexture from './impactParticleTexture.js';
 
 export default {
-  explosionTexture,
+  // три ассета - один и тот же размытый круг, различаются только параметрами
+  explosionTexture: blurredCircleTexture,
+  smokeTexture: blurredCircleTexture,
+  impactParticleTexture: blurredCircleTexture,
   funnelTexture,
-  smokeTexture,
   tankTexture,
   tankRadarTexture,
   bombTexture,
   trackMarkTexture,
-  impactParticleTexture,
 };

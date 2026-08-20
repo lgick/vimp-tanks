@@ -127,7 +127,19 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   (`BakingProvider`, engine-owned mechanism): explosions, particles, smoke,
   the tank, the bomb, track marks, radar blips. Each entry: `name`
   (texture id), `component` (who owns it), `params` (generation
-  parameters).
+  parameters). `explosionTexture`, `smokeTexture` and
+  `impactParticleTexture` are baked by a single `blurredCircleTexture`
+  baker and differ only by `params` (`radius`, `blur`, `quality`,
+  `color`); it returns `{ texture, contentSize }`, where `contentSize` is
+  the diameter of the drawn circle without the blur allowance.
+
+  `funnelTexture` bakes not one texture but a set of crater silhouettes
+  (`variants`), from which `FunnelEffect` picks a random one so the mark
+  never repeats. The fill is two-toned: the dark hollow (`colorFill`)
+  reads on light maps, the light ejecta rim (`colorRim`, `rimWidth`) on
+  dark ones. It returns `{ textures, contentSize }` with the same
+  `contentSize` semantics. A `blur` above ~1/4 of `baseRadius` smears the
+  blob across the whole canvas and the rim stops reading.
 
 - **`componentDependencies`** — which services get injected into which
   components (`renderer` → Map; `assetsBase` → Map; `soundManager` →
@@ -222,6 +234,11 @@ turn torque, damping, lateral grip), physics (`density`, `friction`,
 `restitution`), "driving feel" (throttle/turn thresholds and rates), and
 the turret (`maxGunAngle: 1.4` rad, rotation/centering rates).
 
+`brakingFactor: 0.3` is the braking coefficient: the higher it is, the
+sharper the tank stops. The value is deliberately low — the tank body is
+built with predictive contacts (see [core.md](core.md#tank-body)), so
+braking no longer has to compensate for contact errors.
+
 > ⚠️ The `models.js` coefficients are used both by the core's
 > authoritative path and by the client prediction replica
 > (`core/src/client/predictor.rs`, formulas shared through
@@ -238,7 +255,7 @@ Two architecturally different weapon types:
 | Damage | 40 | 70 at the epicenter, 50 blast radius |
 | Range | 1500 units | — (detonates on a `time: 300` ms timer) |
 | Cooldown | 0.01 s | 0.1 s |
-| Other | `spread: 0`, costs 1 ammo | `size: 8`, explosion impulse `2000000`, effect `w2e` |
+| Other | `spread: 0`, costs 1 ammo, hit impulse `7500000` (independent of `range`) | `size: 8`, explosion impulse `2000000`, effect `w2e` |
 | Camera shake | 20px / 200ms | 30px / 400ms |
 
 ### maps/

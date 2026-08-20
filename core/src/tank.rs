@@ -125,6 +125,12 @@ impl Tank {
                 .rotation(deg_to_rad(angle_deg))
                 .angular_damping(model.damping.angular)
                 .linear_damping(model.damping.linear)
+                // предиктивные контакты на толщину корпуса: дефолтная
+                // дистанция предсказания Rapier — 0.002 юнита, а танк за шаг
+                // 1/120 проходит до 2.2, поэтому контакт рождался уже по
+                // факту перекрытия (замер: пик 1.26 юнита в кадр удара
+                // против 0.03 с предсказанием)
+                .soft_ccd_prediction(width.min(height))
                 .user_data(tag.encode()),
         );
 

@@ -2,10 +2,6 @@ import { Sprite } from 'pixi.js';
 import BaseEffect from '../BaseEffect.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
 
-// диаметр "запеченной" текстуры частицы
-// рассчитывается как (radius + blur) * 2 из client.js (4 + 1) * 2 = 10
-const BAKED_PARTICLE_DIAMETER = 10;
-
 export default class ImpactEffect extends BaseEffect {
   constructor(x, y, impactDirectionX, impactDirectionY, onComplete, assets) {
     super(onComplete);
@@ -14,12 +10,19 @@ export default class ImpactEffect extends BaseEffect {
     this.y = y; // координата Y центра эффекта
 
     this._assets = assets;
-    this._particleTexture = this._assets.impactParticleTexture;
+
+    const { texture, contentSize } = this._assets.impactParticleTexture;
+
+    this._particleTexture = texture;
+
+    // размер осколка задан в юнитах мира и нормируется
+    // по нарисованному кругу текстуры, а не по холсту с запасом под размытие
+    this._textureContentSize = contentSize;
 
     this.config = {
       particleCount: randomRange(2, 4), // количество осколков
-      particleMinSize: 1, // минимальный размер осколка
-      particleMaxSize: 3, // максимальный размер осколка
+      particleMinSize: 0.8, // минимальный размер осколка
+      particleMaxSize: 2.4, // максимальный размер осколка
 
       // начальная скорость разлета
       minInitialSpeed: 10, // пикселей в секунду
@@ -222,7 +225,7 @@ export default class ImpactEffect extends BaseEffect {
       pSprite.alpha = pData.alpha;
       pSprite.visible = pData.active;
 
-      const scale = pData.size / BAKED_PARTICLE_DIAMETER;
+      const scale = pData.size / this._textureContentSize;
 
       pSprite.scale.set(scale);
     }
