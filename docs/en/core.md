@@ -38,7 +38,10 @@ src/
 └── client/                    # the core's client mode: TanksClient (impl GameClientDef)
     ├── mod.rs                 # TanksClient — wires Predictor/ShotPredictor into the
     │                          #   engine's generic ClientState<TanksClient>
-    ├── predictor.rs           # the motion replica built on motion.rs
+    ├── predictor.rs           # the motion replica built on motion.rs + the step's
+    │                          #   contact pass (walls, predicted bodies)
+    ├── predicted_set.rs       # the predicted-world framework: bodies in follow/
+    │                          #   predicted mode, reconciliation, error decay
     └── shot.rs                # gates, dedup, the raycast world
 tests/
 └── sim.rs                     # integration simulation scenarios (cargo test)
@@ -275,6 +278,45 @@ without the `divergence` section in the client config the engine never calls
 them. Scenarios that watch drift: `tests/scenarios/` (see
 [getting-started.md](getting-started.md#debug-scenarios-headless-match)).
 
+**Predicted world (`predicted_set.rs`).** The local tank is drawn "now"
+(the predictor), everything else with the interpolation delay. While bodies
+do not touch, the difference is invisible; **in contact it shows at once**:
+the drawn body lags behind the authoritative one and the tank legitimately
+ends up inside it. The framework closes that gap: a set of bodies, each of
+them either in `Follow` mode (the transform is led by interpolation) or in
+`Predicted` (the body is owned by the same simulation as the local tank, in
+the same time). `PredictedSet` carries the mechanics shared by every
+subsystem — reconciliation (`begin_reconcile`/`finish_reconcile`), the
+integration step, the accumulation and decay of the visual error, the
+return to interpolation (`demote_idle`/`release_predicted`); the
+`PredictedBodies` trait leaves a subsystem only what is genuinely its own:
+`update` (how bodies are read from the interpolated game), `snapshot_bodies`
+(how they are read from a raw frame), `capture` (the capture rule) and
+`render_data` (the render block that overrides interpolation). The split
+is not cosmetic: two subsystems with copies of the mechanics would drift
+apart in behaviour on the first edit.
+
+The set keeps no clock of its own: it is stepped by `Predictor`
+(`integrate_predicted`, `decay_error`), so a contact with the local tank is
+resolved within a single step and the reconciliation replay replays the
+set's bodies too. `Predictor::resolve_world` is that step's contact pass —
+the tank, the captured bodies and the wall tiles are separated once by
+penetration depth and then run through `SOLVER_ITERATIONS` (4) impulse
+passes over the same contact set, using the engine's
+`client::collision`/`client::rigid_body` primitives. Without a map and
+without subsystems the pass is a full no-op, and the motion replica stays
+bit-for-bit what it was — the invariant the parity tests rest on.
+
+The framework is infrastructure: the subsystems that will populate it (map
+dynamics, contacting remote tanks) are not written yet, but the pipe to the
+engine is already in place. `TanksClient` implements the three
+`GameClientDef` hooks for bodies a game predicts itself and forwards them to
+the sets registered in the predictor: `begin_reconcile(snapshot)` before the
+input replay, `finish_reconcile()` right after it, and `render_rows()` —
+the rows the engine appends to the hot buffer after the local tank's
+predicted tail, where each of them overrides the interpolated row of the
+same entity.
+
 ## Tank body
 
 `Tank::spawn` (`core/src/tank.rs`) builds a dynamic body sized `size×4 :
@@ -308,7 +350,7 @@ compensate for it — hence the low value in
 
 | Layer | Where | Covers |
 | --- | --- | --- |
-| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze), shots (gates/dedup/RTT) |
+| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), shots (gates/dedup/RTT) |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios) — **required to run for any edit to motion in the core or `models.js`** |
 | Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |

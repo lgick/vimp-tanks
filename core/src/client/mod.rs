@@ -4,10 +4,12 @@
 //! в кадре. Сетевой буфер, hot-буфер рендер-тика и очередь событийных
 //! кадров — движковые, живут в `vimp_engine_core::client::game::ClientState<TanksClient>`.
 
+pub mod predicted_set;
 pub mod predictor;
 pub mod shot;
 
-use vimp_engine_core::client::game::{GameClientDef, RenderOverlay};
+use serde::Deserialize;
+use vimp_engine_core::client::game::{GameClientDef, PredictedRow, RenderOverlay};
 use vimp_engine_core::client::interpolator::{FrameData, InterpolatedGame};
 use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::{EngineClientConfig, FieldValue, PLAYER_STATE_LEN, SnapshotConfig};
@@ -15,6 +17,41 @@ use vimp_engine_core::config::{EngineClientConfig, FieldValue, PLAYER_STATE_LEN,
 use crate::config::TanksClientConfig;
 use predictor::Predictor;
 use shot::ShotPredictor;
+
+/// Данные карты (MAP_DATA клиента; лишние поля игнорируются). Общие для
+/// обеих клиентских подсистем: предсказание движения (`predictor`) и
+/// предсказание выстрела (`shot`) обязаны видеть карту одинаково.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientMapConfig {
+    pub(crate) step: f32,
+    #[serde(default = "default_scale")]
+    pub(crate) scale: f32,
+    pub(crate) map: Vec<Vec<i32>>,
+    #[serde(default)]
+    pub(crate) physics_static: Vec<i32>,
+    #[serde(default)]
+    pub(crate) physics_dynamic: Vec<ClientDynamicObject>,
+}
+
+pub(crate) fn default_scale() -> f32 {
+    1.0
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientDynamicObject {
+    pub(crate) position: [f32; 2],
+    pub(crate) angle: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+}
+
+pub(crate) struct Grid {
+    pub(crate) map: Vec<Vec<i32>>,
+    pub(crate) solid_tiles: Vec<i32>,
+    pub(crate) tile_size: f32,
+}
 
 // индексы полей строки m1 (x, y, angle, gunRotation, vx, vy, engineLoad,
 // condition, size, teamId) — позиционный контракт со схемой opcodes.js.
@@ -94,6 +131,28 @@ impl GameClientDef for TanksClient {
 
     fn update(&mut self, local_now: f64) {
         self.predictor.update(local_now);
+    }
+
+    // подсистемы предсказанного мира живут в предикторе — у них с ним одни
+    // часы, и replay реконсиляции переигрывает их тела вместе со своим танком
+    fn begin_reconcile(&mut self, snapshot: &DecodedSnapshot) {
+        for set in self.predictor.predicted_sets_mut() {
+            set.begin_reconcile(snapshot);
+        }
+    }
+
+    fn finish_reconcile(&mut self) {
+        for set in self.predictor.predicted_sets_mut() {
+            set.finish_reconcile();
+        }
+    }
+
+    fn render_rows(&self) -> Vec<PredictedRow> {
+        self.predictor
+            .predicted_sets()
+            .iter()
+            .flat_map(|set| set.render_data())
+            .collect()
     }
 
     // отслеживание своего танка в выданном кадре: reset предикта по
@@ -198,9 +257,10 @@ impl GameClientDef for TanksClient {
         self.shot.reset_local();
     }
 
-    /// Данные карты (MAP_DATA): мир raycast + сброс предикта.
+    /// Данные карты (MAP_DATA): стены предикта, мир raycast + сброс предикта.
     fn set_map(&mut self, map_json: &str) -> Result<(), String> {
         self.predictor.reset();
+        self.predictor.set_map(map_json)?;
         self.shot.set_map(map_json)
     }
 
@@ -593,5 +653,76 @@ mod tests {
 
         // повреждённый кадр → 'null'
         assert_eq!(state.decode_frame(&frame[..5]), "null");
+    }
+
+    // — проводка подсистем предсказанного мира —
+
+    // двойник подсистемы: своих тел нет, важна только сама проводка
+    struct StubSet {
+        set: predicted_set::PredictedSet,
+        log: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+    }
+
+    impl predicted_set::PredictedBodies for StubSet {
+        fn set(&self) -> &predicted_set::PredictedSet {
+            &self.set
+        }
+
+        fn set_mut(&mut self) -> &mut predicted_set::PredictedSet {
+            &mut self.set
+        }
+
+        fn update(&mut self, _game: &InterpolatedGame) {}
+
+        fn snapshot_bodies(
+            &self,
+            _snapshot: &DecodedSnapshot,
+        ) -> Vec<(String, predicted_set::ServerState)> {
+            Vec::new()
+        }
+
+        fn capture(&mut self, _tank: &vimp_engine_core::client::raycast::Box2, _now: f64) {}
+
+        fn render_data(&self) -> Vec<PredictedRow> {
+            vec![PredictedRow {
+                key_id: 1,
+                id: 7,
+                fields: vec![42.0],
+            }]
+        }
+
+        fn begin_reconcile(&mut self, _snapshot: &DecodedSnapshot) {
+            self.log.borrow_mut().push("begin");
+        }
+
+        fn finish_reconcile(&mut self) {
+            self.log.borrow_mut().push("finish");
+        }
+    }
+
+    #[test]
+    fn predicted_sets_are_wired_to_the_client_hooks() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+        client.predictor.add_predicted_set(Box::new(StubSet {
+            set: predicted_set::PredictedSet::new(4),
+            log: log.clone(),
+        }));
+
+        let snapshot = DecodedSnapshot { blocks: Vec::new() };
+
+        client.begin_reconcile(&snapshot);
+        client.finish_reconcile();
+
+        assert_eq!(*log.borrow(), vec!["begin", "finish"]);
+
+        // строки подсистем уезжают в рендер-тик движка как есть
+        let rows = client.render_rows();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key_id, 1);
+        assert_eq!(rows[0].id, 7);
+        assert_eq!(rows[0].fields, vec![42.0]);
     }
 }

@@ -12,7 +12,7 @@ export default class ExplosionEffect extends BaseEffect {
     this.y = y;
     this._radius = radius;
 
-    this._durationMs = 3000;
+    this._durationMs = 1500;
     this._elapsedMs = 0;
 
     // масштаб нормируется по нарисованному кругу, а не по холсту:

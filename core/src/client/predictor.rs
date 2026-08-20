@@ -16,8 +16,17 @@ use indexmap::IndexMap;
 
 use crate::config::{KeyConfig, ModelConfig};
 use crate::motion::{self, TurretInput};
+use vimp_engine_core::client::collision::{Contact, collect_tile_contacts, obb_vs_obb};
+use vimp_engine_core::client::raycast::Box2;
+use vimp_engine_core::client::rigid_body::{
+    Body, MAP_SURFACE, Surface, apply_contact_impulse, box_mass_properties, combine_surfaces,
+    separate_bodies,
+};
 use vimp_engine_core::config::PLAYER_STATE_LEN;
 use vimp_engine_core::physics::normalize_angle;
+
+use super::Grid;
+use super::predicted_set::PredictedBodies;
 
 // максимальный возраст записей истории ввода (мс)
 const HISTORY_MAX_AGE: f64 = 2000.0;
@@ -30,6 +39,27 @@ const ERROR_SNAP_DISTANCE: f32 = 100.0;
 
 // защита от «спирали смерти» аккумулятора (мс)
 const MAX_ACCUMULATED_TIME: f64 = 100.0;
+
+// проходов решателя по собранным контактам за один шаг (sequential impulse)
+const SOLVER_ITERATIONS: usize = 4;
+
+// неподвижный партнёр контакта со стеной (обратные массы нулевые, поэтому
+// решатель его не двигает; координаты нужны только как плечо)
+fn static_body(x: f32, y: f32) -> Body {
+    Body {
+        x,
+        y,
+        ..Body::default()
+    }
+}
+
+/// Габариты и масс-инерционные свойства корпуса своего танка.
+struct Shape {
+    half_w: f32,
+    half_h: f32,
+    inv_mass: f32,
+    inv_inertia: f32,
+}
 
 /// Состояние реплики (порядок полей — как player-блок кадра).
 #[derive(Clone, Copy, Default)]
@@ -99,6 +129,17 @@ pub struct Predictor {
     step_ms: f64,
     models: IndexMap<String, ModelConfig>,
     model: Option<ModelConfig>,
+    // габариты и масса корпуса (считает set_model)
+    shape: Option<Shape>,
+
+    // подсистемы предсказанного мира (динамика карты, чужие танки): часы у
+    // них общие с этим предиктором, иначе контакт разрешался бы в разных
+    // шагах. Без подсистем и без set_map проход столкновений — полный no-op,
+    // а реплика движения остаётся бит-в-бит прежней (паритет с хостом)
+    sets: Vec<Box<dyn PredictedBodies>>,
+    grid: Option<Grid>,
+    // часы симуляции, общие с предсказанным миром
+    local_now: f64,
 
     // биты клавиш по именам (one-shot помечены в KeyBit)
     keys: IndexMap<String, KeyBit>,
@@ -162,6 +203,10 @@ impl Predictor {
             step_ms,
             models: models.clone(),
             model: None,
+            shape: None,
+            sets: Vec::new(),
+            grid: None,
+            local_now: 0.0,
             forward_bit: bit("forward"),
             back_bit: bit("back"),
             left_bit: bit("left"),
@@ -191,6 +236,53 @@ impl Predictor {
     /// Модель танка пользователя (известна при авторизации).
     pub fn set_model(&mut self, model_name: &str) {
         self.model = self.models.get(model_name).cloned();
+        // габарит 4:3 от size и масс-инерционные свойства корпуса: модель за
+        // игру не меняется, а шагов симуляции (живых плюс replay) сотни
+        // в секунду
+        self.shape = self.model.as_ref().map(|model| {
+            let width = model.size * 4.0;
+            let height = model.size * 3.0;
+            // размер танка, в отличие от динамики карты, картой не масштабируется
+            let mass = box_mass_properties(width, height, model.fixture.density);
+
+            Shape {
+                half_w: width / 2.0,
+                half_h: height / 2.0,
+                inv_mass: mass.inv_mass,
+                inv_inertia: mass.inv_inertia,
+            }
+        });
+    }
+
+    /// Подсистема предсказанного мира. Её тела шагает этот предиктор
+    /// (`integrate_predicted`, `decay_error`), поэтому контакт со своим
+    /// танком разрешается в одном шаге, а replay реконсиляции переигрывает
+    /// и её тела.
+    pub fn add_predicted_set(&mut self, set: Box<dyn PredictedBodies>) {
+        self.sets.push(set);
+    }
+
+    /// Подсистемы предсказанного мира (реконсиляция, рендер-блоки).
+    pub fn predicted_sets_mut(&mut self) -> &mut [Box<dyn PredictedBodies>] {
+        &mut self.sets
+    }
+
+    pub fn predicted_sets(&self) -> &[Box<dyn PredictedBodies>] {
+        &self.sets
+    }
+
+    /// Стены карты (MAP_DATA) — тайловая сетка для сбора контактов.
+    pub fn set_map(&mut self, map_json: &str) -> Result<(), String> {
+        let cfg: super::ClientMapConfig =
+            serde_json::from_str(map_json).map_err(|e| e.to_string())?;
+
+        self.grid = Some(Grid {
+            map: cfg.map,
+            solid_tiles: cfg.physics_static,
+            tile_size: cfg.step * cfg.scale,
+        });
+
+        Ok(())
     }
 
     /// Предикт включается для играющего (keySet 1) и выключается у спектатора.
@@ -283,6 +375,7 @@ impl Predictor {
         let elapsed = local_now - last;
 
         self.last_update_time = Some(local_now);
+        self.local_now = local_now;
 
         // затухание визуальной ошибки
         let decay = (1.0 - (elapsed / 1000.0) * ERROR_DECAY_RATE).max(0.0) as f32;
@@ -291,8 +384,23 @@ impl Predictor {
             *value *= decay;
         }
 
+        // у всего предсказанного мира одни часы
+        for set in &mut self.sets {
+            set.decay_error(elapsed);
+        }
+
         if !self.has_state() || self.frozen {
             self.accumulator = 0.0;
+
+            // симуляция не шагает (спектатор, уничтоженный танк, ожидание
+            // первого authoritative-кадра) — тела предсказанного мира
+            // отпускаются: без шага некому вернуть их в интерполяцию, а их
+            // render_data продолжает перекрывать её каждый кадр, и ящик или
+            // чужой танк застыл бы на экране навсегда
+            for set in &mut self.sets {
+                set.release_predicted();
+            }
+
             return;
         }
 
@@ -319,6 +427,8 @@ impl Predictor {
         if !self.active || self.model.is_none() {
             return;
         }
+
+        self.local_now = local_now;
 
         let old = self.has_state.then_some(self.state);
 
@@ -480,6 +590,185 @@ impl Predictor {
         self.state.vx *= 1.0 / (1.0 + dt * model.damping.linear);
         self.state.vy *= 1.0 / (1.0 + dt * model.damping.linear);
         self.state.angvel *= 1.0 / (1.0 + dt * model.damping.angular);
+
+        self.resolve_world(dt);
+    }
+
+    /// Столкновения одного шага: свой танк, предсказанные тела подсистем и
+    /// стены разрешаются в ОДНОЙ симуляции — потому нарисованный танк и
+    /// нарисованное тело не выдавливают друг друга.
+    /// Без карты и без подсистем — полный no-op (см. инвариант в структуре).
+    fn resolve_world(&mut self, dt: f32) {
+        // заморожен — танком владеет сервер: уничтоженный корпус ничего не
+        // толкает, а захват тел в предсказание привязал бы их к нему
+        // (см. release_predicted)
+        if self.frozen || (self.grid.is_none() && self.sets.is_empty()) {
+            return;
+        }
+
+        let (Some(model), Some(shape)) = (&self.model, &self.shape) else {
+            return;
+        };
+
+        let local_now = self.local_now;
+        let tank_obb = Box2 {
+            x: self.state.x,
+            y: self.state.y,
+            angle: self.state.angle,
+            half_w: shape.half_w,
+            half_h: shape.half_h,
+        };
+
+        // тела шага: индекс 0 — свой танк, дальше предсказанные тела
+        // подсистем в порядке их регистрации, затем статические партнёры
+        // контактов со стенами. Решатель работает по индексам: две
+        // изменяемые ссылки на элементы одного среза сразу не взять
+        let mut sim = vec![Body {
+            x: self.state.x,
+            y: self.state.y,
+            angle: self.state.angle,
+            vx: self.state.vx,
+            vy: self.state.vy,
+            angvel: self.state.angvel,
+            inv_mass: shape.inv_mass,
+            inv_inertia: shape.inv_inertia,
+            linear_damping: model.damping.linear,
+            angular_damping: model.damping.angular,
+        }];
+        let mut geometry = vec![(tank_obb.half_w, tank_obb.half_h)];
+        let mut surfaces = vec![Surface {
+            friction: model.fixture.friction,
+            restitution: model.fixture.restitution,
+        }];
+
+        // захват и шаг предсказанных подсистем (ящики карты, чужие танки)
+        let mut bodies = Vec::new();
+
+        for set in &mut self.sets {
+            set.capture(&tank_obb, local_now);
+            set.integrate_predicted(dt);
+
+            for body in set.predicted_bodies_mut() {
+                sim.push(body.body);
+                geometry.push((body.half_w, body.half_h));
+                surfaces.push(body.surface);
+                bodies.push(body);
+            }
+        }
+
+        let movable = sim.len();
+        let mut contacts: Vec<(usize, usize, Contact, Surface)> = Vec::new();
+
+        // контакты со стенами (партнёр — статика в точке задетого тайла)
+        if let Some(grid) = &self.grid {
+            for index in 0..movable {
+                let obb = Box2 {
+                    x: sim[index].x,
+                    y: sim[index].y,
+                    angle: sim[index].angle,
+                    half_w: geometry[index].0,
+                    half_h: geometry[index].1,
+                };
+
+                let hits =
+                    collect_tile_contacts(&obb, &grid.map, &grid.solid_tiles, grid.tile_size);
+
+                for hit in hits {
+                    let partner = sim.len();
+
+                    sim.push(static_body(hit.tile_x, hit.tile_y));
+                    geometry.push((0.0, 0.0));
+                    surfaces.push(MAP_SURFACE);
+                    contacts.push((
+                        index,
+                        partner,
+                        hit.contact,
+                        combine_surfaces(&surfaces[index], &MAP_SURFACE),
+                    ));
+                }
+            }
+        }
+
+        // свой танк ↔ каждое предсказанное тело и все пары между собой
+        for a in 0..movable {
+            for b in (a + 1)..movable {
+                let obb_a = Box2 {
+                    x: sim[a].x,
+                    y: sim[a].y,
+                    angle: sim[a].angle,
+                    half_w: geometry[a].0,
+                    half_h: geometry[a].1,
+                };
+                let obb_b = Box2 {
+                    x: sim[b].x,
+                    y: sim[b].y,
+                    angle: sim[b].angle,
+                    half_w: geometry[b].0,
+                    half_h: geometry[b].1,
+                };
+
+                if let Some(contact) = obb_vs_obb(&obb_a, &obb_b) {
+                    contacts.push((a, b, contact, combine_surfaces(&surfaces[a], &surfaces[b])));
+                }
+            }
+        }
+
+        if !contacts.is_empty() {
+            // развод по глубине — ровно один раз на контакт: повтор на каждой
+            // итерации расталкивал бы тела кратно числу итераций
+            for (a, b, contact, _) in &contacts {
+                let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
+
+                separate_bodies(body_a, body_b, contact);
+            }
+
+            // контакты собраны один раз, импульсы проходят по ним несколько
+            // раз — это же заменяет внутренние итерации выталкивания из
+            // тайловой сетки
+            for _ in 0..SOLVER_ITERATIONS {
+                for (a, b, contact, surface) in &contacts {
+                    let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
+
+                    apply_contact_impulse(body_a, body_b, contact, surface);
+                }
+            }
+
+            self.state.x = sim[0].x;
+            self.state.y = sim[0].y;
+            self.state.angle = normalize_angle(sim[0].angle);
+            self.state.vx = sim[0].vx;
+            self.state.vy = sim[0].vy;
+            self.state.angvel = sim[0].angvel;
+
+            for (offset, body) in bodies.iter_mut().enumerate() {
+                body.body = sim[offset + 1];
+            }
+        }
+
+        // тела, реально участвовавшие в контакте, держатся предсказанными
+        // дольше
+        for (a, b, _, _) in &contacts {
+            for index in [*a, *b] {
+                if index > 0 && index < movable {
+                    bodies[index - 1].note_contact(local_now);
+                }
+            }
+        }
+
+        for set in &mut self.sets {
+            set.demote_idle(local_now);
+        }
+    }
+}
+
+// две изменяемые ссылки на разные элементы среза
+fn pair_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut Body) {
+    let (left, right) = bodies.split_at_mut(a.max(b));
+
+    if a < b {
+        (&mut left[a], &mut right[0])
+    } else {
+        (&mut right[0], &mut left[b])
     }
 }
 
@@ -811,6 +1100,247 @@ mod tests {
         // состояние сервера игнорируется у спектатора
         p.on_server_state([1.0; 8], false, 5.0, 0.0, 5.0);
         assert!(!p.has_state());
+    }
+
+    // — столкновения предсказанного мира —
+
+    use super::super::predicted_set::{
+        Mode, PredictedBodies, PredictedBody, PredictedSet, ServerState, Transform,
+    };
+    use vimp_engine_core::client::game::PredictedRow;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use vimp_engine_core::client::interpolator::InterpolatedGame;
+    use vimp_engine_core::client::unpack::DecodedSnapshot;
+
+    // сетка 3×3 клетки по 40 юнитов; сплошная колонна справа (x >= 80)
+    fn wall_grid() -> String {
+        serde_json::json!({
+            "step": 40,
+            "scale": 1,
+            "map": [[0, 0, 1], [0, 0, 1], [0, 0, 1]],
+            "physicsStatic": [1],
+            "physicsDynamic": []
+        })
+        .to_string()
+    }
+
+    // минимальный двойник подсистемы с одним предсказанным ящиком
+    struct BoxSet {
+        set: PredictedSet,
+        captures: Rc<Cell<usize>>,
+        releases: Rc<Cell<usize>>,
+    }
+
+    impl BoxSet {
+        fn new(x: f32) -> Self {
+            let mut body = PredictedBody::new(Transform {
+                x,
+                y: 20.0,
+                angle: 0.0,
+            });
+
+            body.half_w = 10.0;
+            body.half_h = 10.0;
+            body.body.inv_mass = 1.0 / 7373.0;
+            body.body.inv_inertia = 1.0 / 452_985.0;
+            body.surface.friction = 0.2;
+            body.surface.restitution = 0.0;
+            body.mode = Mode::Predicted;
+
+            let mut set = PredictedSet::new(4);
+
+            set.bodies_mut().insert("box".to_string(), body);
+
+            Self {
+                set,
+                captures: Rc::new(Cell::new(0)),
+                releases: Rc::new(Cell::new(0)),
+            }
+        }
+    }
+
+    impl PredictedBodies for BoxSet {
+        fn set(&self) -> &PredictedSet {
+            &self.set
+        }
+
+        fn set_mut(&mut self) -> &mut PredictedSet {
+            &mut self.set
+        }
+
+        fn update(&mut self, _game: &InterpolatedGame) {}
+
+        fn snapshot_bodies(&self, _snapshot: &DecodedSnapshot) -> Vec<(String, ServerState)> {
+            Vec::new()
+        }
+
+        fn capture(&mut self, _tank: &Box2, _local_now: f64) {
+            self.captures.set(self.captures.get() + 1);
+        }
+
+        fn render_data(&self) -> Vec<PredictedRow> {
+            Vec::new()
+        }
+
+        // тело двойника предсказано изначально: возврат в интерполяцию тест
+        // только считает, иначе ящик исчезал бы из решателя посреди сценария
+        fn demote_idle(&mut self, _local_now: f64) {}
+
+        fn release_predicted(&mut self) {
+            self.releases.set(self.releases.get() + 1);
+        }
+    }
+
+    // ящик подсистемы, добавленной предиктору
+    fn box_body(p: &mut Predictor) -> &PredictedBody {
+        &p.predicted_sets_mut()[0].set().bodies()["box"]
+    }
+
+    #[test]
+    fn without_map_and_sets_there_are_no_collisions() {
+        // предиктор без карты стоит внутри стены — и всё равно едет как
+        // в пустоте (инвариант паритета с хостом)
+        let mut p = make_predictor();
+        let mut reference = make_predictor();
+
+        reference
+            .set_map(
+                &serde_json::json!({
+                    "step": 40, "scale": 1, "map": [[0]],
+                    "physicsStatic": [], "physicsDynamic": []
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        for predictor in [&mut p, &mut reference] {
+            predictor.state.x = 85.0;
+            predictor.state.vx = 100.0;
+            predictor.step(0);
+        }
+
+        assert_eq!(p.state.to_array(), reference.state.to_array());
+    }
+
+    #[test]
+    fn wall_stops_the_tank() {
+        let mut p = make_predictor();
+
+        p.set_map(&wall_grid()).unwrap();
+        p.state.x = 74.0; // правый край танка 78, стена начинается с 80
+        p.state.vx = 300.0;
+
+        for _ in 0..60 {
+            p.step(0);
+        }
+
+        // корпус не заходит за грань стены и не улетел сквозь неё
+        assert!(p.state.x + 4.0 <= 80.001);
+        assert!(p.state.vx < 1.0);
+    }
+
+    #[test]
+    fn corner_hit_rotates_the_tank() {
+        let mut p = make_predictor();
+
+        p.set_map(&wall_grid()).unwrap();
+        p.state.x = 74.0;
+        p.state.y = 20.0;
+        p.state.angle = 0.4; // корпус повёрнут — в стену войдёт угол
+        p.state.vx = 300.0;
+        p.step(0);
+
+        assert_ne!(p.state.angvel, 0.0);
+    }
+
+    #[test]
+    fn contact_moves_the_box() {
+        let mut p = make_predictor();
+
+        p.add_predicted_set(Box::new(BoxSet::new(40.0)));
+        p.state.x = 26.0; // правый край танка 30, левая грань ящика 30
+        p.state.y = 20.0;
+        p.state.vx = 200.0;
+
+        for _ in 0..30 {
+            p.step(0);
+        }
+
+        let body = box_body(&mut p).body;
+
+        assert!(body.x > 40.0);
+        assert!(body.vx > 0.0);
+    }
+
+    #[test]
+    fn tank_loses_speed_pushing_the_box() {
+        let mut p = make_predictor();
+
+        p.add_predicted_set(Box::new(BoxSet::new(40.0)));
+        p.state.x = 26.0;
+        p.state.y = 20.0;
+        p.state.vx = 200.0;
+        p.step(0);
+
+        assert!(p.state.vx < 200.0);
+    }
+
+    // регресс: demote_idle зовётся только из шага симуляции, а рендер
+    // предсказанных тел перекрывает интерполяцию каждый кадр —
+    // остановившийся предиктор оставлял ящик застывшим на экране навсегда
+    #[test]
+    fn without_simulation_step_sets_release_bodies() {
+        let mut p = make_predictor();
+        let set = BoxSet::new(40.0);
+        let releases = set.releases.clone();
+
+        p.add_predicted_set(Box::new(set));
+        p.set_active(false); // спектатор: шага нет
+
+        p.update(1000.0);
+        p.update(1016.0);
+
+        assert!(releases.get() > 0);
+    }
+
+    #[test]
+    fn freeze_disables_contacts_and_capture() {
+        let mut p = make_predictor();
+        let set = BoxSet::new(40.0);
+        let captures = set.captures.clone();
+
+        p.add_predicted_set(Box::new(set));
+        p.freeze(true);
+        p.state.x = 26.0; // правый край танка 30, левая грань ящика 30
+        p.state.y = 20.0;
+        p.state.vx = 200.0;
+        p.step(0);
+
+        let body = box_body(&mut p).body;
+
+        assert_eq!(captures.get(), 0);
+        assert_eq!(body.x, 40.0);
+        assert_eq!(body.vx, 0.0);
+    }
+
+    #[test]
+    fn box_out_of_contact_leaves_tank_untouched() {
+        let mut p = make_predictor();
+        let mut reference = make_predictor();
+
+        p.add_predicted_set(Box::new(BoxSet::new(400.0)));
+
+        for predictor in [&mut p, &mut reference] {
+            predictor.state.vx = 100.0;
+            predictor.step(0);
+        }
+
+        let body = box_body(&mut p).body;
+
+        assert_eq!(body.x, 400.0);
+        assert_eq!(body.vx, 0.0);
+        assert_eq!(p.state.to_array(), reference.state.to_array());
     }
 }
 

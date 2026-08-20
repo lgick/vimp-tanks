@@ -13,7 +13,6 @@
 use std::collections::VecDeque;
 
 use indexmap::IndexMap;
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::config::{ModelConfig, WeaponConfig, WeaponKind};
@@ -46,6 +45,7 @@ fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
 }
 
 use super::predictor::RenderState;
+use super::{ClientMapConfig, Grid};
 
 // максимальный возраст неподтверждённого локального выстрела (мс);
 // старше — хост выстрел отклонил, запись не должна съедать чужие дубли
@@ -55,39 +55,6 @@ const PENDING_MAX_AGE: f64 = 2000.0;
 // детонации; этот срок — только страховка от утечки, если null потерялся,
 // поэтому он с запасом больше любого разумного weapon.time.
 const BOMB_ALIAS_MAX_AGE: f64 = 60_000.0;
-
-/// Данные карты для raycast (MAP_DATA клиента; лишние поля игнорируются).
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientMapConfig {
-    step: f32,
-    #[serde(default = "default_scale")]
-    scale: f32,
-    map: Vec<Vec<i32>>,
-    #[serde(default)]
-    physics_static: Vec<i32>,
-    #[serde(default)]
-    physics_dynamic: Vec<ClientDynamicObject>,
-}
-
-fn default_scale() -> f32 {
-    1.0
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientDynamicObject {
-    position: [f32; 2],
-    angle: f32,
-    width: f32,
-    height: f32,
-}
-
-struct Grid {
-    map: Vec<Vec<i32>>,
-    solid_tiles: Vec<i32>,
-    tile_size: f32,
-}
 
 struct TankTarget {
     x: f32,
