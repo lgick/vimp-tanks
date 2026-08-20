@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The snapshot frame carries the velocities the client needs to predict a
+  contact (frame v4/v5, requires `vimp-engine` 0.12 / `vimp-engine-core`
+  0.6). The tank row (`m1`) gained `angvel`, so the client can predict how
+  far another tank's hull turns during the interpolation delay; the dynamic
+  map elements (`c1`/`c2`) gained `vx`, `vy`, `angvel` behind the schema's
+  new `optionalFrom: 3` — a moving crate ships its velocities, a resting one
+  ships only its transform and costs 12 bytes less per frame. Decoding always
+  yields the full six-field row (a missing tail reads as zeros), so the hot
+  buffer and the client parts stay fixed-width; the predicted record in the
+  hot buffer is 13 floats now.
+
 - The chat commands the engine used to own — `/name`, `/nr`, `/timeleft`,
   `/mapname`, `/rank` — are declared by the game now and registered next to
   `/bot`, because the engine's `CommandProcessor` no longer parses any command

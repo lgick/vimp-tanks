@@ -6,6 +6,10 @@
 // gameConfig (lib/coreConfig.js) и шлёт клиенту в CONFIG_DATA
 // (lib/buildClientConfig.js) — сам движок раскладку не знает.
 // Новое оружие/карта обязаны быть зарегистрированы здесь.
+// optionalFrom: индекс первого поля опционального хвоста — поля с него
+// пишутся в кадр только у движущихся тел, наличие задаёт флаг-байт перед
+// строкой (покоящийся ящик не платит за скорости). Распаковка всё равно
+// отдаёт строку полной ширины: отсутствующий хвост читается нулями.
 // ВНИМАНИЕ: порядок и interp полей позиционно привязаны к Row-структурам
 // packages/engine/core/src/snapshot.rs — interpolator.rs читает interp по
 // индексу поля (schema.fields[i]), не по имени. Переставлять поля местами
@@ -27,6 +31,9 @@ export default {
       { name: 'condition', ty: 'u8' },
       { name: 'size', ty: 'u8' },
       { name: 'team', ty: 'u8' },
+      // угловая скорость корпуса: клиент доворачивает чужой танк за задержку
+      // интерполяции (RemoteTanks); interp — 'lerp', это скорость, не угол
+      { name: 'angvel', ty: 'f32', interp: 'lerp' },
     ],
   },
   w1: {
@@ -71,20 +78,28 @@ export default {
     id: 5,
     kind: 'indexedNoNull8',
     class: 'hot',
+    optionalFrom: 3,
     fields: [
       { name: 'x', ty: 'f32', interp: 'lerp' },
       { name: 'y', ty: 'f32', interp: 'lerp' },
       { name: 'angle', ty: 'f32', interp: 'lerpAngle' },
+      { name: 'vx', ty: 'f32', interp: 'lerp' },
+      { name: 'vy', ty: 'f32', interp: 'lerp' },
+      { name: 'angvel', ty: 'f32', interp: 'lerp' },
     ],
   },
   c2: {
     id: 6,
     kind: 'indexedNoNull8',
     class: 'hot',
+    optionalFrom: 3,
     fields: [
       { name: 'x', ty: 'f32', interp: 'lerp' },
       { name: 'y', ty: 'f32', interp: 'lerp' },
       { name: 'angle', ty: 'f32', interp: 'lerpAngle' },
+      { name: 'vx', ty: 'f32', interp: 'lerp' },
+      { name: 'vy', ty: 'f32', interp: 'lerp' },
+      { name: 'angvel', ty: 'f32', interp: 'lerp' },
     ],
   },
 };

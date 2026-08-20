@@ -219,7 +219,10 @@ mechanics — the engine's
 Registered as `HostPlugin.gameConfig.snapshot`: `m1`, `w1`, `w2`, `w2e`,
 `c1`, `c2` → a numeric id + `kind`, which drives the block's byte layout
 (the engine's schema-driven packer/unpacker, see
-[core.md](core.md)). An unregistered key breaks frame packing. Full
+[core.md](core.md)). An unregistered key breaks frame packing. `c1`/`c2`
+declare `optionalFrom: 3`: a dynamic map element ships `[vx, vy, angvel]`
+only while it moves, so a resting crate costs 12 bytes less per frame
+(decoding still yields the full six-field row, the missing tail as zeros). Full
 mechanism — the engine's
 [network.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/network.md#binary-snapshot-frame-port-5).
 

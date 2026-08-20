@@ -87,7 +87,7 @@ fn flat_config_json() -> serde_json::Value {
             "w2": { "key": "w2", "value": 100 }
         },
         "snapshot": {
-            "version": 3,
+            "version": 5,
             "port": 5,
             "keys": {
                 "m1": { "id": 1, "kind": "indexed8", "class": "hot", "fields": [
@@ -100,7 +100,8 @@ fn flat_config_json() -> serde_json::Value {
                     { "name": "engineLoad", "ty": "f32", "interp": "lerp" },
                     { "name": "condition", "ty": "u8" },
                     { "name": "size", "ty": "u8" },
-                    { "name": "team", "ty": "u8" }
+                    { "name": "team", "ty": "u8" },
+                    { "name": "angvel", "ty": "f32", "interp": "lerp" }
                 ] },
                 "w1": { "id": 2, "kind": "list16", "class": "event", "fields": [
                     { "name": "startX", "ty": "f32" },
@@ -125,15 +126,21 @@ fn flat_config_json() -> serde_json::Value {
                     { "name": "y", "ty": "f32" },
                     { "name": "radius", "ty": "f32" }
                 ] },
-                "c1": { "id": 5, "kind": "indexedNoNull8", "class": "hot", "fields": [
+                "c1": { "id": 5, "kind": "indexedNoNull8", "class": "hot", "optionalFrom": 3, "fields": [
                     { "name": "x", "ty": "f32", "interp": "lerp" },
                     { "name": "y", "ty": "f32", "interp": "lerp" },
-                    { "name": "angle", "ty": "f32", "interp": "lerpAngle" }
+                    { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+                    { "name": "vx", "ty": "f32", "interp": "lerp" },
+                    { "name": "vy", "ty": "f32", "interp": "lerp" },
+                    { "name": "angvel", "ty": "f32", "interp": "lerp" }
                 ] },
-                "c2": { "id": 6, "kind": "indexedNoNull8", "class": "hot", "fields": [
+                "c2": { "id": 6, "kind": "indexedNoNull8", "class": "hot", "optionalFrom": 3, "fields": [
                     { "name": "x", "ty": "f32", "interp": "lerp" },
                     { "name": "y", "ty": "f32", "interp": "lerp" },
-                    { "name": "angle", "ty": "f32", "interp": "lerpAngle" }
+                    { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+                    { "name": "vx", "ty": "f32", "interp": "lerp" },
+                    { "name": "vy", "ty": "f32", "interp": "lerp" },
+                    { "name": "angvel", "ty": "f32", "interp": "lerp" }
                 ] }
             }
         },
@@ -535,14 +542,21 @@ fn map_with_box_json(x: f32, y: f32) -> String {
     map.to_string()
 }
 
-/// X единственного динамического тела карты (Map.getDynamicMapData).
-fn dynamic_box_x(core: &GameCore) -> f32 {
+/// Строка снапшота единственного динамического тела карты
+/// (Map.getDynamicMapData); `with_velocities` — как у схемы `c1`/`c2`
+/// с опциональным хвостом (см. src/config/snapshot.js).
+fn dynamic_box_row(core: &GameCore, with_velocities: bool) -> Vec<FieldValue> {
     let state = core.state();
     let map = state.map.as_ref().expect("карта загружена");
-    let rows = map.dynamic_map_data(&state.world);
+    let rows = map.dynamic_map_data(&state.world, with_velocities);
     let (_, fields) = rows.first().expect("на карте один динамический ящик");
 
-    match fields[0] {
+    fields.clone()
+}
+
+/// X единственного динамического тела карты (Map.getDynamicMapData).
+fn dynamic_box_x(core: &GameCore) -> f32 {
+    match dynamic_box_row(core, false)[0] {
         FieldValue::F32(x) => x,
         _ => panic!("поле x строки динамики должно быть f32"),
     }
@@ -584,6 +598,38 @@ fn hitscan_impulse_independent_of_weapon_range() {
         (short - long).abs() < 1e-3,
         "Δx короткого ({short}) и длинного ({long}) оружия должны совпасть",
     );
+}
+
+/// Кадр v4: движущееся тело карты отдаёт хвост со скоростями, покоящееся —
+/// только трансформацию (клиент предсказывает динамику по этим скоростям).
+#[test]
+fn dynamic_box_ships_velocity_tail_only_while_moving() {
+    const BOX_X: f32 = 200.0;
+    const BOX_Y: f32 = 84.0;
+
+    let mut core = GameCore::new(&config_json_with_bullet(1500.0, 7_500_000.0)).unwrap();
+
+    core.load_map(&map_with_box_json(BOX_X, BOX_Y)).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+
+    // до выстрела ящик стоит: хвоста нет даже при запросе скоростей
+    assert_eq!(dynamic_box_row(&core, true).len(), 3);
+
+    core.apply_input(1, 1, "down", "fire");
+    steps(&mut core, 10);
+
+    let moving = dynamic_box_row(&core, true);
+
+    assert_eq!(moving.len(), 6, "ящик едет — строка обязана нести скорости");
+
+    match moving[3] {
+        FieldValue::F32(vx) => assert!(vx > 0.0, "vx должен быть положительным: {vx}"),
+        _ => panic!("поле vx строки динамики должно быть f32"),
+    }
+
+    // схема без хвоста ширину строки не меняет
+    assert_eq!(dynamic_box_row(&core, false).len(), 3);
 }
 
 // Примечание: конструктор GameCore::new теперь отклоняет невалидную

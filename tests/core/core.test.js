@@ -11,7 +11,7 @@ import {
 } from './helpers.js';
 
 // JS↔WASM интеграционный харнесс ядра (Этап 2.5): команды/события ABI
-// и round-trip бинарного кадра v3 — ядро пакует (Rust), распаковывает
+// и round-trip бинарного кадра v5 — ядро пакует (Rust), распаковывает
 // клиентское ядро (ClientCore.decode_frame, срез 2.6).
 
 const DT = 1 / 120;
@@ -73,7 +73,7 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
     });
   });
 
-  describe('round-trip кадра v3 через decode_frame', () => {
+  describe('round-trip кадра v5 через decode_frame', () => {
     it('кадр играющего: заголовок, камера, player-блок, танки, динамика', () => {
       core.load_map(JSON.stringify(poolMini));
       core.spawn_actor(1, 'm1', 1, 78, 312, 0);
@@ -105,11 +105,12 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       // танк в блоке m1: формат Tank.getData
       const tank = decoded.snapshot.m1[1];
 
-      expect(tank).toHaveLength(10);
+      expect(tank).toHaveLength(11);
       expect(tank[0]).toBeCloseTo(decoded.player.state[0], 1); // x
       expect(tank[7]).toBe(3); // condition
       expect(tank[8]).toBe(2); // size
       expect(tank[9]).toBe(1); // teamId
+      expect(tank[10]).toBeCloseTo(decoded.player.state[5], 1); // angvel
 
       // динамика карты присутствует всегда (пустой объект для pool_mini)
       expect(decoded.snapshot.c1).toEqual({});

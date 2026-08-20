@@ -236,13 +236,15 @@ state-кадре через буфер интерполяции и приход�
 `[0]` — флаги (`HOT_FLAGS` в движковом `opcodes.js`: game/camera/
 predicted/frames), `[1..2]` — камера x/y (уже разрешённая ядром:
 предсказанная позиция либо интерполированная), `[3]` — количество танков
-N, далее N×12 (`keyId, gameId, x, y, angle, gun, vx, vy, engineLoad,
-condition, size, teamId`), затем M динамики × 5 (`keyId, index, x, y,
-angle`); predicted-запись своего танка идёт последней. Этот хвост движок
+N, далее N×13 (`keyId, gameId, x, y, angle, gun, vx, vy, engineLoad,
+condition, size, teamId, angvel`), затем M динамики × 8 (`keyId, index,
+x, y, angle, vx, vy, angvel` — покоящееся тело скорости в кадр не шлёт, но
+запись всё равно полной ширины: отсутствующий хвост распаковывается
+нулями); predicted-запись своего танка идёт последней. Этот хвост движок
 пишет дословно из `RenderOverlay.tail`, которую собирает
 `GameClientDef::render_overlay` — движку известны только камера
 (`RenderOverlay.camera`) и флаг наличия, но не раскладка полей хвоста
-(`TanksClient::render_overlay` собирает её как ту же форму из 12
+(`TanksClient::render_overlay` собирает её как ту же форму из 13
 значений). `keyId` — числовые id из снапшот-схемы этой игры
 (`src/config/snapshot.js`); клиентский JS читает записи generic-разбором
 по той же схеме (ширина записи = 2 служебных поля + количество `fields`

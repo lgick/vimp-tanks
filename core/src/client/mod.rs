@@ -145,8 +145,9 @@ impl GameClientDef for TanksClient {
     }
 
     // predicted-хвост hot-буфера: keyId, gameId, x, y, angle, gun, vx, vy,
-    // engineLoad, condition, size, teamId (12 f32) — без meta своего танка
-    // не рендерится.
+    // engineLoad, condition, size, teamId, angvel (13 f32) — порядок полей
+    // после gameId обязан совпадать со схемой m1 (src/config/snapshot.js);
+    // без meta своего танка не рендерится.
     fn render_overlay(&self, my_game_id: Option<u32>) -> Option<RenderOverlay> {
         let my_game_id = my_game_id?;
         let my_model_key_id = self.my_model_key_id?;
@@ -168,6 +169,7 @@ impl GameClientDef for TanksClient {
                 condition as f32,
                 size as f32,
                 team as f32,
+                p.angvel,
             ],
         })
     }
@@ -284,7 +286,7 @@ mod tests {
                 "fire": { "key": 128, "type": 1 }
             },
             "snapshot": {
-                "version": 3,
+                "version": 5,
                 "port": 5,
                 "keys": {
                     "m1": { "id": 1, "kind": "indexed8", "class": "hot", "fields": [
@@ -297,7 +299,8 @@ mod tests {
                         { "name": "engineLoad", "ty": "f32", "interp": "lerp" },
                         { "name": "condition", "ty": "u8" },
                         { "name": "size", "ty": "u8" },
-                        { "name": "team", "ty": "u8" }
+                        { "name": "team", "ty": "u8" },
+                        { "name": "angvel", "ty": "f32", "interp": "lerp" }
                     ] },
                     "w1": { "id": 2, "kind": "list16", "class": "event", "fields": [
                         { "name": "startX", "ty": "f32" },
@@ -322,10 +325,13 @@ mod tests {
                         { "name": "y", "ty": "f32" },
                         { "name": "radius", "ty": "f32" }
                     ] },
-                    "c1": { "id": 5, "kind": "indexedNoNull8", "class": "hot", "fields": [
+                    "c1": { "id": 5, "kind": "indexedNoNull8", "class": "hot", "optionalFrom": 3, "fields": [
                         { "name": "x", "ty": "f32", "interp": "lerp" },
                         { "name": "y", "ty": "f32", "interp": "lerp" },
-                        { "name": "angle", "ty": "f32", "interp": "lerpAngle" }
+                        { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+                        { "name": "vx", "ty": "f32", "interp": "lerp" },
+                        { "name": "vy", "ty": "f32", "interp": "lerp" },
+                        { "name": "angvel", "ty": "f32", "interp": "lerp" }
                     ] }
                 }
             },
@@ -358,6 +364,7 @@ mod tests {
             FieldValue::U8(condition),
             FieldValue::U8(2),
             FieldValue::U8(1),
+            FieldValue::F32(0.0),
         ]
     }
 
@@ -451,8 +458,8 @@ mod tests {
         assert_eq!(hot[5], 2.0);
         assert_eq!(hot[6], 15.0);
 
-        // динамики нет
-        assert_eq!(hot[4 + 12], 0.0);
+        // динамики нет (запись танка — 2 служебных поля + 11 полей схемы)
+        assert_eq!(hot[4 + 13], 0.0);
 
         // событийные кадры: пересечён кадр seq 1
         let frames: Vec<serde_json::Value> =
@@ -485,8 +492,8 @@ mod tests {
 
         assert!(flags & HOT_HAS_PREDICTED != 0);
 
-        // predicted-запись последняя: keyId, gameId, x, ..., condition/size/team
-        let p = &hot[hot.len() - 12..];
+        // predicted-запись последняя: keyId, gameId, x, ..., condition/size/team, angvel
+        let p = &hot[hot.len() - 13..];
 
         assert_eq!(p[0], 1.0);
         assert_eq!(p[1], 2.0);
@@ -564,7 +571,7 @@ mod tests {
         state.sample(1450.0);
 
         let hot = state.hot().to_vec();
-        let p = &hot[hot.len() - 12..];
+        let p = &hot[hot.len() - 13..];
 
         // предсказанная позиция снаплена в 500 (без визуальной ошибки)
         assert_eq!(p[2], 500.0);

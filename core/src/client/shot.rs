@@ -767,6 +767,7 @@ mod tests {
             vx: 0.0,
             vy: 0.0,
             engine_load: 0.0,
+            angvel: 0.0,
         }
     }
 

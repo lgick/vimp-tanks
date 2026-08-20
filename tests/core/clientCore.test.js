@@ -44,7 +44,7 @@ const packFrame = (core, serverTime, seq, { camera = null, playerId = -1 } = {})
 };
 
 describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', () => {
-  describe('decode_frame — распаковка кадра v3', () => {
+  describe('decode_frame — распаковка кадра v5', () => {
     it('распаковывает заголовок пустого кадра', () => {
       const core = makeCore();
       const client = makeClientCore();
@@ -103,9 +103,10 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       let decoded = decodeFrame(client, packFrame(core, 0, 1));
       const row = decoded.snapshot.m1['2'];
 
-      expect(row).toHaveLength(10);
+      expect(row).toHaveLength(11);
       expect(row[0]).toBe(100.57); // round2
-      expect(row.slice(7)).toEqual([3, 2, 1]); // condition, size, teamId
+      expect(row.slice(7, 10)).toEqual([3, 2, 1]); // condition, size, teamId
+      expect(row[10]).toBe(0); // angvel — стоящий танк не крутится
 
       core.remove_actor(2);
       decoded = decodeFrame(client, packFrame(core, 0, 2));
@@ -248,8 +249,9 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       expect(hot[0] & HAS_PREDICTED).toBeTruthy();
 
-      // predicted-запись последняя: x из player-блока
-      expect(hot[hot.length - 10]).toBeCloseTo(100, 3);
+      // predicted-запись последняя (13 f32: keyId, gameId + 11 полей m1),
+      // x — третье поле записи
+      expect(hot[hot.length - 11]).toBeCloseTo(100, 3);
 
       client.apply_input('down', 'forward', 1150);
 
@@ -259,7 +261,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       hot = client.hot_values();
 
-      const x = hot[hot.length - 10];
+      const x = hot[hot.length - 11];
 
       expect(x).toBeGreaterThan(105);
 
@@ -295,7 +297,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       const [coreX] = core.position_of(1);
       const hot = client.hot_values();
-      const predictedX = hot[hot.length - 10];
+      const predictedX = hot[hot.length - 11];
 
       // допуск шире cargo-паритета: рендер-тик клиента дробит время
       // аккумулятором (float-режим реального цикла)

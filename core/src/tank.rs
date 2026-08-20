@@ -510,7 +510,9 @@ impl Tank {
     }
 
     /// Строка снапшота (Tank.getData): значения скруглены до 2 знаков.
-    pub fn snapshot_row(&self, body: &RigidBody, size: f32) -> ([f32; 7], u8, u8, u8) {
+    /// Последним идёт `angvel` — клиенту он нужен, чтобы предсказать доворот
+    /// чужого корпуса за задержку интерполяции (кадр v5, см. RemoteTanks).
+    pub fn snapshot_row(&self, body: &RigidBody, size: f32) -> ([f32; 7], u8, u8, u8, f32) {
         let pos = body.translation();
         let vel = body.linvel();
 
@@ -527,6 +529,7 @@ impl Tank {
             self.condition,
             size as u8,
             self.team_id,
+            round2(body.angvel()),
         )
     }
 

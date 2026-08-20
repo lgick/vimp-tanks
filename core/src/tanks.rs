@@ -25,15 +25,16 @@ use crate::tank::{PlayerKeyBits, ShotCommand, Tank};
 pub struct TanksGame;
 
 /// Строка снапшота танка: 7 float (x,y,angle,gunRotation,vx,vy,engineLoad) +
-/// condition/size/teamId (движковый `BlockKind::Indexed8` — форма, не
-/// игровая сущность; движок принимает `Vec<FieldValue>` в порядке
-/// `m1`-схемы opcodes.js).
+/// condition/size/teamId + angvel (движковый `BlockKind::Indexed8` — форма,
+/// не игровая сущность; движок принимает `Vec<FieldValue>` в порядке
+/// `m1`-схемы src/config/snapshot.js).
 #[derive(Clone, Copy)]
 struct TankRow {
     floats: [f32; 7],
     condition: u8,
     size: u8,
     team: u8,
+    angvel: f32,
 }
 
 impl TankRow {
@@ -43,6 +44,7 @@ impl TankRow {
         fields.push(FieldValue::U8(self.condition));
         fields.push(FieldValue::U8(self.size));
         fields.push(FieldValue::U8(self.team));
+        fields.push(FieldValue::F32(self.angvel));
         fields
     }
 }
@@ -493,13 +495,13 @@ impl GameSim<TanksGame> for TanksSim {
                 continue;
             };
 
-            let (floats, condition, size, team) = tank.snapshot_row(body, model.size);
+            let (floats, condition, size, team, angvel) = tank.snapshot_row(body, model.size);
 
             self.cached_players.insert(
                 *game_id,
                 (
                     tank.model.clone(),
-                    TankRow { floats, condition, size, team },
+                    TankRow { floats, condition, size, team, angvel },
                 ),
             );
         }

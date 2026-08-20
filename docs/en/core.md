@@ -237,13 +237,15 @@ cleared wholesale and there is no one left to deliver a `null` to.
 `[0]` — flags (`HOT_FLAGS` in the engine's `opcodes.js`: game/camera/
 predicted/frames), `[1..2]` — camera x/y (already resolved by the core:
 predicted position or interpolated), `[3]` — the tank count N, followed by
-N×12 (`keyId, gameId, x, y, angle, gun, vx, vy, engineLoad, condition,
-size, teamId`), then M dynamics × 5 (`keyId, index, x, y, angle`); the
+N×13 (`keyId, gameId, x, y, angle, gun, vx, vy, engineLoad, condition,
+size, teamId, angvel`), then M dynamics × 8 (`keyId, index, x, y, angle,
+vx, vy, angvel` — a resting body ships no velocities in the frame, but the
+record is still full width: the missing tail decodes as zeros); the
 local tank's predicted record comes last. This tail is written by the
 engine verbatim from `GameClientDef::render_overlay`'s
 `RenderOverlay.tail` — the engine only knows the camera
 (`RenderOverlay.camera`) and the presence flag, not the tail's field
-layout (`TanksClient::render_overlay` builds it as the same 12-value
+layout (`TanksClient::render_overlay` builds it as the same 13-value
 shape). `keyId` — numeric ids from this game's snapshot schema
 (`src/config/snapshot.js`); client JS reads the records generically off
 the same schema (record width = 2 service fields + the key's `fields`

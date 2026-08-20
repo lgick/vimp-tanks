@@ -81,6 +81,7 @@ pub struct RenderState {
     pub vx: f32,
     pub vy: f32,
     pub engine_load: f32,
+    pub angvel: f32,
 }
 
 struct HistoryEntry {
@@ -404,6 +405,7 @@ impl Predictor {
             vx: self.state.vx,
             vy: self.state.vy,
             engine_load: self.engine_load,
+            angvel: self.state.angvel,
         })
     }
 
