@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A map-dynamics render row is addressed by the object's index in
+  `physicsDynamic`, not by the body's position in the predicted set
+  (`core/src/client/map_dynamics.rs`). The two numbers matched only by
+  construction — insertion order plus a set nothing ever removes from — and
+  the day a body left the set, a crate would silently have been drawn at
+  another crate's coordinates.
 - MAP_DATA is parsed exactly once on the client (`TanksClient::set_map`), and
   the motion predictor and the shot predictor share the resulting wall grid
   (`Rc<Grid>`) instead of each building its own from a separate parse. The two

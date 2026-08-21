@@ -336,7 +336,10 @@ a reset on CLEAR would erase the boxes for good. Capture into prediction is
 an overlap with the local tank's OBB inflated by `CAPTURE_MARGIN`, plus the
 transitive closure over neighbours with the same margin (a stack of boxes
 moves as a whole); the set is capped at 12 bodies, otherwise the 20-box wall
-of `canopy` would be pulled into prediction in its entirety.
+of `canopy` would be pulled into prediction in its entirety. A dynamics row
+is addressed by the object's index in `physicsDynamic` (the body key `d0`,
+`d1`, … is built from it), never by the body's position in the predicted
+set — the two coincide only as long as no body leaves the set.
 
 The coordinate convention: boxes are stored by their **centre**, while in the
 snapshot `c1`/`c2` `[x, y, angle]` is the "object origin" (the position of

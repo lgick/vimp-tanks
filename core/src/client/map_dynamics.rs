@@ -30,6 +30,7 @@
 //! после первого же раунда.
 
 use std::any::Any;
+use std::collections::HashMap;
 
 use vimp_engine_core::client::collision::{box_center_from_origin, obb_vs_obb};
 use vimp_engine_core::client::game::PredictedRow;
@@ -86,6 +87,10 @@ fn body_key(index: usize) -> String {
 /// Предсказанная динамика карты.
 pub struct MapDynamics {
     set: PredictedSet,
+    // индекс объекта в physicsDynamic по ключу тела: render_data обязан
+    // отдавать id строки, а не позицию тела в множестве — совпадать они
+    // перестанут, как только из множества исчезнет хоть одно тело
+    indices: HashMap<String, u32>,
     // реестр ключей снапшота: по setId карты берётся id блока для рендер-строк
     snapshot: SnapshotConfig,
     // ключ блока динамики текущей карты (c1/c2) и его id в схеме
@@ -97,6 +102,7 @@ impl MapDynamics {
     pub fn new(snapshot: &SnapshotConfig) -> Self {
         Self {
             set: PredictedSet::new(MAX_PREDICTED_BODIES),
+            indices: HashMap::new(),
             snapshot: snapshot.clone(),
             set_id: None,
             set_key_id: None,
@@ -109,6 +115,7 @@ impl MapDynamics {
         let scale = cfg.scale;
 
         self.set.bodies_mut().clear();
+        self.indices.clear();
         self.set_id = cfg.set_id.clone();
         self.set_key_id = self
             .set_id
@@ -149,7 +156,10 @@ impl MapDynamics {
             // поверхность ящика; в контакте комбинируется правилом среднего
             body.surface = MAP_SURFACE;
 
-            self.set.bodies_mut().insert(body_key(index), body);
+            let key = body_key(index);
+
+            self.indices.insert(key.clone(), index as u32);
+            self.set.bodies_mut().insert(key, body);
         }
     }
 
@@ -381,10 +391,12 @@ impl PredictedBodies for MapDynamics {
 
         self.set
             .bodies()
-            .values()
-            .enumerate()
+            .iter()
             .filter(|(_, body)| body.is_predicted())
-            .map(|(index, body)| {
+            .map(|(key, body)| {
+                let id = self.indices.get(key).copied().unwrap_or_default();
+                debug_assert_eq!(*key, body_key(id as usize));
+
                 let render = body.render_transform();
                 let origin = origin_from_box_center(
                     render.x,
@@ -396,7 +408,7 @@ impl PredictedBodies for MapDynamics {
 
                 PredictedRow {
                     key_id,
-                    id: index as u32,
+                    id,
                     fields: vec![origin[0], origin[1], render.angle],
                 }
             })
@@ -900,6 +912,36 @@ mod tests {
 
         assert!((rows[0].fields[0] - 305.0).abs() < 1e-3);
         assert!((rows[0].fields[1] - 40.0).abs() < 1e-3);
+    }
+
+    // дыра в множестве: id строки — индекс объекта карты, а не позиция тела
+    #[test]
+    fn render_data_ids_survive_a_hole_in_the_set() {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [0.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 },
+                { "position": [200.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 },
+                { "position": [400.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 }
+            ]),
+            1.0,
+        ));
+
+        // среднее тело исчезло из множества: позиции d0 и d2 стали 0 и 1
+        dynamics.set_mut().bodies_mut().shift_remove("d1");
+
+        for key in ["d0", "d2"] {
+            body_mut(&mut dynamics, key).promote(1000.0);
+        }
+
+        let rows = dynamics.render_data();
+        let ids: Vec<u32> = rows.iter().map(|row| row.id).collect();
+
+        assert_eq!(ids, vec![0, 2]);
     }
 
     #[test]
