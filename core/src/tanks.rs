@@ -15,7 +15,7 @@ use vimp_engine_core::nav::spatial::{SpatialEntity, SpatialGrid};
 use crate::config::{ModelConfig, PanelValue, WeaponConfig, WeaponKind, TanksConfig};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
-use vimp_engine_core::physics::{round1, round2};
+use vimp_engine_core::physics::{is_map_object, round1, round2};
 use vimp_engine_core::rng::Rng;
 use vimp_engine_core::sim::{GameDef, GameSim, SimCtx};
 use vimp_engine_core::snapshot::Block;
@@ -842,7 +842,8 @@ impl TanksSim {
 
         struct Target {
             handle: RigidBodyHandle,
-            tag: BodyTag,
+            // None — динамика карты: импульс без урона
+            tag: Option<BodyTag>,
             distance: f32,
         }
 
@@ -868,9 +869,12 @@ impl TanksSim {
                     continue;
                 }
 
-                let Some(tag) = BodyTag::decode(body.user_data) else {
+                let tag = BodyTag::decode(body.user_data);
+
+                // тело без метки вовсе целью не считается (JS: !userData?.type)
+                if tag.is_none() && !is_map_object(body.user_data) {
                     continue;
-                };
+                }
 
                 let distance = (body.translation() - bomb_position).length();
 
@@ -885,7 +889,7 @@ impl TanksSim {
             let actual_damage = (damage * falloff as f64).round();
             let actual_impulse = impulse_magnitude * falloff;
 
-            if let BodyTag::Player { game_id, team_id } = target.tag {
+            if let Some(BodyTag::Player { game_id, team_id }) = target.tag {
                 if friendly_fire || bomb.team_id != team_id {
                     self.apply_damage(ctx, game_id, bomb.owner_id, weapon_index, Some(actual_damage));
                 }

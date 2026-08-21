@@ -27,7 +27,8 @@ Cargo.toml                        # + wasm-bindgen, зависимость на 
 src/
 ├── lib.rs                    # публичный ABI (wasm-bindgen): GameCore + ClientCore
 ├── body_tag.rs                # BodyTag (user_data тел игрока/выстрела) — только игра;
-│                              #   резервирует байт тега 1 под тег статики карты движка
+│                              #   резервирует байт тега 1 под тег объекта карты движка
+│                              #   (динамика карты: цель взрыва без урона)
 ├── tanks.rs                   # TanksSim (impl GameSim), TanksGame, алиас GameState
 ├── tank.rs                    # Tank — движение, башня, здоровье/боезапас/кулдауны
 ├── motion.rs                  # общие mass-free формулы движения: один код для

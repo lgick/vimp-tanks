@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An explosion pushes the dynamic map objects again, as it does in
+  `tank-battle`. Detonation dropped every body whose `user_data` did not
+  decode into a game `BodyTag` (`core/src/tanks.rs`), and the engine tags a
+  dynamic map body with its own `MAP_OBJECT_TAG`, so crates in the blast
+  radius were filtered out before the impulse was computed. Such a body is a
+  target now — it takes the impulse with the same falloff as a tank, and no
+  damage.
 - A map-dynamics render row is addressed by the object's index in
   `physicsDynamic`, not by the body's position in the predicted set
   (`core/src/client/map_dynamics.rs`). The two numbers matched only by

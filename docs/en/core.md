@@ -27,6 +27,7 @@ src/
 ├── lib.rs                    # the public ABI (wasm-bindgen): GameCore + ClientCore
 ├── body_tag.rs                # BodyTag (Player/Shot body user_data) — game-only;
 │                              #   reserves tag byte 1 for the engine's map-object tag
+│                              #   (dynamic map bodies: a blast target without damage)
 ├── tanks.rs                   # TanksSim (impl GameSim), TanksGame, GameState alias
 ├── tank.rs                    # Tank — movement, turret, health/ammo/cooldowns
 ├── motion.rs                  # shared mass-free motion formulas: one code path for

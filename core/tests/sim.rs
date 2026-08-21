@@ -600,6 +600,46 @@ fn hitscan_impulse_independent_of_weapon_range() {
     );
 }
 
+/// Взрыв двигает динамику карты: у тела карты движковый тег
+/// (`MAP_OBJECT_TAG`), а не игровой `BodyTag` — он не должен исключать
+/// тело из целей детонации (импульс без урона, как в Bomb.detonate).
+#[test]
+fn explosion_pushes_dynamic_map_box() {
+    const BOX_X: f32 = 120.0;
+    const BOX_Y: f32 = 130.0;
+
+    // общий сценарий: выстрел бомбой рядом с ящиком (fire) либо покой
+    let displacement = |fire: bool| {
+        let mut core = make_core();
+
+        core.load_map(&map_with_box_json(BOX_X, BOX_Y)).unwrap();
+        core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+
+        // прогрев: broad-phase узнаёт о новых телах на шаге мира
+        core.step(DT);
+
+        let before = dynamic_box_x(&core);
+
+        if fire {
+            // переключение на бомбу (w2) и выстрел
+            core.apply_input(1, 1, "down", "nextWeapon");
+            core.step(DT);
+            core.apply_input(1, 2, "down", "fire");
+        }
+
+        // 300 мс жизни бомбы + запас
+        steps(&mut core, 50);
+
+        dynamic_box_x(&core) - before
+    };
+
+    let idle = displacement(false);
+    let blast = displacement(true);
+
+    assert!(idle.abs() < 1e-3, "без выстрела ящик стоит, Δx = {idle}");
+    assert!(blast > 0.0, "взрыв должен оттолкнуть ящик, Δx = {blast}");
+}
+
 /// Кадр v4: движущееся тело карты отдаёт хвост со скоростями, покоящееся —
 /// только трансформацию (клиент предсказывает динамику по этим скоростям).
 #[test]
