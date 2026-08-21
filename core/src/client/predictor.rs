@@ -418,7 +418,9 @@ impl Predictor {
         self.last_update_time = Some(local_now);
         self.local_now = local_now;
 
-        // затухание визуальной ошибки
+        // линейное затухание визуальной ошибки за `1/ERROR_DECAY_RATE`
+        // секунды: на кадре длиннее 100 мс ошибка снимается целиком
+        // (тот же закон у тел PredictedSet::decay_error)
         let decay = (1.0 - (elapsed / 1000.0) * ERROR_DECAY_RATE).max(0.0) as f32;
 
         for value in &mut self.visual_error {
@@ -642,7 +644,8 @@ impl Predictor {
     fn resolve_world(&mut self, dt: f32) {
         // заморожен — танком владеет сервер: уничтоженный корпус ничего не
         // толкает, а захват тел в предсказание привязал бы их к нему
-        // (см. release_predicted)
+        // (см. release_predicted). Проверка защитная: при `frozen` сюда не
+        // доходит `update`, второго пути вызова искать не нужно
         if self.frozen || (self.grid.is_none() && self.sets.is_empty()) {
             return;
         }

@@ -640,11 +640,20 @@ impl ShotPredictor {
         // симуляционные, а не рендерные боксы: попадание должно совпасть
         // с авторитетным, а не с картинкой (см. map_dynamics.rs)
         if let Some(dynamics) = world.dynamics {
+            // ключ ящика материализуется в String один раз — для ближайшего,
+            // а не для каждого рассмотренного тела
+            let mut nearest_dynamic: Option<(f32, &str)> = None;
+
             for (key, obb) in dynamics.sim_boxes() {
-                consider(
-                    ray_vs_box(origin, dir, range, &obb),
-                    RayTarget::Dynamic(key.to_string()),
-                );
+                if let Some(distance) = ray_vs_box(origin, dir, range, &obb)
+                    && nearest_dynamic.is_none_or(|(nearest, _)| distance < nearest)
+                {
+                    nearest_dynamic = Some((distance, key));
+                }
+            }
+
+            if let Some((distance, key)) = nearest_dynamic {
+                consider(Some(distance), RayTarget::Dynamic(key.to_string()));
             }
         }
 

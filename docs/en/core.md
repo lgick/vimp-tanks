@@ -206,7 +206,6 @@ exists. Its config is assembled by the engine's
 | `cycle_weapon(back)` | a local weapon-cycle switch (authoritative confirmation comes via the panel) |
 | `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR. `reset()` also drops the local tank's meta, so the prediction overlay disappears right away instead of waiting for the spectator keyset |
 | `decode_frame(bytes)` | a plain v3 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
-| `map_dynamics_box(key)` | the RENDER box of a map-dynamics body: `[x, y, angle, halfW, halfH]`, where `x`/`y` is the centre; an empty array when the key is unknown |
 | `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
@@ -350,7 +349,7 @@ and a consumer must take its own:
 
 | View | Method | For whom | Why |
 | --- | --- | --- | --- |
-| render | `render_box` / `to_world` (plus `map_dynamics_box` / `map_dynamics_to_world` across the WASM boundary) | the game's sprites and effects | where the box is **drawn** (state plus the smoothing error) |
+| render | `render_box` / `to_world` (plus `map_dynamics_to_world` across the WASM boundary) | the game's sprites and effects | where the box is **drawn** (state plus the smoothing error) |
 | sim | `sim_box` / `sim_boxes` / `to_local` | the shot raycast | where the box is **on the host**; otherwise the local hit diverges from the server one |
 
 The sim box of a `Follow` body comes from the last authoritative frame, not

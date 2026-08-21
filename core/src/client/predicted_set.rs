@@ -269,8 +269,6 @@ impl PredictedSet {
     pub fn begin_reconcile(&mut self, entries: &[(String, ServerState)]) {
         let mut saved = IndexMap::new();
 
-        self.reconcile_snapshots = None;
-
         for (key, server) in entries {
             let Some(body) = self.bodies.get_mut(key) else {
                 continue;
@@ -335,7 +333,10 @@ impl PredictedSet {
         }
     }
 
-    /// Экспоненциальное затухание ошибки (в точности как visual_error танка).
+    /// Линейное затухание ошибки за `1/ERROR_DECAY_RATE` секунды: на кадре
+    /// длиннее 100 мс ошибка снимается целиком. В точности как
+    /// `visual_error` своего танка (`predictor.rs`, `update`) — расхождение
+    /// было бы видно как «танк догоняет, ящик прыгает».
     pub fn decay_error(&mut self, elapsed: f64) {
         let decay = (1.0 - (elapsed / 1000.0) * ERROR_DECAY_RATE).max(0.0) as f32;
 

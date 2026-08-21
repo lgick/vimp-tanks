@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   of its own (`src/host/metaCommands.js`, `src/host/index.js`). Behaviour is
   unchanged for the player: all five keep working exactly as before.
 
+### Removed
+
+- The unused `map_dynamics_box(key)` method of the client ABI
+  (`core/src/lib.rs`). Nothing on the JS side ever called it: the
+  `mapDynamics` service exposes only `toWorld` on top of
+  `map_dynamics_to_world`, and the shot effect reads its anchor through that.
+  `MapDynamics::render_box` stays — it is what `to_world` is built on.
+
 ### Fixed
 
 - An explosion pushes the dynamic map objects again, as it does in
