@@ -11,6 +11,7 @@
 //! и экспоненциально затухает — без видимых рывков.
 
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 
@@ -139,7 +140,7 @@ pub struct Predictor {
     // шагах. Без подсистем и без set_map проход столкновений — полный no-op,
     // а реплика движения остаётся бит-в-бит прежней (паритет с хостом)
     sets: Vec<Box<dyn PredictedBodies>>,
-    grid: Option<Grid>,
+    grid: Option<Rc<Grid>>,
     // часы симуляции, общие с предсказанным миром
     local_now: f64,
 
@@ -304,24 +305,25 @@ impl Predictor {
             .find_map(|set| set.as_any_mut().downcast_mut::<RemoteTanks>())
     }
 
-    /// Стены карты (MAP_DATA) — тайловая сетка для сбора контактов.
-    pub fn set_map(&mut self, map_json: &str) -> Result<(), String> {
-        let cfg: super::ClientMapConfig =
-            serde_json::from_str(map_json).map_err(|e| e.to_string())?;
-
+    /// Стены карты (MAP_DATA) — тайловая сетка для сбора контактов. Сетку
+    /// строит `TanksClient::set_map` и отдаёт её же предсказанию выстрела:
+    /// разбирать JSON здесь второй раз нельзя, иначе луч и контакт могут
+    /// разъехаться.
+    pub(crate) fn set_map(&mut self, cfg: &super::ClientMapConfig, grid: Rc<Grid>) {
         // геометрия динамики — целиком из этой карты (см. map_dynamics.rs:
         // сброса по CLEAR у неё намеренно нет)
         if let Some(dynamics) = self.map_dynamics_mut() {
-            dynamics.set_map(&cfg);
+            dynamics.set_map(cfg);
         }
 
-        self.grid = Some(Grid {
-            map: cfg.map,
-            solid_tiles: cfg.physics_static,
-            tile_size: cfg.step * cfg.scale,
-        });
+        self.grid = Some(grid);
+    }
 
-        Ok(())
+    /// Сетка стен предикта — для проверки того, что обе клиентские
+    /// подсистемы получили одну и ту же карту.
+    #[cfg(test)]
+    pub(crate) fn grid(&self) -> Option<&Rc<Grid>> {
+        self.grid.as_ref()
     }
 
     /// Предикт включается для играющего (keySet 1) и выключается у спектатора.
@@ -1164,6 +1166,15 @@ mod tests {
         .to_string()
     }
 
+    // карта подаётся так же, как её подаёт TanksClient::set_map: разбор
+    // один, сетка одна на все подсистемы
+    fn apply_map(p: &mut Predictor, json: &str) {
+        let mut cfg: super::super::ClientMapConfig = serde_json::from_str(json).unwrap();
+        let grid = Rc::new(cfg.take_grid());
+
+        p.set_map(&cfg, grid);
+    }
+
     // минимальный двойник подсистемы с одним предсказанным ящиком
     struct BoxSet {
         set: PredictedSet,
@@ -1251,15 +1262,14 @@ mod tests {
         let mut p = make_predictor();
         let mut reference = make_predictor();
 
-        reference
-            .set_map(
-                &serde_json::json!({
-                    "step": 40, "scale": 1, "map": [[0]],
-                    "physicsStatic": [], "physicsDynamic": []
-                })
-                .to_string(),
-            )
-            .unwrap();
+        apply_map(
+            &mut reference,
+            &serde_json::json!({
+                "step": 40, "scale": 1, "map": [[0]],
+                "physicsStatic": [], "physicsDynamic": []
+            })
+            .to_string(),
+        );
 
         for predictor in [&mut p, &mut reference] {
             predictor.state.x = 85.0;
@@ -1274,7 +1284,7 @@ mod tests {
     fn wall_stops_the_tank() {
         let mut p = make_predictor();
 
-        p.set_map(&wall_grid()).unwrap();
+        apply_map(&mut p, &wall_grid());
         p.state.x = 74.0; // правый край танка 78, стена начинается с 80
         p.state.vx = 300.0;
 
@@ -1291,7 +1301,7 @@ mod tests {
     fn corner_hit_rotates_the_tank() {
         let mut p = make_predictor();
 
-        p.set_map(&wall_grid()).unwrap();
+        apply_map(&mut p, &wall_grid());
         p.state.x = 74.0;
         p.state.y = 20.0;
         p.state.angle = 0.4; // корпус повёрнут — в стену войдёт угол

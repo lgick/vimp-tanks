@@ -10,6 +10,8 @@ pub mod predictor;
 pub mod remote_tanks;
 pub mod shot;
 
+use std::rc::Rc;
+
 use serde::Deserialize;
 use vimp_engine_core::client::game::{GameClientDef, PredictedRow, RenderOverlay};
 use vimp_engine_core::client::interpolator::{FrameData, InterpolatedGame};
@@ -66,6 +68,20 @@ pub(crate) struct ClientDynamicObject {
 
 pub(crate) fn default_angular_damping() -> f32 {
     0.01
+}
+
+impl ClientMapConfig {
+    /// Забирает из конфига сетку стен: карта и список сплошных тайлов —
+    /// единственные «дорогие» поля, поэтому они перемещаются, а не
+    /// копируются. Остаток конфига (динамика, scale, setId) после этого
+    /// по-прежнему валиден — динамике карты сетка не нужна.
+    fn take_grid(&mut self) -> Grid {
+        Grid {
+            map: std::mem::take(&mut self.map),
+            solid_tiles: std::mem::take(&mut self.physics_static),
+            tile_size: self.step * self.scale,
+        }
+    }
 }
 
 pub(crate) struct Grid {
@@ -317,11 +333,20 @@ impl GameClientDef for TanksClient {
     }
 
     /// Данные карты (MAP_DATA): стены предикта, мир raycast + сброс предикта.
+    /// Конфиг разбирается ОДИН раз: предсказание движения и предсказание
+    /// выстрела обязаны видеть одну и ту же сетку, а не две одинаково
+    /// построенные (см. doc-комментарий ClientMapConfig).
     fn set_map(&mut self, map_json: &str) -> Result<(), String> {
+        let mut cfg: ClientMapConfig =
+            serde_json::from_str(map_json).map_err(|e| e.to_string())?;
+        let grid = Rc::new(cfg.take_grid());
+
         self.predictor.reset();
         self.reset_remote_tanks();
-        self.predictor.set_map(map_json)?;
-        self.shot.set_map(map_json)
+        self.predictor.set_map(&cfg, Rc::clone(&grid));
+        self.shot.set_map(grid);
+
+        Ok(())
     }
 
     /// Авторитетное состояние панели (PANEL_DATA): патроны, активное оружие.
@@ -804,6 +829,31 @@ mod tests {
         client.reset();
 
         assert!(client.map_dynamics().unwrap().render_box("d0").is_some());
+    }
+
+    // инвариант ClientMapConfig: предсказание движения и предсказание
+    // выстрела видят карту одинаково, потому что сетка у них буквально одна
+    #[test]
+    fn both_client_subsystems_share_one_grid() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+        let map_json = serde_json::json!({
+            "step": 32,
+            "scale": 2.0,
+            "map": [[0, 1]],
+            "physicsStatic": [1],
+            "physicsDynamic": []
+        })
+        .to_string();
+
+        client.set_map(&map_json).unwrap();
+
+        let predictor_grid = client.predictor.grid().unwrap();
+        let shot_grid = client.shot.grid().unwrap();
+
+        assert!(Rc::ptr_eq(predictor_grid, shot_grid));
+        assert_eq!(predictor_grid.tile_size, 64.0);
+        assert_eq!(predictor_grid.solid_tiles, vec![1]);
+        assert_eq!(predictor_grid.map, vec![vec![0, 1]]);
     }
 
     #[test]

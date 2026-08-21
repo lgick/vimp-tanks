@@ -392,7 +392,11 @@ turn while in contact.
 ## The shot's raycast world
 
 `shot.rs` owns none of the moving geometry: the tracer's ray is cast against
-the map grid it got from MAP_DATA plus the **predicted** subsystems, which
+the map grid built once per MAP_DATA and shared (`Rc`) with the motion
+predictor — `TanksClient::set_map` parses the config a single time, so "the
+ray and the contact see one map" is a property of the construction rather
+than a coincidence of two separate parses — plus the **predicted**
+subsystems, which
 `TanksClient::try_action` hands over for the duration of the shot
 (`ShotWorld { dynamics, remote_tanks }`). Both are read through their **sim**
 views (`MapDynamics::sim_boxes`, `RemoteTanks::sim_boxes`) — where the host

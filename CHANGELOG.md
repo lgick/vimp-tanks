@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- MAP_DATA is parsed exactly once on the client (`TanksClient::set_map`), and
+  the motion predictor and the shot predictor share the resulting wall grid
+  (`Rc<Grid>`) instead of each building its own from a separate parse. The two
+  copies could only be kept identical by hand, so any edit to one `set_map`
+  (a different tile scale, a different set of solid tiles) would have let the
+  ray and the hull contact see different maps.
 - Tanks no longer sink into geometry on impact. The tank body is built with
   `soft_ccd_prediction(width.min(height))` (`core/src/tank.rs`): Rapier's
   default contact prediction distance of 0.002 units is calibrated for a

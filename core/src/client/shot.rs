@@ -11,6 +11,7 @@
 //! (хост помечает события id автора: tracers[7], bombs[5]).
 
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -46,7 +47,7 @@ fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
 use super::map_dynamics::MapDynamics;
 use super::predictor::RenderState;
 use super::remote_tanks::RemoteTanks;
-use super::{ClientMapConfig, Grid};
+use super::Grid;
 
 // максимальный возраст неподтверждённого локального выстрела (мс);
 // старше — хост выстрел отклонил, запись не должна съедать чужие дубли
@@ -112,7 +113,7 @@ pub struct ShotPredictor {
 
     // мир для raycast трассера (динамика карты и чужие танки — в подсистемах
     // предиктора, они приходят в try_fire отдельно, см. ShotWorld)
-    grid: Option<Grid>,
+    grid: Option<Rc<Grid>>,
     tanks: IndexMap<u32, TankTarget>,
 
     // неподтверждённые локальные выстрелы
@@ -163,17 +164,16 @@ impl ShotPredictor {
     /// Данные карты (MAP_DATA): сетка стен для raycast трассера; мировые
     /// координаты = тайлы × step × scale. Геометрию динамики карты держит
     /// `MapDynamics` — общий источник со своим танком.
-    pub fn set_map(&mut self, map_json: &str) -> Result<(), String> {
-        let cfg: ClientMapConfig = serde_json::from_str(map_json).map_err(|e| e.to_string())?;
-
-        self.grid = Some(Grid {
-            map: cfg.map,
-            solid_tiles: cfg.physics_static,
-            tile_size: cfg.step * cfg.scale,
-        });
-
+    pub(crate) fn set_map(&mut self, grid: Rc<Grid>) {
+        self.grid = Some(grid);
         self.reset();
-        Ok(())
+    }
+
+    /// Сетка стен raycast — для проверки того, что обе клиентские
+    /// подсистемы получили одну и ту же карту.
+    #[cfg(test)]
+    pub(crate) fn grid(&self) -> Option<&Rc<Grid>> {
+        self.grid.as_ref()
     }
 
     /// Обновляет позиции танков-целей raycast из дискретного кадра;
@@ -716,6 +716,7 @@ impl ShotPredictor {
 mod tests {
     use super::*;
 
+    use crate::client::ClientMapConfig;
     use crate::client::predicted_set::PredictedBodies;
 
     // модель size 2 (width 8)
@@ -864,6 +865,14 @@ mod tests {
         assert_eq!(tracer[5].as_f64(), Some(20.0));
     }
 
+    // сетка так же, как её строит TanksClient::set_map: разбор один,
+    // объект один
+    fn apply_map(shot: &mut ShotPredictor, json: &str) {
+        let mut cfg: ClientMapConfig = serde_json::from_str(json).unwrap();
+
+        shot.set_map(Rc::new(cfg.take_grid()));
+    }
+
     #[test]
     fn tracer_clips_on_wall() {
         let mut shot = make_shot();
@@ -873,7 +882,8 @@ mod tests {
             row[5] = 1; // стена на x = 50–60
         }
 
-        shot.set_map(
+        apply_map(
+            &mut shot,
             &serde_json::json!({
                 "step": 10,
                 "scale": 1,
@@ -882,8 +892,7 @@ mod tests {
                 "physicsDynamic": []
             })
             .to_string(),
-        )
-        .unwrap();
+        );
 
         let spawn = shot
             .try_fire(&render_at(0.0, 15.0), 1, 0.0, ShotWorld::default())
