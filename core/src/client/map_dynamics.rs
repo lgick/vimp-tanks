@@ -393,8 +393,11 @@ impl PredictedBodies for MapDynamics {
             .bodies()
             .iter()
             .filter(|(_, body)| body.is_predicted())
-            .map(|(key, body)| {
-                let id = self.indices.get(key).copied().unwrap_or_default();
+            .filter_map(|(key, body)| {
+                // тело без записи в indices пропускается: подставленный ноль
+                // перекрыл бы чужую строку (d0) — ровно тот тихий отказ,
+                // ради которого id и перестал браться из позиции в множестве
+                let id = *self.indices.get(key)?;
                 debug_assert_eq!(*key, body_key(id as usize));
 
                 let render = body.render_transform();
@@ -406,11 +409,11 @@ impl PredictedBodies for MapDynamics {
                     body.half_h,
                 );
 
-                PredictedRow {
+                Some(PredictedRow {
                     key_id,
                     id,
                     fields: vec![origin[0], origin[1], render.angle],
-                }
+                })
             })
             .collect()
     }
@@ -942,6 +945,34 @@ mod tests {
         let ids: Vec<u32> = rows.iter().map(|row| row.id).collect();
 
         assert_eq!(ids, vec![0, 2]);
+    }
+
+    // тело, которого нет в indices, пропускается: подставленный ноль
+    // перекрыл бы строку d0 (см. filter_map в render_data)
+    #[test]
+    fn render_data_skips_a_body_without_an_index() {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [0.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 },
+                { "position": [200.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 }
+            ]),
+            1.0,
+        ));
+
+        // запись индекса пропала (рассинхрон реестра с множеством)
+        dynamics.indices.remove("d1");
+
+        for key in ["d0", "d1"] {
+            body_mut(&mut dynamics, key).promote(1000.0);
+        }
+
+        let ids: Vec<u32> = dynamics.render_data().iter().map(|row| row.id).collect();
+
+        assert_eq!(ids, vec![0]);
     }
 
     #[test]

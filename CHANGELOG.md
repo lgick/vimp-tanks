@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-21
+
+Version bump only: the engine pin moves to `vimp-engine` `^0.14.3`
+(`acd0405`). No game code changed.
+
+## [0.12.0] - 2026-08-21
+
 ### Removed
 
 - The unused `map_dynamics_box(key)` method of the client ABI
@@ -14,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `mapDynamics` service exposes only `toWorld` on top of
   `map_dynamics_to_world`, and the shot effect reads its anchor through that.
   `MapDynamics::render_box` stays — it is what `to_world` is built on.
+
+The engine pin moves to `vimp-engine` `^0.14.2` / `vimp-engine-core` `0.8.2`
+in the same release (`efedd4c`).
 
 ## [0.11.2] - 2026-08-21
 
