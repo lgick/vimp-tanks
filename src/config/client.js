@@ -134,6 +134,10 @@ export default {
       assetsBase: ['Map'],
       // компоненты использующие звук
       soundManager: ['ExplosionEffect', 'ShotEffect', 'Bomb', 'Tank'],
+      // геометрия динамики карты (рендерные боксы ящиков): эффект попадания
+      // держит якорь на теле и каждый кадр спрашивает, где тело нарисовано.
+      // Сервис есть только при включённом client-side prediction
+      mapDynamics: ['ShotEffect'],
     },
 
     // звуковые ассеты

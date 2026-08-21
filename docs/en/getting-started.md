@@ -187,6 +187,7 @@ the snapshot schema or the panel. The scenarios:
 | `movement.json` | driving, turning, turret; prediction drift with tight thresholds |
 | `combat.json` | two players, both weapons, explosions, a map with dynamic bodies (`c1`) |
 | `round.json` | bots, friendly fire, death → round end → respawn (invariant 10) |
+| `contact.json` | two tanks in contact: one pushes the other, both predict the remote hull (`remote_tanks.rs`) |
 
 Threshold calibration and the scenario format live in the engine's
 [debugging.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/debugging.md).

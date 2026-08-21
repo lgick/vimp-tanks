@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "seed": 5150,
+  "map": "pool mini",
+  "participants": [
+    { "id": "p1", "name": "P1", "model": "m1" },
+    { "id": "p2", "name": "P2", "model": "m1" }
+  ],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p2", "team": "team1" },
+    { "tick": 40, "op": "key", "who": "p2", "action": "down", "name": "forward" },
+    { "tick": 40, "op": "key", "who": "p2", "action": "down", "name": "left" },
+    { "tick": 100, "op": "key", "who": "p2", "action": "up", "name": "left" },
+    { "tick": 100, "op": "key", "who": "p2", "action": "up", "name": "forward" }
+  ],
+  "unusedSnapshotKeys": ["w1", "w2", "w2e", "c1", "c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 3.5, 0.15, 0.06] },
+  "ticks": 300,
+  "dumpTicks": [100, 140, 300]
+}

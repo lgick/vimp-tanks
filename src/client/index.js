@@ -38,6 +38,24 @@ export default {
   bakers,
   styles,
   hooks: {
+    // сервисы игры для её же parts (движок их не описывает — только раздаёт
+    // тем, кто объявил их в componentDependencies, см. src/config/client.js).
+    // mapDynamics — геометрия предсказанной динамики карты из ядра: по ней
+    // ShotEffect пересчитывает точку удара по ТЕКУЩЕМУ трансформу ящика
+    services(core) {
+      return {
+        mapDynamics: {
+          // локальная точка тела → мировая в рендерном фрейме;
+          // null — ключ неизвестен (карта сменилась, ящика больше нет)
+          toWorld(key, localX, localY) {
+            const point = core.map_dynamics_to_world(key, localX, localY);
+
+            return point.length === 0 ? null : { x: point[0], y: point[1] };
+          },
+        },
+      };
+    },
+
     // авторизация: модель танка пользователя — для реплик движения и выстрелов
     onAuth(core, authData) {
       core.set_model(authData.model);

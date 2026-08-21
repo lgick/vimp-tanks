@@ -1,6 +1,6 @@
 {
   "name": "@vimp-games/tanks",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "VIMP Tanks — игра-плагин для движка VIMP",
   "homepage": "https://github.com/lgick/vimp-tanks#readme",
   "bugs": {
@@ -49,7 +49,7 @@
     "globals": "^16.2.0",
     "happy-dom": "^20.10.6",
     "pixi.js": "8.19.0",
-    "vimp-engine": "^0.12.0",
+    "vimp-engine": "^0.13.0",
     "vite": "^7.1.11",
     "vitest": "^4.1.9"
   }

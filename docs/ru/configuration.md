@@ -144,7 +144,13 @@
 
 - **`componentDependencies`** — какие сервисы инжектируются в компоненты
   (`renderer` → Map; `assetsBase` → Map; `soundManager` → ExplosionEffect,
-  ShotEffect, Bomb, Tank). `assetsBase` — движковая база ассетов этого
+  ShotEffect, Bomb, Tank; `mapDynamics` → ShotEffect). `mapDynamics` —
+  геометрия динамики карты из клиентского ядра (`toWorld(key, localX, localY)`
+  поверх `ClientCore.map_dynamics_to_world`), которую в пул кладёт сам плагин
+  (`hooks.services`, см. [architecture.md](architecture.md)): эффект выстрела
+  держит якорь на теле и спрашивает, где тело нарисовано, в момент рождения
+  попадания. Сервис есть только при включённом client-side prediction —
+  необъявленный сервис молча приходит как `undefined`. `assetsBase` — движковая база ассетов этого
   пакета: `Map` превращает её в `${assetsBase}img/<файл>` для тайл-листов
   и спрайтов динамических тел, которые он грузит (см.
   [extending.md](extending.md#новая-картинка-карты)).

@@ -3,6 +3,11 @@ import BaseEffect from '../BaseEffect.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
 
 export default class ImpactEffect extends BaseEffect {
+  // Осколки живут в мировых координатах и остаются лежать там, где пуля
+  // встретила препятствие, — даже если задетый ящик поедет дальше. Задача
+  // «попасть в правильную точку» решается на стороне ShotEffectController:
+  // он пересчитывает точку удара по актуальному трансформу ящика в момент
+  // запуска эффекта (см. якорь трассера в core/src/client/shot.rs).
   constructor(x, y, impactDirectionX, impactDirectionY, onComplete, assets) {
     super(onComplete);
 

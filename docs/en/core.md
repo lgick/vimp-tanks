@@ -42,6 +42,10 @@ src/
     │                          #   contact pass (walls, predicted bodies)
     ├── predicted_set.rs       # the predicted-world framework: bodies in follow/
     │                          #   predicted mode, reconciliation, error decay
+    ├── map_dynamics.rs        # map dynamics: box geometry, capture into
+    │                          #   prediction, the render and the sim box
+    ├── remote_tanks.rs        # remote tanks in contact: capture with lookahead,
+    │                          #   extrapolation without damping
     └── shot.rs                # gates, dedup, the raycast world
 tests/
 └── sim.rs                     # integration simulation scenarios (cargo test)
@@ -201,6 +205,8 @@ exists. Its config is assembled by the engine's
 | `cycle_weapon(back)` | a local weapon-cycle switch (authoritative confirmation comes via the panel) |
 | `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR. `reset()` also drops the local tank's meta, so the prediction overlay disappears right away instead of waiting for the spectator keyset |
 | `decode_frame(bytes)` | a plain v3 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
+| `map_dynamics_box(key)` | the RENDER box of a map-dynamics body: `[x, y, angle, halfW, halfH]`, where `x`/`y` is the centre; an empty array when the key is unknown |
+| `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
 immediately under a local id (`L1`, `L2`, …) while the request travels to
@@ -307,15 +313,114 @@ passes over the same contact set, using the engine's
 without subsystems the pass is a full no-op, and the motion replica stays
 bit-for-bit what it was — the invariant the parity tests rest on.
 
-The framework is infrastructure: the subsystems that will populate it (map
-dynamics, contacting remote tanks) are not written yet, but the pipe to the
-engine is already in place. `TanksClient` implements the three
+`TanksClient` implements the three
 `GameClientDef` hooks for bodies a game predicts itself and forwards them to
 the sets registered in the predictor: `begin_reconcile(snapshot)` before the
 input replay, `finish_reconcile()` right after it, and `render_rows()` —
 the rows the engine appends to the hot buffer after the local tank's
 predicted tail, where each of them overrides the interpolated row of the
 same entity.
+
+**Map dynamics (`map_dynamics.rs`).** The framework's first subsystem: a box
+the local tank pushes is simulated in the same simulation and in the same
+time as the tank — otherwise it is drawn where it was one interpolation
+buffer ago and the hull drives into it before it starts moving. The scope is
+deliberately narrow: bodies unrelated to the local tank stay in `Follow`.
+Otherwise a box pushed by a *remote* tank would run ahead of that tank's
+sprite, which looks like a push from a distance.
+
+The geometry is set by MAP_DATA (`set_map`) alone and is replaced wholesale;
+there is deliberately no reset method: CLEAR wipes the canvas, not the map,
+and it also arrives at the start of a round **without** a MAP_DATA after it —
+a reset on CLEAR would erase the boxes for good. Capture into prediction is
+an overlap with the local tank's OBB inflated by `CAPTURE_MARGIN`, plus the
+transitive closure over neighbours with the same margin (a stack of boxes
+moves as a whole); the set is capped at 12 bodies, otherwise the 20-box wall
+of `canopy` would be pulled into prediction in its entirety.
+
+The coordinate convention: boxes are stored by their **centre**, while in the
+snapshot `c1`/`c2` `[x, y, angle]` is the "object origin" (the position of
+the Rapier body); the conversions are the engine's `box_center_from_origin`
+and the subsystem's `origin_from_box_center`. There are two views of a box
+and a consumer must take its own:
+
+| View | Method | For whom | Why |
+| --- | --- | --- | --- |
+| render | `render_box` / `to_world` (plus `map_dynamics_box` / `map_dynamics_to_world` across the WASM boundary) | the game's sprites and effects | where the box is **drawn** (state plus the smoothing error) |
+| sim | `sim_box` / `sim_boxes` / `to_local` | the shot raycast | where the box is **on the host**; otherwise the local hit diverges from the server one |
+
+The sim box of a `Follow` body comes from the last authoritative frame, not
+from the interpolated transform: the latter lags by `interpolation.delay`,
+and a ray would miss a moving box.
+
+**Remote tanks (`remote_tanks.rs`).** The framework's second subsystem. The
+local tank is drawn "now", the remote ones with the interpolation delay, and
+a push shows the gap **on both sides at once**: the pusher drives into the
+drawn hull (the client never resolved that contact at all), and the one being
+pushed sees a gap — the pusher is drawn where it was 100 ms ago. Bodies are
+read from the model block (`m1`), keyed `model:gameId`; the local tank is
+excluded from the set (the predictor owns it), and a tank that disappeared
+from its block is dropped — the interpolated sample carries no null markers.
+The hull is `size×4 : size×3` with the mass properties of the model's
+`fixture`, exactly as on the host.
+
+Two decisions are deliberate and load-bearing:
+
+- **the capture check runs ahead of the contact.** "The hulls already
+  overlap" never fires here: on the pushed player's screen the remote tank is
+  drawn where it was at `serverNow − delay`, i.e. it has **not arrived yet**.
+  So the check uses the authoritative position shifted forward along its own
+  velocity (`CAPTURE_LOOKAHEAD`, 0.2 s); capturing slightly early is harmless
+  (the predicted body just follows the host exactly), being late is not.
+  There is no transitive closure — a chain of tanks pushing tanks
+  practically never happens, while extra predicted bodies mean extra jitter
+  on other screens. The set is capped at 6 bodies.
+- **the extrapolation runs without damping.** The remote player's input is
+  unknown, and a driving tank keeps the throttle down, so its velocity over
+  those 100 ms is roughly constant. Applying the model's damping would brake
+  the remote tank for no reason (`linear: 3` eats ~23 % of the speed over
+  100 ms) — hence a path of its own, separate from the local tank, whose
+  damping is applied (`motion.rs`).
+
+Wrecks (`condition 0`) are captured just like live tanks: the host does not
+remove their body from the world (`remove_player` is called only when a
+player leaves, switches teams or a new round starts), so they stay a pushable
+obstacle. The render row repeats the model block in full, `angvel` included —
+without the angular velocity (frame v5) the remote hull would not finish its
+turn while in contact.
+
+## The shot's raycast world
+
+`shot.rs` owns none of the moving geometry: the tracer's ray is cast against
+the map grid it got from MAP_DATA plus the **predicted** subsystems, which
+`TanksClient::try_action` hands over for the duration of the shot
+(`ShotWorld { dynamics, remote_tanks }`). Both are read through their **sim**
+views (`MapDynamics::sim_boxes`, `RemoteTanks::sim_boxes`) — where the host
+sees the world "now". The drawn transforms lag by `interpolation.delay`, and
+a ray cast against them would miss a moving box or a driving tank, so the
+local hit would disagree with the authoritative one. A remote tank the
+`RemoteTanks` set does not hold (no contact, no prediction) falls back to its
+row from the frame.
+
+The ray is cast in the sim frame, but the tracer is *drawn* among the
+interpolated sprites, so the end point is carried back into the render frame
+of whatever was hit: `to_world` for a box, `to_render_point` for a hull.
+Without that the tracer would end in mid-air, short of the box that is drawn
+somewhere else.
+
+**The hit anchor.** A hit into map dynamics adds a ninth element to the
+tracer row — `[key, localX, localY]`, the impact point in the box's own
+frame. It exists only in the locally predicted row: it is built in
+`build_tracer`, travels as spawn JSON through `applyGameData`, and never
+touches the frame schema (`w1` stays 8 fields), so authoritative tracers
+arrive without it (`data[8] === undefined`). The consumer is
+`ShotEffectController` (`src/client/parts/effects/shot/`): the box may drive
+on during the 45–80 ms of the tracer animation, so the impact point is
+recomputed from its **current** transform (the `mapDynamics` service over
+`map_dynamics_to_world`) instead of the one captured at the shot — otherwise
+the debris cloud lands behind the box that has moved away. After the spawn
+the debris stays put: it does not follow the box (`ImpactEffect` works in
+world coordinates).
 
 ## Tank body
 
@@ -350,7 +455,7 @@ compensate for it — hence the low value in
 
 | Layer | Where | Covers |
 | --- | --- | --- |
-| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), shots (gates/dedup/RTT) |
+| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios) — **required to run for any edit to motion in the core or `models.js`** |
 | Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |

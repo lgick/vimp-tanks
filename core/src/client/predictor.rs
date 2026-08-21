@@ -26,6 +26,8 @@ use vimp_engine_core::config::PLAYER_STATE_LEN;
 use vimp_engine_core::physics::normalize_angle;
 
 use super::Grid;
+use super::map_dynamics::MapDynamics;
+use super::remote_tanks::RemoteTanks;
 use super::predicted_set::PredictedBodies;
 
 // максимальный возраст записей истории ввода (мс)
@@ -271,10 +273,47 @@ impl Predictor {
         &self.sets
     }
 
+    /// Подсистема динамики карты, если она зарегистрирована: её геометрию
+    /// читают потребители за WASM-границей (рендерные боксы эффектов) и
+    /// raycast выстрела (симуляционные).
+    pub fn map_dynamics(&self) -> Option<&MapDynamics> {
+        self.sets
+            .iter()
+            .find_map(|set| set.as_any().downcast_ref::<MapDynamics>())
+    }
+
+    pub fn map_dynamics_mut(&mut self) -> Option<&mut MapDynamics> {
+        self.sets
+            .iter_mut()
+            .find_map(|set| set.as_any_mut().downcast_mut::<MapDynamics>())
+    }
+
+    /// Подсистема чужих танков, если она зарегистрирована: её корпуса —
+    /// цели raycast выстрела (симуляционные боксы).
+    pub fn remote_tanks(&self) -> Option<&RemoteTanks> {
+        self.sets
+            .iter()
+            .find_map(|set| set.as_any().downcast_ref::<RemoteTanks>())
+    }
+
+    /// Та же подсистема на запись: ей задают свой gameId (исключение из
+    /// множества) и сбрасывают её по CLEAR/MAP_DATA.
+    pub fn remote_tanks_mut(&mut self) -> Option<&mut RemoteTanks> {
+        self.sets
+            .iter_mut()
+            .find_map(|set| set.as_any_mut().downcast_mut::<RemoteTanks>())
+    }
+
     /// Стены карты (MAP_DATA) — тайловая сетка для сбора контактов.
     pub fn set_map(&mut self, map_json: &str) -> Result<(), String> {
         let cfg: super::ClientMapConfig =
             serde_json::from_str(map_json).map_err(|e| e.to_string())?;
+
+        // геометрия динамики — целиком из этой карты (см. map_dynamics.rs:
+        // сброса по CLEAR у неё намеренно нет)
+        if let Some(dynamics) = self.map_dynamics_mut() {
+            dynamics.set_map(&cfg);
+        }
 
         self.grid = Some(Grid {
             map: cfg.map,
@@ -1167,6 +1206,14 @@ mod tests {
 
         fn set_mut(&mut self) -> &mut PredictedSet {
             &mut self.set
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
         }
 
         fn update(&mut self, _game: &InterpolatedGame) {}

@@ -143,7 +143,14 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
 
 - **`componentDependencies`** — which services get injected into which
   components (`renderer` → Map; `assetsBase` → Map; `soundManager` →
-  ExplosionEffect, ShotEffect, Bomb, Tank). `assetsBase` is the engine's
+  ExplosionEffect, ShotEffect, Bomb, Tank; `mapDynamics` → ShotEffect).
+  `mapDynamics` is the map-dynamics geometry from the client core
+  (`toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`),
+  handed to the pool by the plugin itself (`hooks.services`, see
+  [architecture.md](architecture.md)): the shot effect keeps an anchor on a
+  body and asks where that body is drawn at the moment the impact spawns. The
+  service exists only with client-side prediction on — an undeclared service
+  silently arrives as `undefined`. `assetsBase` is the engine's
   asset base for this package: `Map` turns it into
   `${assetsBase}img/<file>` for the tile sheets and dynamic-body sprites
   it loads (see [extending.md](extending.md#new-map-image)).

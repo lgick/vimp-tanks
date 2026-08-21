@@ -86,6 +86,14 @@ Rendering is built from engine MVC components + this plugin's PixiJS
 entities (`src/client/parts/`) on two canvases (`vimp`, `radar`); procedural
 textures are baked at startup from `src/client/bakers/`.
 
+A part that needs something out of the game core gets it as a **service**:
+`ClientPlugin.hooks.services(core)` (`src/client/index.js`) returns the game
+services, the engine merges them into its own pool and hands them out by
+`componentDependencies` (`src/config/client.js`). Today that is `mapDynamics`
+— `toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`, by
+which `ShotEffect` anchors its debris to the box the shot hit (see
+[core.md](core.md)).
+
 ### Texture and particle lifecycle
 
 - **Texture ownership**: baked assets (`bakedAssets` in `src/config/client.js`)

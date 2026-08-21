@@ -190,6 +190,7 @@ npm run sim -- --scenario tests/scenarios/movement.json   # один сцена�
 | `movement.json` | езда, повороты, башня; дрейф предикта с тугими порогами |
 | `combat.json` | двое игроков, оба оружия, взрывы, карта с динамикой (`c1`) |
 | `round.json` | боты, friendly fire, смерть → конец раунда → респаун (инвариант 10) |
+| `contact.json` | два танка в контакте: один толкает другого, оба предсказывают чужой корпус (`remote_tanks.rs`) |
 
 Калибровка порогов и формат сценария — в
 [debugging.md](https://github.com/lgick/vimp-engine/blob/main/docs/ru/debugging.md)

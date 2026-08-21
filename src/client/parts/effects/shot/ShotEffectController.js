@@ -16,8 +16,21 @@ export default class ShotEffectController extends Container {
     this.soundPositionY = data[5];
     this.hit = data[6];
 
+    // якорь попадания в динамику карты — девятый элемент строки, только
+    // у своего локально предсказанного трассера (см. build_tracer в
+    // core/src/client/shot.rs); авторитетные трассеры (длина 8) его не
+    // несут — data[8] === undefined
+    this.anchorKey = null;
+    this.anchorLocalX = 0;
+    this.anchorLocalY = 0;
+
+    if (Array.isArray(data[8])) {
+      [this.anchorKey, this.anchorLocalX, this.anchorLocalY] = data[8];
+    }
+
     this._assets = assets;
     this._soundManager = dependencies.soundManager;
+    this._mapDynamics = dependencies.mapDynamics || null;
 
     this.tracer = null;
     this.impact = null;
@@ -73,8 +86,29 @@ export default class ShotEffectController extends Container {
     }
 
     if (this.hit) {
-      const dx = this.endPositionX - this.startPositionX;
-      const dy = this.endPositionY - this.startPositionY;
+      let impactX = this.endPositionX;
+      let impactY = this.endPositionY;
+
+      // ящик мог уехать за 45-80 мс анимации трассера (TracerEffect): точка
+      // удара пересчитывается из ТЕКУЩЕГО трансформа ящика, а не из того,
+      // что был в момент выстрела, — иначе облако осколков окажется позади
+      // уехавшего ящика. Дальше осколки остаются лежать на месте: за ящиком
+      // они не следуют (ImpactEffect работает в мире)
+      if (this.anchorKey !== null && this._mapDynamics) {
+        const point = this._mapDynamics.toWorld(
+          this.anchorKey,
+          this.anchorLocalX,
+          this.anchorLocalY,
+        );
+
+        if (point) {
+          impactX = point.x;
+          impactY = point.y;
+        }
+      }
+
+      const dx = impactX - this.startPositionX;
+      const dy = impactY - this.startPositionY;
       const dist = Math.hypot(dx, dy);
       let impactDirectionX = 0,
         impactDirectionY = 0;
@@ -85,8 +119,8 @@ export default class ShotEffectController extends Container {
       }
 
       this.impact = new ImpactEffect(
-        this.endPositionX,
-        this.endPositionY,
+        impactX,
+        impactY,
         impactDirectionX,
         impactDirectionY,
         this._onImpactComplete.bind(this), // callback

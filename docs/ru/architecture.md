@@ -85,6 +85,14 @@ scripts/     — обработка аудио, копирование карт�
 плагина (`src/client/parts/`) на двух полотнах (`vimp`, `radar`);
 процедурные текстуры запекаются при старте из `src/client/bakers/`.
 
+Part, которому нужно что-то из игрового ядра, получает это **сервисом**:
+`ClientPlugin.hooks.services(core)` (`src/client/index.js`) возвращает
+игровые сервисы, движок подмешивает их в свой пул и раздаёт по
+`componentDependencies` (`src/config/client.js`). Сегодня это `mapDynamics` —
+`toWorld(key, localX, localY)` поверх `ClientCore.map_dynamics_to_world`,
+которым `ShotEffect` привязывает осколки к задетому выстрелом ящику (см.
+[core.md](core.md)).
+
 ### Жизненный цикл текстур и частиц
 
 - **Владение текстурами**: запечённые ассеты (`bakedAssets` в

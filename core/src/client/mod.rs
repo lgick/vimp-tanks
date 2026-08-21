@@ -4,8 +4,10 @@
 //! в кадре. Сетевой буфер, hot-буфер рендер-тика и очередь событийных
 //! кадров — движковые, живут в `vimp_engine_core::client::game::ClientState<TanksClient>`.
 
+pub mod map_dynamics;
 pub mod predicted_set;
 pub mod predictor;
+pub mod remote_tanks;
 pub mod shot;
 
 use serde::Deserialize;
@@ -15,7 +17,9 @@ use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::{EngineClientConfig, FieldValue, PLAYER_STATE_LEN, SnapshotConfig};
 
 use crate::config::TanksClientConfig;
+use map_dynamics::MapDynamics;
 use predictor::Predictor;
+use remote_tanks::RemoteTanks;
 use shot::ShotPredictor;
 
 /// Данные карты (MAP_DATA клиента; лишние поля игнорируются). Общие для
@@ -25,6 +29,10 @@ use shot::ShotPredictor;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClientMapConfig {
     pub(crate) step: f32,
+    /// Ключ блока динамики этой карты (`c1`/`c2`): именно им динамика
+    /// приходит в кадре, и по нему же она уходит в рендер
+    #[serde(default)]
+    pub(crate) set_id: Option<String>,
     #[serde(default = "default_scale")]
     pub(crate) scale: f32,
     pub(crate) map: Vec<Vec<i32>>,
@@ -45,6 +53,19 @@ pub(crate) struct ClientDynamicObject {
     pub(crate) angle: f32,
     pub(crate) width: f32,
     pub(crate) height: f32,
+    // масса и демпфирование тела: реплика обязана видеть их так же, как
+    // хост, иначе предсказанный ящик разъедется с авторитетным. Нулевая
+    // плотность даёт статику, дефолт углового демпфирования — как у Rapier
+    #[serde(default)]
+    pub(crate) density: f32,
+    #[serde(default)]
+    pub(crate) linear_damping: f32,
+    #[serde(default = "default_angular_damping")]
+    pub(crate) angular_damping: f32,
+}
+
+pub(crate) fn default_angular_damping() -> f32 {
+    0.01
 }
 
 pub(crate) struct Grid {
@@ -83,6 +104,20 @@ pub struct TanksClient {
 }
 
 impl TanksClient {
+    /// Динамика карты: геометрия ящиков и её предиктор (потребители —
+    /// эффекты игры за WASM-границей и raycast выстрела).
+    pub fn map_dynamics(&self) -> Option<&MapDynamics> {
+        self.predictor.map_dynamics()
+    }
+
+    // чужие танки заводятся заново кадрами, поэтому их, в отличие от
+    // геометрии карты, сбросить можно (и нужно: полотно очищено)
+    fn reset_remote_tanks(&mut self) {
+        if let Some(tanks) = self.predictor.remote_tanks_mut() {
+            tanks.reset();
+        }
+    }
+
     // гейт визуального спавна/выстрела: предикт активен и свой танк жив
     fn alive_with_state(&self) -> bool {
         self.predictor.has_state() && self.my_tank_meta.is_some_and(|meta| meta.0 != 0)
@@ -93,8 +128,21 @@ impl GameClientDef for TanksClient {
     type Config = TanksClientConfig;
 
     fn new(cfg: &Self::Config, engine_cfg: &EngineClientConfig) -> Self {
-        let predictor = Predictor::new(engine_cfg.time_step_ms, &cfg.player_keys, &cfg.models);
+        let mut predictor = Predictor::new(engine_cfg.time_step_ms, &cfg.player_keys, &cfg.models);
         let shot = ShotPredictor::new(&cfg.models, &cfg.weapons, cfg.seed);
+
+        // динамика карты считается в тех же шагах, что и свой танк: ящик,
+        // который танк толкает, обязан ехать в его времени, а не отставать
+        // на буфер интерполяции
+        predictor.add_predicted_set(Box::new(MapDynamics::new(&engine_cfg.snapshot)));
+
+        // чужие танки в контакте — в тех же шагах: толкающий и толкаемый
+        // обязаны видеть контакт в одном времени, иначе один въезжает
+        // корпусом, а другой видит зазор
+        predictor.add_predicted_set(Box::new(RemoteTanks::new(
+            &cfg.models,
+            &engine_cfg.snapshot,
+        )));
 
         Self {
             models: cfg.models.clone(),
@@ -158,6 +206,11 @@ impl GameClientDef for TanksClient {
     // отслеживание своего танка в выданном кадре: reset предикта по
     // forceReset камеры, дискретные поля, freeze при уничтожении
     fn track_frame(&mut self, my_game_id: Option<u32>, frame: &FrameData) {
+        // свой танк предсказывает предиктор — из множества чужих он исключён
+        if let Some(tanks) = self.predictor.remote_tanks_mut() {
+            tanks.set_own_game_id(my_game_id);
+        }
+
         if frame.camera.as_ref().is_some_and(|c| c.force_reset) {
             self.predictor.reset();
         }
@@ -201,6 +254,12 @@ impl GameClientDef for TanksClient {
 
     fn update_world_interpolated(&mut self, game: &InterpolatedGame) {
         self.shot.update_world_interpolated(game);
+
+        // эталон интерполяции для подсистем предсказанного мира: по нему
+        // решается возврат тела из предсказания
+        for set in self.predictor.predicted_sets_mut() {
+            set.update(game);
+        }
     }
 
     // predicted-хвост hot-буфера: keyId, gameId, x, y, angle, gun, vx, vy,
@@ -260,6 +319,7 @@ impl GameClientDef for TanksClient {
     /// Данные карты (MAP_DATA): стены предикта, мир raycast + сброс предикта.
     fn set_map(&mut self, map_json: &str) -> Result<(), String> {
         self.predictor.reset();
+        self.reset_remote_tanks();
         self.predictor.set_map(map_json)?;
         self.shot.set_map(map_json)
     }
@@ -272,6 +332,7 @@ impl GameClientDef for TanksClient {
     /// Полный сброс (порт CLEAR).
     fn reset(&mut self) {
         self.predictor.reset();
+        self.reset_remote_tanks();
         self.shot.reset();
         self.my_tank_meta = None;
     }
@@ -290,7 +351,14 @@ impl GameClientDef for TanksClient {
         }
 
         let render = self.predictor.render_state()?;
-        let spawn = self.shot.try_fire(&render, my_game_id?, local_now)?;
+
+        // геометрия для луча — из подсистем предиктора: попадание считается
+        // по симуляционным боксам, иначе оно разойдётся с авторитетным
+        let world = shot::ShotWorld {
+            dynamics: self.predictor.map_dynamics(),
+            remote_tanks: self.predictor.remote_tanks(),
+        };
+        let spawn = self.shot.try_fire(&render, my_game_id?, local_now, world)?;
 
         Some(spawn.to_string())
     }
@@ -672,6 +740,14 @@ mod tests {
             &mut self.set
         }
 
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+
         fn update(&mut self, _game: &InterpolatedGame) {}
 
         fn snapshot_bodies(
@@ -698,6 +774,36 @@ mod tests {
         fn finish_reconcile(&mut self) {
             self.log.borrow_mut().push("finish");
         }
+    }
+
+    // MAP_DATA заводит динамику карты, а CLEAR (reset) её не стирает:
+    // CLEAR приходит и на старте раунда, без MAP_DATA следом
+    #[test]
+    fn map_data_builds_dynamics_and_reset_keeps_them() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+        let map_json = serde_json::json!({
+            "step": 32,
+            "scale": 1.0,
+            "setId": "c1",
+            "map": [[0, 0]],
+            "physicsStatic": [1],
+            "physicsDynamic": [
+                { "position": [100.0, 0.0], "angle": 0.0, "width": 40.0, "height": 20.0,
+                  "density": 1.0 }
+            ]
+        })
+        .to_string();
+
+        client.set_map(&map_json).unwrap();
+
+        // бокс хранится центром: угол (100, 0) + (halfW, halfH) = (120, 10)
+        let obb = client.map_dynamics().unwrap().render_box("d0").unwrap();
+
+        assert_eq!((obb.x, obb.y), (120.0, 10.0));
+
+        client.reset();
+
+        assert!(client.map_dynamics().unwrap().render_box("d0").is_some());
     }
 
     #[test]

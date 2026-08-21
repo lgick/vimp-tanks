@@ -108,6 +108,32 @@ impl ClientCore {
     pub fn sync_panel(&mut self, panel_json: &str) {
         self.state.sync_panel(panel_json);
     }
+
+    /// РЕНДЕРНЫЙ бокс тела динамики карты по ключу (`d0`, `d1`, ...):
+    /// `[x, y, angle, halfW, halfH]`, где x/y — ЦЕНТР бокса. Пустой массив —
+    /// ключ неизвестен (карта без динамики, чужой ключ). Геттер именно по
+    /// ключу: эффект держит один якорь и читает его каждый кадр, копировать
+    /// ради этого всю динамику карты незачем.
+    pub fn map_dynamics_box(&self, key: &str) -> Vec<f32> {
+        self.state
+            .game()
+            .map_dynamics()
+            .and_then(|dynamics| dynamics.render_box(key))
+            .map(|obb| vec![obb.x, obb.y, obb.angle, obb.half_w, obb.half_h])
+            .unwrap_or_default()
+    }
+
+    /// Локальная точка тела → мировая в РЕНДЕРНОМ фрейме: `[x, y]` либо
+    /// пустой массив (ключ неизвестен). Точку попадания считает симуляция,
+    /// а рисуется она там, где ящик виден.
+    pub fn map_dynamics_to_world(&self, key: &str, local_x: f32, local_y: f32) -> Vec<f32> {
+        self.state
+            .game()
+            .map_dynamics()
+            .and_then(|dynamics| dynamics.to_world(key, local_x, local_y))
+            .map(|point| point.to_vec())
+            .unwrap_or_default()
+    }
 }
 
 vimp_engine_core::export_client_core_abi!(ClientCore);

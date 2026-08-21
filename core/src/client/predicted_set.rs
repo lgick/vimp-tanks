@@ -23,6 +23,8 @@
 //! (`integrate_predicted`, `decay_error`), поэтому контакт со своим танком
 //! разрешается в одном шаге, а replay реконсиляции переигрывает и её тела.
 
+use std::any::Any;
+
 use indexmap::IndexMap;
 
 use vimp_engine_core::client::game::PredictedRow;
@@ -400,6 +402,12 @@ pub trait PredictedBodies {
     fn set(&self) -> &PredictedSet;
     fn set_mut(&mut self) -> &mut PredictedSet;
 
+    /// Типизированный доступ к подсистеме: предиктор держит их за трейтом,
+    /// а потребителю (геттеры динамики карты через WASM-границу) нужна
+    /// конкретная подсистема, а не её общая механика.
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
     /// Как тела читаются из интерполированных игровых данных.
     fn update(&mut self, game: &InterpolatedGame);
 
@@ -488,6 +496,14 @@ mod tests {
 
         fn set_mut(&mut self) -> &mut PredictedSet {
             &mut self.set
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
         }
 
         fn update(&mut self, _game: &InterpolatedGame) {}

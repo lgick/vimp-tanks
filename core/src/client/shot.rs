@@ -20,7 +20,6 @@ use vimp_engine_core::client::interpolator::InterpolatedGame;
 use vimp_engine_core::client::raycast::{Box2, ray_vs_box, ray_vs_grid};
 use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::FieldValue;
-use vimp_engine_core::physics::deg_to_rad;
 use vimp_engine_core::rng::Rng;
 
 // индексы полей строки m1 (x, y, angle, gunRotation, vx, vy, engineLoad,
@@ -44,7 +43,9 @@ fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
     }
 }
 
+use super::map_dynamics::MapDynamics;
 use super::predictor::RenderState;
+use super::remote_tanks::RemoteTanks;
 use super::{ClientMapConfig, Grid};
 
 // максимальный возраст неподтверждённого локального выстрела (мс);
@@ -61,6 +62,22 @@ struct TankTarget {
     y: f32,
     angle: f32,
     size: f32,
+}
+
+/// Геометрия предсказанного мира для raycast трассера: подсистемы живут
+/// в предикторе (`MapDynamics`, `RemoteTanks`), а не в `ShotPredictor`, и
+/// приходят сюда на время выстрела.
+#[derive(Clone, Copy, Default)]
+pub struct ShotWorld<'a> {
+    pub dynamics: Option<&'a MapDynamics>,
+    pub remote_tanks: Option<&'a RemoteTanks>,
+}
+
+// что луч встретил ближе всего: стену, ящик динамики карты или чужой танк
+enum RayTarget {
+    Wall,
+    Dynamic(String),
+    Tank(u32),
 }
 
 struct PendingShot {
@@ -93,10 +110,9 @@ pub struct ShotPredictor {
     // патроны из панели: имя оружия → количество (нет ключа = неизвестно)
     ammo: IndexMap<String, f64>,
 
-    // мир для raycast трассера
+    // мир для raycast трассера (динамика карты и чужие танки — в подсистемах
+    // предиктора, они приходят в try_fire отдельно, см. ShotWorld)
     grid: Option<Grid>,
-    dynamic_sizes: IndexMap<u8, [f32; 2]>,  // index → [halfW, halfH]
-    dynamic_states: IndexMap<u8, [f32; 3]>, // index → [x, y, angle]
     tanks: IndexMap<u32, TankTarget>,
 
     // неподтверждённые локальные выстрелы
@@ -128,8 +144,6 @@ impl ShotPredictor {
             cooldown_until: IndexMap::new(),
             ammo: IndexMap::new(),
             grid: None,
-            dynamic_sizes: IndexMap::new(),
-            dynamic_states: IndexMap::new(),
             tanks: IndexMap::new(),
             pending_tracers: VecDeque::new(),
             pending_bombs: VecDeque::new(),
@@ -146,11 +160,11 @@ impl ShotPredictor {
         self.current_weapon = self.model.as_ref().map(|m| m.current_weapon.clone());
     }
 
-    /// Данные карты (MAP_DATA): сетка стен и размеры динамических объектов;
-    /// мировые координаты = тайлы × step × scale.
+    /// Данные карты (MAP_DATA): сетка стен для raycast трассера; мировые
+    /// координаты = тайлы × step × scale. Геометрию динамики карты держит
+    /// `MapDynamics` — общий источник со своим танком.
     pub fn set_map(&mut self, map_json: &str) -> Result<(), String> {
-        let cfg: ClientMapConfig =
-            serde_json::from_str(map_json).map_err(|e| e.to_string())?;
+        let cfg: ClientMapConfig = serde_json::from_str(map_json).map_err(|e| e.to_string())?;
 
         self.grid = Some(Grid {
             map: cfg.map,
@@ -158,31 +172,12 @@ impl ShotPredictor {
             tile_size: cfg.step * cfg.scale,
         });
 
-        self.dynamic_sizes.clear();
-        self.dynamic_states.clear();
-
-        for (index, item) in cfg.physics_dynamic.iter().enumerate() {
-            let index = index as u8;
-
-            self.dynamic_sizes.insert(
-                index,
-                [item.width * cfg.scale / 2.0, item.height * cfg.scale / 2.0],
-            );
-            self.dynamic_states.insert(
-                index,
-                [
-                    item.position[0] * cfg.scale,
-                    item.position[1] * cfg.scale,
-                    deg_to_rad(item.angle),
-                ],
-            );
-        }
-
         self.reset();
         Ok(())
     }
 
-    /// Обновляет позиции целей raycast из дискретного кадра.
+    /// Обновляет позиции танков-целей raycast из дискретного кадра;
+    /// динамику карты ведёт `MapDynamics`.
     pub fn update_world(&mut self, snapshot: &DecodedSnapshot) {
         for block in &snapshot.blocks {
             match &block.data {
@@ -206,58 +201,31 @@ impl ShotPredictor {
                         }
                     }
                 }
-                BlockData::IndexedNoNull8(items) => {
-                    for (index, fields) in items {
-                        if self.dynamic_states.contains_key(index) {
-                            self.dynamic_states.insert(
-                                *index,
-                                [
-                                    field_f32(fields, 0),
-                                    field_f32(fields, 1),
-                                    field_f32(fields, 2),
-                                ],
-                            );
-                        }
-                    }
-                }
                 _ => {}
             }
         }
     }
 
-    /// Обновляет позиции целей raycast из интерполированного сэмпла.
-    /// Ключ блока — имя модели (для строк-танков, `models`-реестр этой
-    /// структуры) или id набора карты (для динамики) — та же конвенция,
-    /// что использует `ClientState::set_model` (см. `client/mod.rs`).
+    /// Обновляет позиции танков-целей raycast из интерполированного сэмпла.
+    /// Ключ блока — имя модели (`models`-реестр этой структуры), та же
+    /// конвенция, что у `ClientState::set_model` (см. `client/mod.rs`);
+    /// блок динамики карты читает `MapDynamics`.
     pub fn update_world_interpolated(&mut self, game: &InterpolatedGame) {
         for (key, rows) in &game.blocks {
-            if self.models.contains_key(key) {
-                for row in rows {
-                    self.tanks.insert(
-                        row.id,
-                        TankTarget {
-                            x: field_f32(&row.fields, TANK_FIELD_X),
-                            y: field_f32(&row.fields, TANK_FIELD_Y),
-                            angle: field_f32(&row.fields, TANK_FIELD_ANGLE),
-                            size: field_u8(&row.fields, TANK_FIELD_SIZE) as f32,
-                        },
-                    );
-                }
-            } else {
-                for row in rows {
-                    let index = row.id as u8;
+            if !self.models.contains_key(key) {
+                continue;
+            }
 
-                    if self.dynamic_states.contains_key(&index) {
-                        self.dynamic_states.insert(
-                            index,
-                            [
-                                field_f32(&row.fields, 0),
-                                field_f32(&row.fields, 1),
-                                field_f32(&row.fields, 2),
-                            ],
-                        );
-                    }
-                }
+            for row in rows {
+                self.tanks.insert(
+                    row.id,
+                    TankTarget {
+                        x: field_f32(&row.fields, TANK_FIELD_X),
+                        y: field_f32(&row.fields, TANK_FIELD_Y),
+                        angle: field_f32(&row.fields, TANK_FIELD_ANGLE),
+                        size: field_u8(&row.fields, TANK_FIELD_SIZE) as f32,
+                    },
+                );
             }
         }
     }
@@ -296,8 +264,8 @@ impl ShotPredictor {
         };
 
         let len = self.weapons.len() as isize;
-        let mut key = self.weapons.get_index_of(current).unwrap_or(0) as isize
-            + if back { -1 } else { 1 };
+        let mut key =
+            self.weapons.get_index_of(current).unwrap_or(0) as isize + if back { -1 } else { 1 };
 
         if key < 0 {
             key = len - 1;
@@ -312,12 +280,14 @@ impl ShotPredictor {
     }
 
     /// Локальный выстрел: гейт (кулдаун/патроны) + данные для рендера
-    /// в формате снапшота ({ w1: [...] } или { w2: {...} }).
+    /// в формате снапшота ({ w1: [...] } или { w2: {...} }). `world` —
+    /// предсказанная геометрия для луча (см. [`ShotWorld`]).
     pub fn try_fire(
         &mut self,
         render: &RenderState,
         my_game_id: u32,
         local_now: f64,
+        world: ShotWorld<'_>,
     ) -> Option<Value> {
         let weapon_name = self.current_weapon.clone()?;
         let weapon = self.weapons.get(&weapon_name)?.clone();
@@ -325,7 +295,13 @@ impl ShotPredictor {
         self.model.as_ref()?;
 
         // кулдаун (fireRate в секундах)
-        if local_now < self.cooldown_until.get(&weapon_name).copied().unwrap_or(0.0) {
+        if local_now
+            < self
+                .cooldown_until
+                .get(&weapon_name)
+                .copied()
+                .unwrap_or(0.0)
+        {
             return None;
         }
 
@@ -340,12 +316,14 @@ impl ShotPredictor {
             self.ammo.insert(weapon_name.clone(), ammo - consumption);
         }
 
-        self.cooldown_until
-            .insert(weapon_name.clone(), local_now + weapon.fire_rate as f64 * 1000.0);
+        self.cooldown_until.insert(
+            weapon_name.clone(),
+            local_now + weapon.fire_rate as f64 * 1000.0,
+        );
 
         match weapon.kind {
             WeaponKind::Hitscan => {
-                let tracer = self.build_tracer(&weapon, render, my_game_id);
+                let tracer = self.build_tracer(&weapon, render, my_game_id, world);
 
                 self.pending_tracers.push_back(PendingShot {
                     time: local_now,
@@ -532,7 +510,13 @@ impl ShotPredictor {
 
     // собирает данные трассера: реплика формул Tank::muzzle_position/
     // fire_direction + приближённый raycast вместо world.cast_ray
-    fn build_tracer(&mut self, weapon: &WeaponConfig, render: &RenderState, shooter: u32) -> Value {
+    fn build_tracer(
+        &mut self,
+        weapon: &WeaponConfig,
+        render: &RenderState,
+        shooter: u32,
+        world: ShotWorld<'_>,
+    ) -> Value {
         let model = self.model.as_ref().unwrap();
         let total_angle = render.angle + render.gun_rotation;
 
@@ -560,62 +544,117 @@ impl ShotPredictor {
         }
 
         let range = weapon.range.unwrap_or(1000.0);
-        let distance = self.cast_ray(muzzle, direction, range, shooter);
-        let hit = distance.is_some();
-        let end_distance = distance.unwrap_or(range);
+        let hit = self.cast_ray(muzzle, direction, range, shooter, world);
+        let end_distance = hit.as_ref().map_or(range, |(distance, _)| *distance);
+        let mut end_x = muzzle[0] + direction[0] * end_distance;
+        let mut end_y = muzzle[1] + direction[1] * end_distance;
 
-        json!([
+        // якорь попадания в динамику карты (девятый элемент строки, только
+        // у своего локально предсказанного трассера — в кадр он не уходит):
+        // по нему потребитель привязывает облако осколков к трансформу
+        // задетого ящика, а не к мировой точке
+        let mut anchor = None;
+
+        if let Some((_, RayTarget::Dynamic(key))) = &hit
+            && let Some(dynamics) = world.dynamics
+            && let Some(local) = dynamics.to_local(key, end_x, end_y)
+        {
+            anchor = Some(json!([key, local[0], local[1]]));
+
+            // луч шёл по симуляционной геометрии, а ящик нарисован в другом
+            // фрейме (сглаживание/интерполяция) — конец трассера переносится
+            // в ту же материальную точку нарисованного ящика, иначе на едущем
+            // ящике он обрывался бы в воздухе
+            if let Some(drawn) = dynamics.to_world(key, local[0], local[1]) {
+                end_x = drawn[0];
+                end_y = drawn[1];
+            }
+        }
+
+        // попадание в чужой танк переносится так же: луч посчитан по корпусу
+        // «сейчас», а нарисован танк там, где был serverNow − delay
+        if let Some((_, RayTarget::Tank(game_id))) = &hit
+            && let Some(tanks) = world.remote_tanks
+            && let Some(drawn) = tanks.to_render_point(*game_id, end_x, end_y)
+        {
+            end_x = drawn[0];
+            end_y = drawn[1];
+        }
+
+        let mut tracer = json!([
             muzzle[0],
             muzzle[1],
-            muzzle[0] + direction[0] * end_distance,
-            muzzle[1] + direction[1] * end_distance,
+            end_x,
+            end_y,
             render.x,
             render.y,
-            hit,
+            hit.is_some(),
             shooter,
-        ])
+        ]);
+
+        if let Some(anchor) = anchor
+            && let Some(row) = tracer.as_array_mut()
+        {
+            row.push(anchor);
+        }
+
+        tracer
     }
 
     // ближайшее пересечение со стенами, динамикой карты и танками (кроме
     // своего); None = промах в пределах range
-    fn cast_ray(&self, origin: [f32; 2], dir: [f32; 2], range: f32, my_id: u32) -> Option<f32> {
-        let mut closest: Option<f32> = None;
+    fn cast_ray(
+        &self,
+        origin: [f32; 2],
+        dir: [f32; 2],
+        range: f32,
+        my_id: u32,
+        world: ShotWorld<'_>,
+    ) -> Option<(f32, RayTarget)> {
+        let mut closest: Option<(f32, RayTarget)> = None;
 
-        let mut consider = |distance: Option<f32>| {
+        let mut consider = |distance: Option<f32>, target: RayTarget| {
             if let Some(distance) = distance
-                && closest.is_none_or(|c| distance < c)
+                && closest
+                    .as_ref()
+                    .is_none_or(|(nearest, _)| distance < *nearest)
             {
-                closest = Some(distance);
+                closest = Some((distance, target));
             }
         };
 
         if let Some(grid) = &self.grid {
-            consider(ray_vs_grid(
-                origin,
-                dir,
-                range,
-                &grid.map,
-                &grid.solid_tiles,
-                grid.tile_size,
-            ));
+            consider(
+                ray_vs_grid(
+                    origin,
+                    dir,
+                    range,
+                    &grid.map,
+                    &grid.solid_tiles,
+                    grid.tile_size,
+                ),
+                RayTarget::Wall,
+            );
         }
 
-        for (index, state) in &self.dynamic_states {
-            let size = &self.dynamic_sizes[index];
-
-            consider(ray_vs_box(
-                origin,
-                dir,
-                range,
-                &Box2 {
-                    x: state[0],
-                    y: state[1],
-                    angle: state[2],
-                    half_w: size[0],
-                    half_h: size[1],
-                },
-            ));
+        // симуляционные, а не рендерные боксы: попадание должно совпасть
+        // с авторитетным, а не с картинкой (см. map_dynamics.rs)
+        if let Some(dynamics) = world.dynamics {
+            for (key, obb) in dynamics.sim_boxes() {
+                consider(
+                    ray_vs_box(origin, dir, range, &obb),
+                    RayTarget::Dynamic(key.to_string()),
+                );
+            }
         }
+
+        // корпуса «сейчас», как их видит хост; интерполированные отстают на
+        // interpolation.delay, и по едущему танку луч ушёл бы мимо — та же
+        // причина, по которой динамика карты идёт через sim_boxes
+        let sim_tanks = world
+            .remote_tanks
+            .map(|tanks| tanks.sim_boxes())
+            .unwrap_or_default();
 
         for (id, tank) in &self.tanks {
             if *id == my_id {
@@ -623,18 +662,19 @@ impl ShotPredictor {
             }
 
             // габариты танка: width = size·4, height = size·3 (как Tank)
-            consider(ray_vs_box(
-                origin,
-                dir,
-                range,
-                &Box2 {
+            let obb = sim_tanks
+                .iter()
+                .find(|(sim_id, _)| sim_id == id)
+                .map(|(_, obb)| *obb)
+                .unwrap_or(Box2 {
                     x: tank.x,
                     y: tank.y,
                     angle: tank.angle,
                     half_w: tank.size * 2.0,
                     half_h: tank.size * 1.5,
-                },
-            ));
+                });
+
+            consider(ray_vs_box(origin, dir, range, &obb), RayTarget::Tank(*id));
         }
 
         closest
@@ -676,9 +716,11 @@ impl ShotPredictor {
 mod tests {
     use super::*;
 
-    // модель size 2 (width 8) + hitscan w1 и explosive w2
-    fn make_shot() -> ShotPredictor {
-        let models: IndexMap<String, ModelConfig> = serde_json::from_value(serde_json::json!({
+    use crate::client::predicted_set::PredictedBodies;
+
+    // модель size 2 (width 8)
+    fn models() -> IndexMap<String, ModelConfig> {
+        serde_json::from_value(serde_json::json!({
             "m1": {
                 "currentWeapon": "w1",
                 "size": 2,
@@ -701,7 +743,11 @@ mod tests {
                 "gunCenterSpeed": 10.0
             }
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    // модель + hitscan w1 и explosive w2
+    fn make_shot() -> ShotPredictor {
         let weapons: IndexMap<String, WeaponConfig> = serde_json::from_value(serde_json::json!({
             "w1": {
                 "type": "hitscan",
@@ -719,7 +765,7 @@ mod tests {
         }))
         .unwrap();
 
-        let mut shot = ShotPredictor::new(&models, &weapons, 42);
+        let mut shot = ShotPredictor::new(&models(), &weapons, 42);
 
         shot.set_model("m1");
         shot
@@ -751,17 +797,29 @@ mod tests {
         .unwrap();
         let mut shot = ShotPredictor::new(&models, &weapons, 42);
 
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 0.0).is_none());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, ShotWorld::default())
+                .is_none()
+        );
     }
 
     #[test]
     fn cooldown_blocks_next_shot() {
         let mut shot = make_shot();
 
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 0.0).is_some());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, ShotWorld::default())
+                .is_some()
+        );
         // fireRate 0.5 c → до 500 мс выстрел заблокирован
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 400.0).is_none());
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 500.0).is_some());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 400.0, ShotWorld::default())
+                .is_none()
+        );
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 500.0, ShotWorld::default())
+                .is_some()
+        );
     }
 
     #[test]
@@ -769,18 +827,29 @@ mod tests {
         let mut shot = make_shot();
 
         // неизвестный боезапас не блокирует (хост авторитетен)
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 0.0).is_some());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, ShotWorld::default())
+                .is_some()
+        );
 
         shot.sync_panel(&["w1:1".to_string()]);
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 1000.0).is_some());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 1000.0, ShotWorld::default())
+                .is_some()
+        );
         // патроны списаны локально: 1 − 1 = 0
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 2000.0).is_none());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 2000.0, ShotWorld::default())
+                .is_none()
+        );
     }
 
     #[test]
     fn tracer_muzzle_formula_and_miss() {
         let mut shot = make_shot();
-        let spawn = shot.try_fire(&render_at(10.0, 20.0), 2, 0.0).unwrap();
+        let spawn = shot
+            .try_fire(&render_at(10.0, 20.0), 2, 0.0, ShotWorld::default())
+            .unwrap();
         let tracer = tracer_of(&spawn);
 
         // дуло: x + width·0.55 (width = size·4 = 8) при angle 0
@@ -816,7 +885,9 @@ mod tests {
         )
         .unwrap();
 
-        let spawn = shot.try_fire(&render_at(0.0, 15.0), 1, 0.0).unwrap();
+        let spawn = shot
+            .try_fire(&render_at(0.0, 15.0), 1, 0.0, ShotWorld::default())
+            .unwrap();
         let tracer = tracer_of(&spawn);
 
         assert_eq!(tracer[6], Value::Bool(true));
@@ -857,12 +928,247 @@ mod tests {
             }],
         });
 
-        let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0).unwrap();
+        let spawn = shot
+            .try_fire(&render_at(0.0, 0.0), 1, 0.0, ShotWorld::default())
+            .unwrap();
         let tracer = tracer_of(&spawn);
 
         // чужой танк: центр 60, halfW = size·2 = 4 → грань на 56
         assert_eq!(tracer[6], Value::Bool(true));
         assert!((tracer[2].as_f64().unwrap() - 56.0).abs() < 1e-3);
+    }
+
+    // — предсказанный мир в луче (динамика карты и чужие танки) —
+
+    // блок динамики c1 и блок модели m1 — как в схеме снапшота игры
+    fn snapshot_config() -> vimp_engine_core::config::SnapshotConfig {
+        use vimp_engine_core::config::{BlockSchema, SnapshotConfig};
+
+        let dynamics: BlockSchema = serde_json::from_value(serde_json::json!({
+            "id": 5, "kind": "indexedNoNull8", "class": "hot", "optionalFrom": 3,
+            "fields": [
+                { "name": "x", "ty": "f32", "interp": "lerp" },
+                { "name": "y", "ty": "f32", "interp": "lerp" },
+                { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+                { "name": "vx", "ty": "f32", "interp": "lerp" },
+                { "name": "vy", "ty": "f32", "interp": "lerp" },
+                { "name": "angvel", "ty": "f32", "interp": "lerp" }
+            ]
+        }))
+        .unwrap();
+        let model: BlockSchema = serde_json::from_value(serde_json::json!({
+            "id": 1, "kind": "indexed8", "class": "hot",
+            "fields": [
+                { "name": "x", "ty": "f32", "interp": "lerp" },
+                { "name": "y", "ty": "f32", "interp": "lerp" },
+                { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+                { "name": "gunRotation", "ty": "f32", "interp": "lerpAngle" },
+                { "name": "vx", "ty": "f32", "interp": "lerp" },
+                { "name": "vy", "ty": "f32", "interp": "lerp" },
+                { "name": "engineLoad", "ty": "f32", "interp": "lerp" },
+                { "name": "condition", "ty": "u8" },
+                { "name": "size", "ty": "u8" },
+                { "name": "team", "ty": "u8" },
+                { "name": "angvel", "ty": "f32", "interp": "lerp" }
+            ]
+        }))
+        .unwrap();
+        let mut keys = IndexMap::new();
+
+        keys.insert("c1".to_string(), dynamics);
+        keys.insert("m1".to_string(), model);
+
+        SnapshotConfig {
+            version: 5,
+            port: 5,
+            keys,
+        }
+    }
+
+    // один ящик: угол объекта (x, y − 10), 20×20 → halfW/halfH 10
+    fn dynamics_at(x: f32, y: f32) -> MapDynamics {
+        let cfg: ClientMapConfig = serde_json::from_value(serde_json::json!({
+            "step": 10, "scale": 1, "setId": "c1", "map": [[0]], "physicsStatic": [1],
+            "physicsDynamic": [
+                { "position": [x, y - 10.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 }
+            ]
+        }))
+        .unwrap();
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        dynamics.set_map(&cfg);
+        dynamics
+    }
+
+    // авторитетный кадр блока динамики: [x, y, angle, vx, vy, angvel]
+    fn dynamics_snapshot(values: [f32; 6]) -> DecodedSnapshot {
+        use vimp_engine_core::client::unpack::DecodedBlock;
+
+        let mut items = IndexMap::new();
+
+        items.insert(0u8, values.iter().map(|v| FieldValue::F32(*v)).collect());
+
+        DecodedSnapshot {
+            blocks: vec![DecodedBlock {
+                key: "c1".to_string(),
+                key_id: 5,
+                data: BlockData::IndexedNoNull8(items),
+            }],
+        }
+    }
+
+    // интерполированный сэмпл блока динамики: [x, y, angle]
+    fn dynamics_game(values: [f32; 3]) -> InterpolatedGame {
+        use vimp_engine_core::client::interpolator::InterpolatedRow;
+
+        let mut blocks = IndexMap::new();
+
+        blocks.insert(
+            "c1".to_string(),
+            vec![InterpolatedRow {
+                id: 0,
+                fields: values.iter().map(|v| FieldValue::F32(*v)).collect(),
+            }],
+        );
+
+        InterpolatedGame { blocks }
+    }
+
+    // строка чужого танка (size 10 → корпус 40×30, живой)
+    fn tank_row(x: f32, y: f32) -> Vec<FieldValue> {
+        vec![
+            FieldValue::F32(x),
+            FieldValue::F32(y),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::U8(3),
+            FieldValue::U8(10),
+            FieldValue::U8(2),
+            FieldValue::F32(0.0),
+        ]
+    }
+
+    fn tanks_game(x: f32, y: f32) -> InterpolatedGame {
+        use vimp_engine_core::client::interpolator::InterpolatedRow;
+
+        let mut blocks = IndexMap::new();
+
+        blocks.insert(
+            "m1".to_string(),
+            vec![InterpolatedRow {
+                id: 2,
+                fields: tank_row(x, y),
+            }],
+        );
+
+        InterpolatedGame { blocks }
+    }
+
+    fn tanks_snapshot(x: f32, y: f32) -> DecodedSnapshot {
+        use vimp_engine_core::client::unpack::DecodedBlock;
+
+        let mut items = IndexMap::new();
+
+        items.insert(2u8, Some(tank_row(x, y)));
+
+        DecodedSnapshot {
+            blocks: vec![DecodedBlock {
+                key: "m1".to_string(),
+                key_id: 1,
+                data: BlockData::Indexed8(items),
+            }],
+        }
+    }
+
+    #[test]
+    fn tracer_clips_on_map_dynamics_and_carries_the_anchor() {
+        let mut shot = make_shot();
+        // ящик по курсу: центр (60, 0), halfW 10 → левая грань на x = 50
+        let dynamics = dynamics_at(50.0, 0.0);
+        let world = ShotWorld {
+            dynamics: Some(&dynamics),
+            remote_tanks: None,
+        };
+        let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6], Value::Bool(true));
+        assert!((tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3);
+
+        // девятый элемент — якорь: ключ тела и точка удара в его фрейме
+        let anchor = tracer[8].as_array().unwrap();
+
+        assert_eq!(anchor[0], Value::String("d0".to_string()));
+        assert!((anchor[1].as_f64().unwrap() + 10.0).abs() < 1e-3);
+        assert!(anchor[2].as_f64().unwrap().abs() < 1e-3);
+    }
+
+    #[test]
+    fn tracer_casts_by_sim_geometry_and_ends_on_the_drawn_box() {
+        let mut shot = make_shot();
+        // нарисован далеко в стороне (центр (60, 1000)), а у хоста — на
+        // линии огня (центр (60, 0)): по рендерному боксу луч промахнулся бы
+        let mut dynamics = dynamics_at(50.0, 1000.0);
+
+        dynamics.begin_reconcile(&dynamics_snapshot([50.0, -10.0, 0.0, 0.0, 0.0, 0.0]));
+        dynamics.update(&dynamics_game([50.0, 990.0, 0.0]));
+
+        let world = ShotWorld {
+            dynamics: Some(&dynamics),
+            remote_tanks: None,
+        };
+        let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6], Value::Bool(true));
+        // конец трассера — та же материальная точка НАРИСОВАННОГО ящика
+        assert!((tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3);
+        assert!((tracer[3].as_f64().unwrap() - 1000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn tracer_casts_by_sim_hull_of_a_remote_tank_and_ends_on_the_drawn_one() {
+        let mut shot = make_shot();
+        let mut tanks = RemoteTanks::new(&models(), &snapshot_config());
+
+        // нарисован в (60, 20) — мимо луча (halfH 15), авторитетно в (60, 0)
+        tanks.set_own_game_id(Some(1));
+        tanks.update(&tanks_game(60.0, 20.0));
+        tanks.begin_reconcile(&tanks_snapshot(60.0, 0.0));
+        shot.update_world_interpolated(&tanks_game(60.0, 20.0));
+
+        let world = ShotWorld {
+            dynamics: None,
+            remote_tanks: Some(&tanks),
+        };
+        let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        // хост по своей геометрии попадает — попадает и клиент
+        assert_eq!(tracer[6], Value::Bool(true));
+        // точка удара перенесена на нарисованный корпус (левая грань)
+        assert!((tracer[2].as_f64().unwrap() - 40.0).abs() < 1e-3);
+        assert!((tracer[3].as_f64().unwrap() - 20.0).abs() < 1e-3);
+        // якорь — только у динамики карты; в танк его нет
+        assert_eq!(tracer.len(), 8);
+    }
+
+    #[test]
+    fn without_remote_tanks_the_ray_follows_the_drawn_hull() {
+        let mut shot = make_shot();
+
+        shot.update_world_interpolated(&tanks_game(60.0, 20.0));
+
+        let spawn = shot
+            .try_fire(&render_at(0.0, 0.0), 1, 0.0, ShotWorld::default())
+            .unwrap();
+
+        // нарисованный корпус выше линии огня — промах
+        assert_eq!(tracer_of(&spawn)[6], Value::Bool(false));
     }
 
     #[test]
@@ -877,7 +1183,9 @@ mod tests {
         // знает, экстраполировать нечем
         render.vx = 100.0;
 
-        let spawn = shot.try_fire(&render, 3, 0.0).unwrap();
+        let spawn = shot
+            .try_fire(&render, 3, 0.0, ShotWorld::default())
+            .unwrap();
         let bomb = &spawn["w2"]["L1"];
 
         assert!((bomb[0].as_f64().unwrap() - 10.0).abs() < 1e-3);
@@ -886,14 +1194,17 @@ mod tests {
         assert_eq!(bomb[5].as_u64(), Some(3)); // ownerId
 
         // вторая бомба до подтверждения первой — заблокирована
-        assert!(shot.try_fire(&render, 3, 1000.0).is_none());
+        assert!(
+            shot.try_fire(&render, 3, 1000.0, ShotWorld::default())
+                .is_none()
+        );
     }
 
     #[test]
     fn filter_suppresses_own_tracer_fifo() {
         let mut shot = make_shot();
 
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0); // pending w1
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default()); // pending w1
 
         let mut game = serde_json::json!({
             "w1": [
@@ -922,7 +1233,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0); // pending L1
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default()); // pending L1
 
         let mut game = serde_json::json!({
             "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] }
@@ -939,7 +1250,10 @@ mod tests {
         assert_eq!(map["w2"]["L1"][1].as_f64(), Some(5.0));
 
         // гейт снят: следующая бомба разрешена
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 2, 1000.0).is_some());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 2, 1000.0, ShotWorld::default())
+                .is_some()
+        );
     }
 
     #[test]
@@ -947,7 +1261,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default());
 
         let mut game = serde_json::json!({ "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] } });
 
@@ -972,7 +1286,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default());
 
         let mut game = serde_json::json!({ "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] } });
 
@@ -996,7 +1310,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default());
 
         let mut game = serde_json::json!({
             "w2": { "b2": null, "c3": [1.0, 1.0, 0, 8, 300, 5] }
@@ -1008,7 +1322,10 @@ mod tests {
         // null взрыва и чужая бомба проходят, pending не тронут
         assert!(map["w2"]["b2"].is_null());
         assert!(map["w2"]["c3"].is_array());
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 2, 1000.0).is_none());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 2, 1000.0, ShotWorld::default())
+                .is_none()
+        );
     }
 
     #[test]
@@ -1016,7 +1333,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0); // pending L1
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default()); // pending L1
 
         // спустя PENDING_MAX_AGE подтверждения нет — null очищает холст
         let mut game = serde_json::json!({});
@@ -1055,14 +1372,17 @@ mod tests {
 
         shot.cycle_weapon(false);
         shot.sync_panel(&["w1:5".to_string()]);
-        shot.try_fire(&render_at(0.0, 0.0), 1, 0.0);
+        shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, ShotWorld::default());
         shot.reset();
 
         assert_eq!(shot.current_weapon.as_deref(), Some("w1"));
         assert!(shot.ammo.is_empty());
         assert!(shot.pending_bombs.is_empty());
         // кулдаун сброшен
-        assert!(shot.try_fire(&render_at(0.0, 0.0), 1, 1.0).is_some());
+        assert!(
+            shot.try_fire(&render_at(0.0, 0.0), 1, 1.0, ShotWorld::default())
+                .is_some()
+        );
     }
 
     #[test]
@@ -1070,7 +1390,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0);
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default());
 
         let mut game = serde_json::json!({ "w2": { "a1": [5.0, 5.0, 0, 8, 300, 2] } });
 
@@ -1094,7 +1414,7 @@ mod tests {
         let mut shot = make_shot();
 
         shot.cycle_weapon(false);
-        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0); // pending L1, без подтверждения
+        shot.try_fire(&render_at(0.0, 0.0), 2, 0.0, ShotWorld::default()); // pending L1, без подтверждения
 
         shot.reset_local();
 
