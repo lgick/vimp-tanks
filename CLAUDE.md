@@ -34,6 +34,22 @@ the plugin contract itself) are documented in the engine's own repo, not
 here — link out to `https://github.com/lgick/vimp-engine/blob/main/docs/en/...`
 rather than duplicating.
 
+## Changelog
+
+`CHANGELOG.md` (English, [Keep a Changelog]) is updated unasked in the same
+change as the code, under `## [Unreleased]`. Tests, refactors and `docs/` are
+not entries. Sub-headings: `### ⚠️ Breaking` (+ its `### Migration`) ·
+`### Added` · `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`.
+
+**Releasing is manual here** — this repo has no `npm run release`, a release
+commit edits `package.json`, `core/Cargo.toml` and the lock files by hand, and
+nothing dates the journal for you. So the same release commit must rename
+`## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and open an empty
+`## [Unreleased]` above it; otherwise the journal drifts from what is
+published on npm.
+
+[Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
+
 ## Commands
 
 ```bash
