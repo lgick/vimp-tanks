@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-08-26
+
 ### Added
 
 - `scripts/build-game-manifest.js` now also writes `min`/`max` on the
@@ -14,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the existing generated `regExp` — the engine uses them to show a range
   hint next to the field's label and to validate without a native browser
   popup (needs `vimp-engine` with that `formBuilder.js` support).
+
+## [0.13.0] - 2026-08-21
+
+### Fixed
+
+- `MapDynamics::render_data` (`core/src/client/map_dynamics.rs`) skips a
+  predicted body with no entry in `indices` instead of falling back to id
+  `0` — the fallback silently overwrote row `d0`'s render data with a
+  stranger's.
 
 ## [0.12.1] - 2026-08-21
 
