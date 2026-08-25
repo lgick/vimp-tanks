@@ -51,9 +51,12 @@ export default {
   // applyRoomOverrides.js (roomDefaults.maxPlayers; hostDefaults.timers
   // roomTimeMin/roomTimeMax) — единый источник, не независимая копия.
   // unit:'s' — движок делит мс на 1000 для показа; numeric:true — текстовое
-  // поле хранит и валидирует число. Нативная валидация (regExp→pattern) —
-  // не авторитетная граница, только UX-подсказка: значения всё равно
-  // клампятся в applyRoomOverrides.js
+  // поле хранит и валидирует число. build-game-manifest.js кладёт рядом с
+  // regExp ещё и min/max из тех же чисел: движок показывает их подсказкой
+  // «(min–max)» в подписи поля и проверяет сам, строкой в #lobby-error
+  // (нативных браузерных попапов больше нет). Всё это UX-подсказка, не
+  // авторитетная граница: значения всё равно клампятся в
+  // applyRoomOverrides.js движка
   roomForm: [
     { name: 'maxPlayers', control: 'text', label: 'Max players', numeric: true },
     { name: 'roundTime', control: 'text', label: 'Round time', unit: 's', numeric: true },
