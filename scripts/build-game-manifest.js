@@ -103,12 +103,16 @@ const roomValues = {
   map: gameConfig.currentMap,
 };
 
-// границы полей формы (regExp — движок v3 больше не знает min/max у текстовых
-// полей): те же числа, что клампует applyRoomOverrides.js, а не независимая
-// копия. UX-подсказка, не авторитетная граница — сама граница накладывается
-// хостом при создании комнаты
+// границы полей формы: те же числа, что клампует applyRoomOverrides.js, а не
+// независимая копия. regExp остаётся настоящим (native-совместимым)
+// ограничением; min/max вдобавок едут клиенту для подсказки диапазона в
+// подписи поля и собственной проверки границ (vimp-engine formBuilder.js
+// collectFormErrors) — у текстовых полей v3 нет своего нативного min/max.
+// UX-подсказка, не авторитетная граница — сама граница накладывается хостом
+// при создании комнаты
 const { roomTimeMin, roomTimeMax } = hostDefaults.timers;
 const roomTimeRegExp = rangeToPattern(roomTimeMin / 1000, roomTimeMax / 1000);
+const roomTimeBounds = { min: roomTimeMin / 1000, max: roomTimeMax / 1000 };
 const maxPlayersRegExp = rangeToPattern(1, gameConfig.roomDefaults.maxPlayers);
 
 const fieldRegExp = {
@@ -117,9 +121,15 @@ const fieldRegExp = {
   mapTime: roomTimeRegExp,
 };
 
+const fieldBounds = {
+  maxPlayers: { min: 1, max: gameConfig.roomDefaults.maxPlayers },
+  roundTime: roomTimeBounds,
+  mapTime: roomTimeBounds,
+};
+
 const roomForm = gameConfig.roomForm.map(field =>
   field.name in fieldRegExp
-    ? { ...field, regExp: fieldRegExp[field.name] }
+    ? { ...field, regExp: fieldRegExp[field.name], ...fieldBounds[field.name] }
     : field,
 );
 

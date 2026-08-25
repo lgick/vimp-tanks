@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/build-game-manifest.js` now also writes `min`/`max` on the
+  generated `maxPlayers`/`roundTime`/`mapTime` `roomForm` fields, alongside
+  the existing generated `regExp` — the engine uses them to show a range
+  hint next to the field's label and to validate without a native browser
+  popup (needs `vimp-engine` with that `formBuilder.js` support).
+
 ## [0.12.1] - 2026-08-21
 
 Version bump only: the engine pin moves to `vimp-engine` `^0.14.3`
