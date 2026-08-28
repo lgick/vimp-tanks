@@ -16,7 +16,7 @@ export default {
   // тексты формы (заголовок + help-секции): auth.pug — нейтральный каркас,
   // игровые тексты подставляет AuthView из этих данных
   texts: {
-    title: 'Tank Battle',
+    title: 'Tanks',
     sections: [
       {
         heading: 'Controls',
