@@ -1,4 +1,6 @@
 import { vi } from 'vitest';
+import RecordingSocketManager from 'vimp-engine/devtools/RecordingSocketManager.js';
+import { offlinePlayerData } from 'vimp-engine/lib/offlinePlayerData.js';
 import {
   coreAvailable,
   makeCore,
@@ -48,93 +50,34 @@ export const loadConfig = async () => {
   return config;
 };
 
-// Перечень всех отправителей SocketManager, которые дёргает host-фасад.
-const SENDER_METHODS = [
-  'sendConfig',
-  'sendAuthData',
-  'sendAuthResult',
-  'sendPing',
-  'sendClear',
-  'sendTechInform',
-  'sendMap',
-  'sendFirstShot',
-  'sendFirstVote',
-  'sendShot',
-  'sendPanel',
-  'sendStat',
-  'sendChat',
-  'sendVote',
-  'sendKeySet',
-  'sendPlayerDefaultShot',
-  'sendSpectatorDefaultShot',
-  'sendGameInform',
-  'sendRoundEnd',
-  'sendSoundCue',
-  'sendName',
-];
-
-// Фейковый SocketManager: вместо отправки в сеть пишет все исходящие кадры.
-export class FakeSocketManager {
-  constructor() {
-    this.frames = []; // [{ method, socketId, args }]
-    this._game = null;
-    this._panel = null;
-    this._stat = null;
-
-    for (const method of SENDER_METHODS) {
-      this[method] = (socketId, ...args) => {
-        this.frames.push({ method, socketId, args });
-      };
-    }
-  }
-
-  injectServices(game, panel, stat) {
-    this._game = game;
-    this._panel = panel;
-    this._stat = stat;
-  }
-
-  addUser() {}
-  removeUser() {}
-
-  close(socketId, code, key, arr) {
-    this.frames.push({ method: 'close', socketId, args: [code, key, arr] });
-  }
-
-  // все кадры указанного метода
-  framesOf(method) {
-    return this.frames.filter(f => f.method === method);
-  }
-
+// Транспорт тестов — движковый RecordingSocketManager: он наследует боевой
+// SocketManager и берёт список отправителей из его прототипа, поэтому новый
+// кадр движка (sendAccolades и любой следующий за ним) появляется здесь сам.
+// Ручной список отправителей, стоявший тут раньше, отставал от движка молча —
+// до первого `is not a function` посреди онбординга.
+export class FakeSocketManager extends RecordingSocketManager {
   // последний sendShot для конкретного сокета; бинарный кадр декодируется
   // клиентским ядром в прежнюю форму [snapshot, camera, serverTime, seq]
   lastShot(socketId) {
-    const shots = this.frames.filter(
-      f => f.method === 'sendShot' && f.socketId === socketId,
-    );
+    const frame = this.lastFrame(socketId);
 
-    if (!shots.length) {
-      return null;
-    }
-
-    const frame = decodeShot(shots[shots.length - 1].args[0]);
-
-    return [frame.snapshot, frame.camera, frame.serverTime, frame.seq];
+    return frame
+      ? [frame.snapshot, frame.camera, frame.serverTime, frame.seq]
+      : null;
   }
 
   // последний sendShot целиком (включая player-блок предикшена)
   lastFrame(socketId) {
-    const shots = this.frames.filter(
-      f => f.method === 'sendShot' && f.socketId === socketId,
+    const shots = this.framesOf('sendShot').filter(
+      f => f.socketId === socketId,
     );
 
-    return shots.length
-      ? decodeShot(shots[shots.length - 1].args[0])
-      : null;
+    return shots.length ? decodeShot(shots[shots.length - 1].args[0]) : null;
   }
 
+  // алиас движкового clearFrames() — историческое имя тестов игры
   clear() {
-    this.frames.length = 0;
+    this.clearFrames();
   }
 }
 
@@ -152,7 +95,12 @@ export const createHost = async ({ seed = 42, game = {}, opts = {} } = {}) => {
   const core = makeCore({ seed });
   const socket = new FakeSocketManager();
   const gameConfig = { ...config.get('game'), ...game };
-  const host = new HostGame(gameConfig, socket, core, hostPlugin, opts);
+  // мастера в тестах нет: без заглушки PlayerDataSync и Accolades уходят в
+  // настоящий fetch по относительному URL и шумят отказом в каждом тесте
+  const host = new HostGame(gameConfig, socket, core, hostPlugin, {
+    playerDataFetch: offlinePlayerData(),
+    ...opts,
+  });
 
   return { host, socket, core, config };
 };
