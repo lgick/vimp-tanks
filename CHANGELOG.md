@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Rebuilt against `vimp-engine` 0.23.0 and `vimp-engine-core` 0.9.0. Nothing
+  in the game had to change: `dispatch`/`abi_describe` arrive from the
+  `export_game_core_abi!` macro, and `engineApi` stays 4. The engine no
+  longer rejects a package for being older than itself, so this update is
+  the game following the engine by choice, not by necessity.
+
 ## [0.13.1] - 2026-08-26
 
 ### Added
