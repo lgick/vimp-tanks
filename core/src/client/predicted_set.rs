@@ -98,6 +98,10 @@ pub struct PredictedBody {
     /// `last_server` — это стартовый трансформ, ему верить нельзя
     pub has_server: bool,
     pub last_server: ServerState,
+    /// Уровень тела на 2.5D-карте: контакты считаются только между телами,
+    /// чьи маски уровней пересекаются. Заполняют подсистемы (`MapDynamics`
+    /// — из карты, `RemoteTanks` — из строки кадра); по умолчанию земля.
+    pub level: u8,
 }
 
 impl PredictedBody {
@@ -125,6 +129,7 @@ impl PredictedBody {
                 angle: transform.angle,
                 ..ServerState::default()
             },
+            level: 0,
         }
     }
 

@@ -41,7 +41,9 @@ const makeMap = (data, assetsBase) =>
   new Map(data, {}, { renderer, assetsBase });
 
 beforeEach(() => {
-  load = vi.spyOn(Assets, 'load').mockImplementation(() => new Promise(() => {}));
+  load = vi
+    .spyOn(Assets, 'load')
+    .mockImplementation(() => new Promise(() => {}));
 });
 
 afterEach(() => {
@@ -81,5 +83,80 @@ describe('Map: база URL картинок', () => {
     expect(load).not.toHaveBeenCalled();
     expect(map._assetUrl).toBe(null);
     expect(map.mapSprite).toBe(null);
+  });
+});
+
+// 2.5D: слой уровня 1 (плита моста) обязан лежать выше любого наземного
+// слоя, а под локальным игроком — становиться полупрозрачным.
+describe('Map: слои 2.5D', () => {
+  const bridgeData = {
+    ...staticData,
+    layer: 1,
+    level: 1,
+    map: [
+      [0, 5],
+      [0, 0],
+    ],
+    tiles: [5],
+    floor: [5],
+    step: 10,
+  };
+
+  // сервис игры levelView (src/client/levelView.js) — фейк с теми же
+  // геттерами: парту нужны только level/x/y
+  const levelView = (level, x, y) => ({ level, x, y });
+
+  // onRender выходит раньше, если карта ещё не запечена: спрайт подставляется
+  // вручную — WebGL в happy-dom не поднять
+  const readyBridge = view => {
+    const map = new Map(
+      bridgeData,
+      {},
+      { renderer, assetsBase: '/build/', levelView: view },
+    );
+
+    map.mapSprite = {};
+
+    return map;
+  };
+
+  it('статический слой уровня 1 получает шаг zIndex', () => {
+    const ground = makeMap(staticData, '/build/');
+    const bridge = makeMap(bridgeData, '/build/');
+
+    expect(ground.zIndex).toBe(1);
+    expect(bridge.zIndex).toBe(101);
+  });
+
+  it('плита гаснет, когда локальный игрок под ней', () => {
+    // игрок на уровне 0 в тайле (col 1, row 0) — это тайл пола моста
+    const bridge = readyBridge(levelView(0, 15, 5));
+
+    for (let i = 0; i < 200; i += 1) {
+      bridge.onRender();
+    }
+
+    expect(bridge.alpha).toBeLessThan(0.5);
+  });
+
+  it('плита остаётся непрозрачной, когда игрок рядом с мостом', () => {
+    // тот же уровень 0, но тайл (col 0, row 0) — не пол моста
+    const bridge = readyBridge(levelView(0, 5, 5));
+
+    for (let i = 0; i < 200; i += 1) {
+      bridge.onRender();
+    }
+
+    expect(bridge.alpha).toBe(1);
+  });
+
+  it('игрок на самом мосту плиту не гасит', () => {
+    const bridge = readyBridge(levelView(1, 15, 5));
+
+    for (let i = 0; i < 200; i += 1) {
+      bridge.onRender();
+    }
+
+    expect(bridge.alpha).toBe(1);
   });
 });

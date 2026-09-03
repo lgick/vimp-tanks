@@ -19,27 +19,30 @@ use serde_json::{Map, Value, json};
 use crate::config::{ModelConfig, WeaponConfig, WeaponKind};
 use vimp_engine_core::client::interpolator::InterpolatedGame;
 use vimp_engine_core::client::raycast::{Box2, ray_vs_box, ray_vs_grid};
+use vimp_engine_core::map::MapLevels;
 use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::FieldValue;
 use vimp_engine_core::rng::Rng;
 
 // индексы полей строки m1 (x, y, angle, gunRotation, vx, vy, engineLoad,
-// condition, size, teamId) — позиционный контракт со схемой opcodes.js.
+// condition, size, teamId, angvel, z, level) — позиционный контракт со
+// схемой src/config/snapshot.js.
 const TANK_FIELD_X: usize = 0;
 const TANK_FIELD_Y: usize = 1;
 const TANK_FIELD_ANGLE: usize = 2;
 const TANK_FIELD_SIZE: usize = 8;
+const TANK_FIELD_LEVEL: usize = 12;
 
 fn field_f32(fields: &[FieldValue], i: usize) -> f32 {
-    match fields[i] {
-        FieldValue::F32(v) => v,
+    match fields.get(i) {
+        Some(FieldValue::F32(v)) => *v,
         _ => 0.0,
     }
 }
 
 fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
-    match fields[i] {
-        FieldValue::U8(v) => v,
+    match fields.get(i) {
+        Some(FieldValue::U8(v)) => *v,
         _ => 0,
     }
 }
@@ -47,7 +50,6 @@ fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
 use super::map_dynamics::MapDynamics;
 use super::predictor::RenderState;
 use super::remote_tanks::RemoteTanks;
-use super::Grid;
 
 // максимальный возраст неподтверждённого локального выстрела (мс);
 // старше — хост выстрел отклонил, запись не должна съедать чужие дубли
@@ -63,6 +65,8 @@ struct TankTarget {
     y: f32,
     angle: f32,
     size: f32,
+    /// уровень корпуса: сегмент луча поражает только цели своего уровня
+    level: u8,
 }
 
 /// Геометрия предсказанного мира для raycast трассера: подсистемы живут
@@ -113,7 +117,7 @@ pub struct ShotPredictor {
 
     // мир для raycast трассера (динамика карты и чужие танки — в подсистемах
     // предиктора, они приходят в try_fire отдельно, см. ShotWorld)
-    grid: Option<Rc<Grid>>,
+    levels: Option<Rc<MapLevels>>,
     tanks: IndexMap<u32, TankTarget>,
 
     // неподтверждённые локальные выстрелы
@@ -144,7 +148,7 @@ impl ShotPredictor {
             current_weapon: None,
             cooldown_until: IndexMap::new(),
             ammo: IndexMap::new(),
-            grid: None,
+            levels: None,
             tanks: IndexMap::new(),
             pending_tracers: VecDeque::new(),
             pending_bombs: VecDeque::new(),
@@ -161,19 +165,19 @@ impl ShotPredictor {
         self.current_weapon = self.model.as_ref().map(|m| m.current_weapon.clone());
     }
 
-    /// Данные карты (MAP_DATA): сетка стен для raycast трассера; мировые
-    /// координаты = тайлы × step × scale. Геометрию динамики карты держит
-    /// `MapDynamics` — общий источник со своим танком.
-    pub(crate) fn set_map(&mut self, grid: Rc<Grid>) {
-        self.grid = Some(grid);
+    /// Данные карты (MAP_DATA): слоистая геометрия для raycast трассера;
+    /// мировые координаты = тайлы × step × scale. Геометрию динамики карты
+    /// держит `MapDynamics` — общий источник со своим танком.
+    pub(crate) fn set_map(&mut self, levels: Rc<MapLevels>) {
+        self.levels = Some(levels);
         self.reset();
     }
 
-    /// Сетка стен raycast — для проверки того, что обе клиентские
+    /// Геометрия карты raycast — для проверки того, что обе клиентские
     /// подсистемы получили одну и ту же карту.
     #[cfg(test)]
-    pub(crate) fn grid(&self) -> Option<&Rc<Grid>> {
-        self.grid.as_ref()
+    pub(crate) fn levels(&self) -> Option<&Rc<MapLevels>> {
+        self.levels.as_ref()
     }
 
     /// Обновляет позиции танков-целей raycast из дискретного кадра;
@@ -195,6 +199,7 @@ impl ShotPredictor {
                                         y: field_f32(row, TANK_FIELD_Y),
                                         angle: field_f32(row, TANK_FIELD_ANGLE),
                                         size: field_u8(row, TANK_FIELD_SIZE) as f32,
+                                        level: field_u8(row, TANK_FIELD_LEVEL),
                                     },
                                 );
                             }
@@ -224,6 +229,7 @@ impl ShotPredictor {
                         y: field_f32(&row.fields, TANK_FIELD_Y),
                         angle: field_f32(&row.fields, TANK_FIELD_ANGLE),
                         size: field_u8(&row.fields, TANK_FIELD_SIZE) as f32,
+                        level: field_u8(&row.fields, TANK_FIELD_LEVEL),
                     },
                 );
             }
@@ -353,9 +359,28 @@ impl ShotPredictor {
                 // экстраполировать её вперёд нечем — клиент своей латентности
                 // не знает, а расхождение с хостом закрывает авторитетная
                 // коррекция при подтверждении (см. filter_frame_game)
+                // бомба, сброшенная над пустотой, оказывается внизу — то же
+                // правило, что на хосте (`create_weapon_action`)
+                let mut level = render.level;
+
+                if let Some(levels) = &self.levels
+                    && level >= 1
+                    && !levels.has_floor(level, render.x, render.y)
+                {
+                    level = 0;
+                }
+
                 Some(json!({
                     weapon_name: {
-                        local_id: [render.x, render.y, 0, weapon.size, weapon.time, my_game_id],
+                        local_id: [
+                            render.x,
+                            render.y,
+                            0,
+                            weapon.size,
+                            weapon.time,
+                            my_game_id,
+                            level,
+                        ],
                     },
                 }))
             }
@@ -544,18 +569,20 @@ impl ShotPredictor {
         }
 
         let range = weapon.range.unwrap_or(1000.0);
-        let hit = self.cast_ray(muzzle, direction, range, shooter, world);
-        let end_distance = hit.as_ref().map_or(range, |(distance, _)| *distance);
+        let start_level = render.level;
+        let hit = self.cast_ray(muzzle, direction, range, shooter, start_level, world);
+        let end_distance = hit.as_ref().map_or(range, |(distance, _, _)| *distance);
         let mut end_x = muzzle[0] + direction[0] * end_distance;
         let mut end_y = muzzle[1] + direction[1] * end_distance;
 
-        // якорь попадания в динамику карты (девятый элемент строки, только
-        // у своего локально предсказанного трассера — в кадр он не уходит):
+        // якорь попадания в динамику карты (элемент за хвостом уровней,
+        // только у своего локально предсказанного трассера — в кадр он не
+        // уходит):
         // по нему потребитель привязывает облако осколков к трансформу
         // задетого ящика, а не к мировой точке
         let mut anchor = None;
 
-        if let Some((_, RayTarget::Dynamic(key))) = &hit
+        if let Some((_, RayTarget::Dynamic(key), _)) = &hit
             && let Some(dynamics) = world.dynamics
             && let Some(local) = dynamics.to_local(key, end_x, end_y)
         {
@@ -573,13 +600,20 @@ impl ShotPredictor {
 
         // попадание в чужой танк переносится так же: луч посчитан по корпусу
         // «сейчас», а нарисован танк там, где был serverNow − delay
-        if let Some((_, RayTarget::Tank(game_id))) = &hit
+        if let Some((_, RayTarget::Tank(game_id), _)) = &hit
             && let Some(tanks) = world.remote_tanks
             && let Some(drawn) = tanks.to_render_point(*game_id, end_x, end_y)
         {
             end_x = drawn[0];
             end_y = drawn[1];
         }
+
+        // уровень конца луча: у попадания — уровень цели, у промаха —
+        // уровень последнего сегмента (луч с моста «падает» за кромкой)
+        let end_level = match &hit {
+            Some((_, _, level)) => *level,
+            None => self.miss_level(muzzle, direction, range, start_level),
+        };
 
         let mut tracer = json!([
             muzzle[0],
@@ -590,6 +624,8 @@ impl ShotPredictor {
             render.y,
             hit.is_some(),
             shooter,
+            start_level,
+            end_level,
         ]);
 
         if let Some(anchor) = anchor
@@ -601,61 +637,54 @@ impl ShotPredictor {
         tracer
     }
 
+    // уровень, на котором луч закончился без попадания: последний сегмент
+    // разбиения (для одноуровневой карты — уровень стрелка)
+    fn miss_level(&self, origin: [f32; 2], dir: [f32; 2], range: f32, shooter_level: u8) -> u8 {
+        let Some(levels) = &self.levels else {
+            return shooter_level;
+        };
+
+        crate::shot_levels::ray_segments(levels, origin, dir, range, shooter_level)
+            .last()
+            .map_or(shooter_level, |segment| segment.level)
+    }
+
     // ближайшее пересечение со стенами, динамикой карты и танками (кроме
-    // своего); None = промах в пределах range
+    // своего); None = промах в пределах range. Луч режется на сегменты по
+    // уровням теми же правилами, что у хоста (`crate::shot_levels`), и
+    // каждый сегмент видит только геометрию своего уровня — иначе трассер
+    // игрока разошёлся бы с авторитетным попаданием
     fn cast_ray(
         &self,
         origin: [f32; 2],
         dir: [f32; 2],
         range: f32,
         my_id: u32,
+        shooter_level: u8,
         world: ShotWorld<'_>,
-    ) -> Option<(f32, RayTarget)> {
-        let mut closest: Option<(f32, RayTarget)> = None;
+    ) -> Option<(f32, RayTarget, u8)> {
+        let mut closest: Option<(f32, RayTarget, u8)> = None;
 
-        let mut consider = |distance: Option<f32>, target: RayTarget| {
+        let mut consider = |distance: Option<f32>, target: RayTarget, level: u8| {
             if let Some(distance) = distance
                 && closest
                     .as_ref()
-                    .is_none_or(|(nearest, _)| distance < *nearest)
+                    .is_none_or(|(nearest, _, _)| distance < *nearest)
             {
-                closest = Some((distance, target));
+                closest = Some((distance, target, level));
             }
         };
 
-        if let Some(grid) = &self.grid {
-            consider(
-                ray_vs_grid(
-                    origin,
-                    dir,
-                    range,
-                    &grid.map,
-                    &grid.solid_tiles,
-                    grid.tile_size,
-                ),
-                RayTarget::Wall,
-            );
-        }
-
-        // симуляционные, а не рендерные боксы: попадание должно совпасть
-        // с авторитетным, а не с картинкой (см. map_dynamics.rs)
-        if let Some(dynamics) = world.dynamics {
-            // ключ ящика материализуется в String один раз — для ближайшего,
-            // а не для каждого рассмотренного тела
-            let mut nearest_dynamic: Option<(f32, &str)> = None;
-
-            for (key, obb) in dynamics.sim_boxes() {
-                if let Some(distance) = ray_vs_box(origin, dir, range, &obb)
-                    && nearest_dynamic.is_none_or(|(nearest, _)| distance < nearest)
-                {
-                    nearest_dynamic = Some((distance, key));
-                }
+        let segments = match &self.levels {
+            Some(levels) => {
+                crate::shot_levels::ray_segments(levels, origin, dir, range, shooter_level)
             }
-
-            if let Some((distance, key)) = nearest_dynamic {
-                consider(Some(distance), RayTarget::Dynamic(key.to_string()));
-            }
-        }
+            None => vec![crate::shot_levels::RaySegment {
+                t0: 0.0,
+                t1: range,
+                level: 0,
+            }],
+        };
 
         // корпуса «сейчас», как их видит хост; интерполированные отстают на
         // interpolation.delay, и по едущему танку луч ушёл бы мимо — та же
@@ -665,25 +694,90 @@ impl ShotPredictor {
             .map(|tanks| tanks.sim_boxes())
             .unwrap_or_default();
 
-        for (id, tank) in &self.tanks {
-            if *id == my_id {
+        for segment in &segments {
+            let length = segment.t1 - segment.t0;
+
+            if length <= 0.0 {
                 continue;
             }
 
-            // габариты танка: width = size·4, height = size·3 (как Tank)
-            let obb = sim_tanks
-                .iter()
-                .find(|(sim_id, _)| sim_id == id)
-                .map(|(_, obb)| *obb)
-                .unwrap_or(Box2 {
-                    x: tank.x,
-                    y: tank.y,
-                    angle: tank.angle,
-                    half_w: tank.size * 2.0,
-                    half_h: tank.size * 1.5,
-                });
+            let level = segment.level;
+            let seg_origin = [
+                origin[0] + dir[0] * segment.t0,
+                origin[1] + dir[1] * segment.t0,
+            ];
 
-            consider(ray_vs_box(origin, dir, range, &obb), RayTarget::Tank(*id));
+            // стены СВОЕГО уровня
+            if let Some(levels) = &self.levels
+                && let Some(grid) = levels.grid(level)
+            {
+                consider(
+                    ray_vs_grid(
+                        seg_origin,
+                        dir,
+                        length,
+                        grid,
+                        levels.solid(level),
+                        levels.tile_size(),
+                    )
+                    .map(|distance| distance + segment.t0),
+                    RayTarget::Wall,
+                    level,
+                );
+            }
+
+            // симуляционные, а не рендерные боксы: попадание должно совпасть
+            // с авторитетным, а не с картинкой (см. map_dynamics.rs)
+            if let Some(dynamics) = world.dynamics {
+                // ключ ящика материализуется в String один раз — для
+                // ближайшего, а не для каждого рассмотренного тела
+                let mut nearest_dynamic: Option<(f32, &str)> = None;
+
+                for (key, obb, body_level) in dynamics.sim_boxes() {
+                    if body_level != level {
+                        continue;
+                    }
+
+                    if let Some(distance) = ray_vs_box(seg_origin, dir, length, &obb)
+                        && nearest_dynamic.is_none_or(|(nearest, _)| distance < nearest)
+                    {
+                        nearest_dynamic = Some((distance, key));
+                    }
+                }
+
+                if let Some((distance, key)) = nearest_dynamic {
+                    consider(
+                        Some(distance + segment.t0),
+                        RayTarget::Dynamic(key.to_string()),
+                        level,
+                    );
+                }
+            }
+
+            for (id, tank) in &self.tanks {
+                if *id == my_id || tank.level != level {
+                    continue;
+                }
+
+                // габариты танка: width = size·4, height = size·3 (как Tank)
+                let obb = sim_tanks
+                    .iter()
+                    .find(|(sim_id, _, _)| sim_id == id)
+                    .map(|(_, obb, _)| *obb)
+                    .unwrap_or(Box2 {
+                        x: tank.x,
+                        y: tank.y,
+                        angle: tank.angle,
+                        half_w: tank.size * 2.0,
+                        half_h: tank.size * 1.5,
+                    });
+
+                consider(
+                    ray_vs_box(seg_origin, dir, length, &obb).map(|d| d + segment.t0),
+                    RayTarget::Tank(*id),
+                    level,
+                );
+            }
         }
 
         closest
@@ -781,6 +875,14 @@ mod tests {
         shot
     }
 
+    fn render_at_level(x: f32, y: f32, level: u8) -> RenderState {
+        RenderState {
+            level,
+            z: level as f32,
+            ..render_at(x, y)
+        }
+    }
+
     fn render_at(x: f32, y: f32) -> RenderState {
         RenderState {
             x,
@@ -791,6 +893,8 @@ mod tests {
             vy: 0.0,
             engine_load: 0.0,
             angvel: 0.0,
+            z: 0.0,
+            level: 0,
         }
     }
 
@@ -879,7 +983,7 @@ mod tests {
     fn apply_map(shot: &mut ShotPredictor, json: &str) {
         let mut cfg: ClientMapConfig = serde_json::from_str(json).unwrap();
 
-        shot.set_map(Rc::new(cfg.take_grid()));
+        shot.set_map(Rc::new(cfg.take_levels()));
     }
 
     #[test]
@@ -1117,8 +1221,9 @@ mod tests {
         assert_eq!(tracer[6], Value::Bool(true));
         assert!((tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3);
 
-        // девятый элемент — якорь: ключ тела и точка удара в его фрейме
-        let anchor = tracer[8].as_array().unwrap();
+        // элемент за хвостом уровней — якорь: ключ тела и точка удара в
+        // его фрейме
+        let anchor = tracer[10].as_array().unwrap();
 
         assert_eq!(anchor[0], Value::String("d0".to_string()));
         assert!((anchor[1].as_f64().unwrap() + 10.0).abs() < 1e-3);
@@ -1172,7 +1277,148 @@ mod tests {
         assert!((tracer[2].as_f64().unwrap() - 40.0).abs() < 1e-3);
         assert!((tracer[3].as_f64().unwrap() - 20.0).abs() < 1e-3);
         // якорь — только у динамики карты; в танк его нет
-        assert_eq!(tracer.len(), 8);
+        assert_eq!(tracer.len(), 10);
+    }
+
+    // — 2.5D: сегменты луча по уровням —
+
+    // слоёная карта 10×3 клеток по 10 юнитов: колонки 3–5 — плита моста
+    // (тайл 2), клетка (строка 1, колонка 5) — перила (тайл 4)
+    fn layered_shot_map() -> String {
+        let mut grid1 = vec![vec![0; 10]; 3];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().take(6).skip(3) {
+                *cell = 2;
+            }
+        }
+
+        grid1[1][5] = 4;
+
+        serde_json::json!({
+            "step": 10,
+            "scale": 1,
+            "map": vec![vec![0; 10]; 3],
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "levels": { "1": { "map": grid1, "floor": [2, 4], "walls": [4] } },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn tracer_drops_at_the_ledge() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &layered_shot_map());
+
+        // выстрел с моста (строка 0, колонка 3) на восток: за колонкой 5
+        // плиты нет — луч падает на землю
+        let spawn = shot
+            .try_fire(&render_at_level(35.0, 5.0, 1), 1, 0.0, ShotWorld::default())
+            .unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[8].as_u64(), Some(1), "startLevel");
+        assert_eq!(tracer[9].as_u64(), Some(0), "endLevel");
+    }
+
+    #[test]
+    fn tracer_stops_on_the_railing_of_its_level() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &layered_shot_map());
+
+        // строка 1, старт на плите в колонке 3, луч на восток: перила
+        // (колонка 5, x от 50) — стена своего уровня
+        let spawn = shot
+            .try_fire(&render_at_level(35.0, 15.0, 1), 1, 0.0, ShotWorld::default())
+            .unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6], Value::Bool(true));
+        assert!(
+            (tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3,
+            "{tracer:?}"
+        );
+        assert_eq!(tracer[9].as_u64(), Some(1), "endLevel");
+    }
+
+    #[test]
+    fn ground_tracer_ignores_the_bridge_tank_behind_the_slab() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &layered_shot_map());
+
+        // танк уровня 1 в глубине плиты (колонка 5): проба уровня 1 идёт
+        // только в ПЕРВОЙ клетке плиты, дальше она экранирует всё
+        use vimp_engine_core::client::unpack::DecodedBlock;
+
+        let mut items = IndexMap::new();
+
+        items.insert(2u8, Some(bridge_tank_row(55.0, 5.0)));
+
+        shot.update_world(&DecodedSnapshot {
+            blocks: vec![DecodedBlock {
+                key: "m1".to_string(),
+                key_id: 1,
+                data: BlockData::Indexed8(items),
+            }],
+        });
+
+        let spawn = shot
+            .try_fire(&render_at_level(5.0, 5.0, 0), 1, 0.0, ShotWorld::default())
+            .unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6], Value::Bool(false), "{tracer:?}");
+        assert_eq!(tracer[8].as_u64(), Some(0), "startLevel");
+    }
+
+    // строка чужого танка уровня 1 (size 2 → корпус 8×6, живой)
+    fn bridge_tank_row(x: f32, y: f32) -> Vec<FieldValue> {
+        vec![
+            FieldValue::F32(x),
+            FieldValue::F32(y),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::U8(3),
+            FieldValue::U8(2),
+            FieldValue::U8(2),
+            FieldValue::F32(0.0),
+            FieldValue::F32(1.0),
+            FieldValue::U8(1),
+        ]
+    }
+
+    #[test]
+    fn local_bomb_carries_its_level() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &layered_shot_map());
+        shot.cycle_weapon(false); // w1 → w2 (explosive)
+
+        // на плите бомба остаётся наверху
+        let spawn = shot
+            .try_fire(&render_at_level(35.0, 5.0, 1), 1, 0.0, ShotWorld::default())
+            .unwrap();
+        let row = spawn["w2"]["L1"].as_array().unwrap();
+
+        assert_eq!(row[6].as_u64(), Some(1));
+
+        // за кромкой плиты нет — бомба падает на землю
+        shot.reset_local();
+        shot.cycle_weapon(false);
+
+        let spawn = shot
+            .try_fire(&render_at_level(85.0, 5.0, 1), 1, 100.0, ShotWorld::default())
+            .unwrap();
+        let row = spawn["w2"]["L2"].as_array().unwrap();
+
+        assert_eq!(row[6].as_u64(), Some(0));
     }
 
     #[test]

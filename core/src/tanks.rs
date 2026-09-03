@@ -12,9 +12,11 @@ use crate::bomb::{Bomb, BombRow};
 use crate::bots::controller::BotBrain;
 use vimp_engine_core::nav::navigation::NavigationSystem;
 use vimp_engine_core::nav::spatial::{SpatialEntity, SpatialGrid};
-use crate::config::{ModelConfig, PanelValue, WeaponConfig, WeaponKind, TanksConfig};
+use crate::config::{LevelRules, ModelConfig, PanelValue, WeaponConfig, WeaponKind, TanksConfig};
+use crate::level::{self, LevelEvent};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
+use vimp_engine_core::map::{level_group, level_interaction, MapLevels};
 use vimp_engine_core::physics::{is_map_object, round1, round2};
 use vimp_engine_core::rng::Rng;
 use vimp_engine_core::sim::{GameDef, GameSim, SimCtx};
@@ -25,9 +27,9 @@ use crate::tank::{PlayerKeyBits, ShotCommand, Tank};
 pub struct TanksGame;
 
 /// Строка снапшота танка: 7 float (x,y,angle,gunRotation,vx,vy,engineLoad) +
-/// condition/size/teamId + angvel (движковый `BlockKind::Indexed8` — форма,
-/// не игровая сущность; движок принимает `Vec<FieldValue>` в порядке
-/// `m1`-схемы src/config/snapshot.js).
+/// condition/size/teamId + angvel + z/level (движковый `BlockKind::Indexed8`
+/// — форма, не игровая сущность; движок принимает `Vec<FieldValue>` в
+/// порядке `m1`-схемы src/config/snapshot.js).
 #[derive(Clone, Copy)]
 struct TankRow {
     floats: [f32; 7],
@@ -35,6 +37,8 @@ struct TankRow {
     size: u8,
     team: u8,
     angvel: f32,
+    z: f32,
+    level: u8,
 }
 
 impl TankRow {
@@ -45,16 +49,20 @@ impl TankRow {
         fields.push(FieldValue::U8(self.size));
         fields.push(FieldValue::U8(self.team));
         fields.push(FieldValue::F32(self.angvel));
+        fields.push(FieldValue::F32(self.z));
+        fields.push(FieldValue::U8(self.level));
         fields
     }
 }
 
 /// Строка снапшота трассера: startX/Y, endX/Y, bodyX/Y + wasHit + shooterId
-/// (движковый `BlockKind::List16`).
+/// + уровни начала и конца луча (движковый `BlockKind::List16`).
 struct TracerRow {
     floats: [f32; 6],
     was_hit: bool,
     shooter: u8,
+    start_level: u8,
+    end_level: u8,
 }
 
 impl TracerRow {
@@ -63,7 +71,29 @@ impl TracerRow {
 
         fields.push(FieldValue::U8(self.was_hit as u8));
         fields.push(FieldValue::U8(self.shooter));
+        fields.push(FieldValue::U8(self.start_level));
+        fields.push(FieldValue::U8(self.end_level));
         fields
+    }
+}
+
+/// Строка снапшота взрыва: x/y/radius + уровень (движковый
+/// `BlockKind::List16`, схема `w2e`).
+struct ExplosionRow {
+    x: f32,
+    y: f32,
+    radius: f32,
+    level: u8,
+}
+
+impl ExplosionRow {
+    fn fields(&self) -> Vec<FieldValue> {
+        vec![
+            FieldValue::F32(self.x),
+            FieldValue::F32(self.y),
+            FieldValue::F32(self.radius),
+            FieldValue::U8(self.level),
+        ]
     }
 }
 
@@ -89,6 +119,8 @@ pub(crate) struct BotView<'a> {
     pub tanks: &'a mut IndexMap<u32, Tank>,
     pub key_bits: &'a PlayerKeyBits,
     pub weapons: &'a IndexMap<String, WeaponConfig>,
+    /// Слоистая геометрия карты; `None` — одноуровневая карта.
+    pub levels: Option<&'a MapLevels>,
 }
 
 impl BotView<'_> {
@@ -113,6 +145,20 @@ impl BotView<'_> {
     pub fn weapon_index(&self, name: &str) -> Option<usize> {
         self.weapons.get_index_of(name)
     }
+
+    /// Уровень танка (2.5D-карты); 0 у одноуровневой карты.
+    pub fn tank_level(&self, game_id: u32) -> u8 {
+        self.tanks
+            .get(&game_id)
+            .map_or(0, |tank| tank.level_state.level)
+    }
+
+    /// Заблокирован ли ввод (танк в падении).
+    pub fn tank_input_locked(&self, game_id: u32) -> bool {
+        self.tanks
+            .get(&game_id)
+            .is_some_and(|tank| tank.level_state.input_locked())
+    }
 }
 
 pub struct TanksSim {
@@ -133,10 +179,22 @@ pub struct TanksSim {
 
     new_tracers: IndexMap<usize, Vec<TracerRow>>,
     new_bombs: IndexMap<usize, IndexMap<u32, Option<BombRow>>>,
-    weapon_effects: IndexMap<String, Vec<[f32; 3]>>,
+    weapon_effects: IndexMap<String, Vec<ExplosionRow>>,
     pending_null_tanks: Vec<(String, u32)>,
 
     cached_players: IndexMap<u32, (String, TankRow)>,
+
+    level_rules: LevelRules,
+    /// Слоистая геометрия текущей карты. `None` — карта ещё не приезжала
+    /// или она одноуровневая. Обновляется в `on_fixed_step` по карте из
+    /// `SimCtx` (у `spawn_actor` карты нет вовсе).
+    levels: Option<MapLevels>,
+    /// Отпечаток карты, из которой снята копия слоёв: setId + размерность
+    /// грида уровня 0. Сменился — слои пересобираются.
+    levels_fingerprint: Option<(String, usize, usize)>,
+    /// Танки, заспавненные до того, как слои доехали, — им уровень
+    /// назначается первым же `update_levels`.
+    levels_dirty: bool,
 }
 
 impl GameSim<TanksGame> for TanksSim {
@@ -171,6 +229,10 @@ impl GameSim<TanksGame> for TanksSim {
             weapon_effects: IndexMap::new(),
             pending_null_tanks: Vec::new(),
             cached_players: IndexMap::new(),
+            level_rules: cfg.levels,
+            levels: None,
+            levels_fingerprint: None,
+            levels_dirty: false,
         }
     }
 
@@ -211,6 +273,10 @@ impl GameSim<TanksGame> for TanksSim {
 
         self.tanks.insert(game_id, tank);
 
+        // карта уже могла приехать: назначаем уровень по геометрии сразу,
+        // иначе первый кадр покажет танк на земле внутри плиты моста
+        self.apply_geometry_level(world, game_id, x, y);
+
         Ok(())
     }
 
@@ -227,6 +293,15 @@ impl GameSim<TanksGame> for TanksSim {
             if let Some(body) = world.bodies.get_mut(tank.body) {
                 tank.change_player_data(team_id, x, y, angle_deg, body);
             }
+        }
+
+        self.apply_geometry_level(world, game_id, x, y);
+    }
+
+    fn set_actor_level(&mut self, world: &mut PhysicsWorld, game_id: u32, level: u8) {
+        if let Some(tank) = self.tanks.get_mut(&game_id) {
+            tank.set_level(level);
+            tank.sync_collision_groups(world);
         }
     }
 
@@ -327,7 +402,11 @@ impl GameSim<TanksGame> for TanksSim {
         let mut by_model: Map<String, Value> = Map::new();
 
         for (game_id, (model, row)) in &self.cached_players {
-            let mut arr: Vec<Value> = Vec::with_capacity(10);
+            // полный порядок полей схемы m1: 7 float, condition, size,
+            // team, angvel, z, level. Раньше метод обрывался на team, из-за
+            // чего первый кадр (FIRST_SHOT_DATA) и бинарные кадры имели
+            // разную ширину строки — с приходом level это стало ошибкой
+            let mut arr: Vec<Value> = Vec::with_capacity(13);
 
             for value in row.floats {
                 arr.push(Value::from(value as f64));
@@ -336,6 +415,9 @@ impl GameSim<TanksGame> for TanksSim {
             arr.push(Value::from(row.condition));
             arr.push(Value::from(row.size));
             arr.push(Value::from(row.team));
+            arr.push(Value::from(row.angvel as f64));
+            arr.push(Value::from(row.z as f64));
+            arr.push(Value::from(row.level));
 
             by_model
                 .entry(model.clone())
@@ -349,6 +431,12 @@ impl GameSim<TanksGame> for TanksSim {
     }
 
     fn on_fixed_step(&mut self, ctx: &mut SimCtx, dt: f32) {
+        // слои карты приезжают вместе с картой, а `spawn_actor` карты не
+        // видит: держим копию геометрии и пересчитываем уровни всех танков,
+        // когда она сменилась
+        self.sync_levels(ctx);
+        self.update_levels(ctx, dt);
+
         let ids: Vec<u32> = self.tanks.keys().copied().collect();
 
         for id in ids {
@@ -476,6 +564,7 @@ impl GameSim<TanksGame> for TanksSim {
                     tanks: &mut self.tanks,
                     key_bits: &self.key_bits,
                     weapons: &self.weapons,
+                    levels: self.levels.as_ref(),
                 };
 
                 brain.update(&mut view, dt);
@@ -495,13 +584,14 @@ impl GameSim<TanksGame> for TanksSim {
                 continue;
             };
 
-            let (floats, condition, size, team, angvel) = tank.snapshot_row(body, model.size);
+            let (floats, condition, size, team, angvel, z, level) =
+                tank.snapshot_row(body, model.size);
 
             self.cached_players.insert(
                 *game_id,
                 (
                     tank.model.clone(),
-                    TankRow { floats, condition, size, team, angvel },
+                    TankRow { floats, condition, size, team, angvel, z, level },
                 ),
             );
         }
@@ -569,10 +659,7 @@ impl GameSim<TanksGame> for TanksSim {
 
             has_events = true;
 
-            let rows = explosions
-                .into_iter()
-                .map(|[x, y, r]| vec![FieldValue::F32(x), FieldValue::F32(y), FieldValue::F32(r)])
-                .collect();
+            let rows = explosions.iter().map(ExplosionRow::fields).collect();
 
             blocks.push((outcome_id, Block::List16(rows)));
         }
@@ -641,6 +728,10 @@ impl GameSim<TanksGame> for TanksSim {
         }
 
         self.current_step_tick = 0;
+
+        self.levels = None;
+        self.levels_fingerprint = None;
+        self.levels_dirty = false;
     }
 
     fn serialize(&self) -> serde_json::Value {
@@ -672,6 +763,10 @@ impl GameSim<TanksGame> for TanksSim {
         self.pending_null_tanks.clear();
         self.cached_players.clear();
 
+        // слои в дамп не едут (карта восстанавливается своим путём):
+        // уровни танков пересчитает первый же `update_levels`
+        self.levels_dirty = true;
+
         Ok(())
     }
 
@@ -698,6 +793,121 @@ impl GameSim<TanksGame> for TanksSim {
 }
 
 impl TanksSim {
+    /// Синхронизирует копию слоёв с картой из `SimCtx`. Отпечаток —
+    /// `setId` + размерность грида уровня 0: карта сменилась, значит
+    /// геометрию уровней надо пересобрать, а танкам переназначить уровень.
+    fn sync_levels(&mut self, ctx: &SimCtx) {
+        let layered = ctx.map.as_ref().filter(|map| map.is_layered());
+        let fingerprint = layered.map(|map| {
+            (
+                map.set_id.clone(),
+                map.grid.len(),
+                map.grid.first().map_or(0, |row| row.len()),
+            )
+        });
+
+        if fingerprint == self.levels_fingerprint {
+            return;
+        }
+
+        self.levels = layered.map(|map| map.levels().clone());
+        self.levels_fingerprint = fingerprint;
+        self.levels_dirty = true;
+    }
+
+    /// Правила уровней для всех танков: рампы, обрывы, падение, маски
+    /// коллизий. Идёт ДО применения ввода — маска обязана быть верной для
+    /// наступающего шага физики.
+    fn update_levels(&mut self, ctx: &mut SimCtx, dt: f32) {
+        // слои временно вынимаются: цикл ниже правит `self.tanks` и зовёт
+        // `apply_fall_damage`, а геометрия за шаг не меняется
+        let Some(levels) = self.levels.take() else {
+            return;
+        };
+
+        let rules = self.level_rules;
+        let dirty = self.levels_dirty;
+        let ids: Vec<u32> = self.tanks.keys().copied().collect();
+
+        for id in ids {
+            let (before, event) = {
+                let Some(tank) = self.tanks.get_mut(&id) else {
+                    continue;
+                };
+                let Some(body) = ctx.world.bodies.get(tank.body) else {
+                    continue;
+                };
+                let pos = body.translation();
+
+                if dirty {
+                    tank.set_level(levels.level_at(pos.x, pos.y));
+                }
+
+                let before = tank.level_state;
+                let event =
+                    level::step_level(&mut tank.level_state, pos.x, pos.y, &levels, &rules, dt);
+
+                (before, event)
+            };
+
+            if let Some(tank) = self.tanks.get(&id) {
+                if dirty || tank.level_state.collision_mask() != before.collision_mask() {
+                    tank.sync_collision_groups(ctx.world);
+                }
+            }
+
+            if event == LevelEvent::Landed {
+                self.apply_fall_damage(ctx, id);
+            }
+        }
+
+        self.levels_dirty = false;
+        self.levels = Some(levels);
+    }
+
+    /// Урон при приземлении после падения с моста. Стрелка нет — урон
+    /// приходит от самой карты, поэтому дружественный огонь и тряска
+    /// оружия не при чём, а смерть засчитывается как самоубийство.
+    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32) {
+        let damage = self.level_rules.fall_damage;
+
+        if damage <= 0.0 {
+            return;
+        }
+
+        let destroyed = {
+            let Some(tank) = self.tanks.get_mut(&game_id) else {
+                return;
+            };
+            let Some(body) = ctx.world.bodies.get_mut(tank.body) else {
+                return;
+            };
+
+            tank.take_damage(damage, body, ctx.events)
+        };
+
+        if destroyed {
+            ctx.events.push(CoreEvent::Death {
+                victim: game_id,
+                killer: game_id,
+            });
+        }
+    }
+
+    /// Уровень танка по геометрии карты (спавн/респаун): слои у `TanksSim`
+    /// могут ещё не приехать — тогда уровень назначит `update_levels`.
+    fn apply_geometry_level(&mut self, world: &mut PhysicsWorld, game_id: u32, x: f32, y: f32) {
+        let Some(levels) = self.levels.as_ref() else {
+            return;
+        };
+        let level = levels.level_at(x, y);
+
+        if let Some(tank) = self.tanks.get_mut(&game_id) {
+            tank.set_level(level);
+            tank.sync_collision_groups(world);
+        }
+    }
+
     /// Мгновенный выстрел лучом (порт HitscanService.processShot).
     fn process_hitscan(&mut self, ctx: &mut SimCtx, shooter_id: u32, weapon_index: usize, shot: &ShotCommand) -> TracerRow {
         let weapon = self.weapons[weapon_index].clone();
@@ -708,30 +918,68 @@ impl TanksSim {
         // настраиваемой причины
         let impulse_magnitude = weapon.impulse_magnitude;
 
-        // вектор луча длиной range; shot.direction остаётся нормализованным —
-        // нужен отдельно (не растянутым) для построения импульса ниже
-        let ray_vector = shot.direction * range;
-        let end_point_ray = shot.start_point + ray_vector;
-        let ray = Ray::new(shot.start_point, ray_vector);
+        // shot.direction нормализован (Tank::fire_direction): дистанция вдоль
+        // луча измеряется в мировых единицах, а импульс строится от него же
+        let dir = shot.direction;
+        let origin = shot.start_point;
+        let end_point_ray = origin + dir * range;
 
         let shooter_body = self.tanks[&shooter_id].body;
+        let start_level = self.tanks[&shooter_id].level_state.level;
 
-        let hit = ctx.world.cast_ray(
-            &ray,
-            1.0,
-            true,
-            QueryFilter::new().exclude_sensors().exclude_rigid_body(shooter_body),
-        );
+        let layered = self.levels.as_ref().is_some_and(MapLevels::is_layered);
+        let segments = match self.levels.as_ref() {
+            Some(levels) => crate::shot_levels::ray_segments(
+                levels,
+                [origin.x, origin.y],
+                [dir.x, dir.y],
+                range,
+                start_level,
+            ),
+            None => vec![crate::shot_levels::RaySegment { t0: 0.0, t1: range, level: 0 }],
+        };
+
+        // ближайшее попадание среди сегментов: сегменты уровней 0 и 1
+        // перекрываются у кромки плиты, минимальная дистанция выигрывает
+        let mut hit: Option<(ColliderHandle, f32, u8)> = None;
+
+        for segment in &segments {
+            let length = segment.t1 - segment.t0;
+
+            if length <= 0.0 {
+                continue;
+            }
+
+            let ray = Ray::new(origin + dir * segment.t0, dir * length);
+            let mut filter = QueryFilter::new().exclude_sensors().exclude_rigid_body(shooter_body);
+
+            // одноуровневая карта фильтр по группам не ставит вовсе —
+            // путь стрельбы обязан остаться прежним бит-в-бит
+            if layered {
+                filter = filter.groups(level_interaction(segment.level));
+            }
+
+            if let Some((collider_handle, toi)) = ctx.world.cast_ray(&ray, 1.0, true, filter) {
+                let distance = segment.t0 + toi * length;
+
+                if hit.is_none_or(|(_, best, _)| distance < best) {
+                    hit = Some((collider_handle, distance, segment.level));
+                }
+            }
+        }
 
         let was_hit = hit.is_some();
         let mut end_x = round1(end_point_ray.x);
         let mut end_y = round1(end_point_ray.y);
+        // промах: луч дошёл до конца последнего сегмента
+        let mut end_level = segments.last().map_or(start_level, |segment| segment.level);
 
-        if let Some((collider_handle, toi)) = hit {
-            let impact = ray.point_at(toi);
+        if let Some((collider_handle, distance, level)) = hit {
+            let impact = origin + dir * distance;
 
             end_x = round1(impact.x);
             end_y = round1(impact.y);
+            end_level = level;
 
             let hit_body_handle = ctx
                 .world
@@ -746,7 +994,7 @@ impl TanksSim {
                     // если тело динамическое, то применение физического импульса
                     // (от нормализованного направления — величина не зависит от range)
                     if impulse_magnitude > 0.0 && body.is_dynamic() {
-                        body.apply_impulse_at_point(shot.direction * impulse_magnitude, impact, true);
+                        body.apply_impulse_at_point(dir * impulse_magnitude, impact, true);
                     }
 
                     if let Some(BodyTag::Player { game_id, .. }) = BodyTag::decode(body.user_data) {
@@ -762,8 +1010,8 @@ impl TanksSim {
 
         TracerRow {
             floats: [
-                round2(shot.start_point.x),
-                round2(shot.start_point.y),
+                round2(origin.x),
+                round2(origin.y),
                 end_x,
                 end_y,
                 round2(shot.body_position.x),
@@ -771,6 +1019,8 @@ impl TanksSim {
             ],
             was_hit,
             shooter: shooter_id as u8,
+            start_level,
+            end_level,
         }
     }
 
@@ -794,7 +1044,30 @@ impl TanksSim {
         let removal_tick = (self.current_step_tick + lifetime_in_steps) % self.max_shot_time_in_steps;
         let team_id = self.tanks[&owner_id].team_id;
 
-        let bomb = Bomb::new(ctx.world, weapon_index, &weapon, shot_id, owner_id, team_id, shot.body_position);
+        let owner = &self.tanks[&owner_id];
+        let mut level = owner.level_state.level;
+
+        // бомба, сброшенная в воздухе или над пустотой, оказывается внизу:
+        // держать её на уровне 1 там, где плиты нет, значило бы взрывать
+        // «в воздухе» над открытой землёй
+        if owner.level_state.input_locked() {
+            level = 0;
+        } else if let Some(levels) = self.levels.as_ref() {
+            if level >= 1 && !levels.has_floor(level, shot.body_position.x, shot.body_position.y) {
+                level = 0;
+            }
+        }
+
+        let bomb = Bomb::new(
+            ctx.world,
+            weapon_index,
+            &weapon,
+            shot_id,
+            owner_id,
+            team_id,
+            level,
+            shot.body_position,
+        );
         let row = bomb.snapshot_row(ctx.world, &weapon);
 
         self.shots.insert(shot_id, bomb);
@@ -831,12 +1104,18 @@ impl TanksSim {
 
     /// Детонация бомбы (порт Bomb.detonate): урон/импульс по целям в
     /// радиусе, данные взрыва для клиента.
-    fn detonate(&mut self, ctx: &mut SimCtx, bomb: &Bomb, weapon_index: usize) -> [f32; 3] {
+    fn detonate(&mut self, ctx: &mut SimCtx, bomb: &Bomb, weapon_index: usize) -> ExplosionRow {
         let weapon = &self.weapons[weapon_index];
         let radius = weapon.radius;
         let damage = weapon.damage;
         let impulse_magnitude = weapon.impulse_magnitude;
         let friendly_fire = self.friendly_fire;
+        // маска уровня бомбы: читается ДО цикла — внутри занят ctx.world
+        let bomb_bit = self
+            .levels
+            .as_ref()
+            .filter(|levels| levels.is_layered())
+            .map(|_| level_group(bomb.level));
 
         let bomb_position = ctx.world.bodies[bomb.body].translation();
 
@@ -859,6 +1138,14 @@ impl TanksSim {
 
                 if parent == bomb.body {
                     continue;
+                }
+
+                // уровень цели — из масок её коллайдера: плита моста
+                // экранирует взрыв в обе стороны
+                if let Some(bit) = bomb_bit {
+                    if !collider.collision_groups().memberships.intersects(bit) {
+                        continue;
+                    }
                 }
 
                 let Some(body) = ctx.world.bodies.get(parent) else {
@@ -906,7 +1193,12 @@ impl TanksSim {
             }
         }
 
-        [round1(bomb_position.x), round1(bomb_position.y), radius]
+        ExplosionRow {
+            x: round1(bomb_position.x),
+            y: round1(bomb_position.y),
+            radius,
+            level: bomb.level,
+        }
     }
 
     /// Урон игроку (Game.applyDamage): дружественный огонь, тряска

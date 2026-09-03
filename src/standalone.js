@@ -26,6 +26,6 @@ await startStandaloneGame({
   // входит именно наблюдателем
   startupVotes: [['teamChange', 'team1']],
   startupCommands: ['/bot 4'],
-  room: { map: 'pool mini' },
+  room: { map: 'overpass' }, // 2.5D-демо; вернуть 'pool mini' перед релизом
   devMode: true,
 });

@@ -1,10 +1,17 @@
 import { Container, Sprite } from 'pixi.js';
+import { levelZ } from '../levelZ.js';
+
+// базовый zIndex маркера на радаре внутри своего уровня
+const TANK_RADAR_BASE_Z = 2;
 
 export default class TankRadar extends Container {
   constructor(data, assets) {
     super();
 
-    this.zIndex = 2;
+    // 2.5D: маркер танка с эстакады лежит над маркерами земли. Отдельного
+    // знака уровня у чужого танка пока нет (отложено, plan/README.md)
+    this._level = data[12] || 0;
+    this.zIndex = levelZ(TANK_RADAR_BASE_Z, this._level);
 
     this._textures = assets.tankRadarTexture;
 
@@ -44,6 +51,13 @@ export default class TankRadar extends Container {
   update(data) {
     this.x = data[0];
     this.y = data[1];
+
+    const level = data[12] || 0;
+
+    if (level !== this._level) {
+      this._level = level;
+      this.zIndex = levelZ(TANK_RADAR_BASE_Z, level);
+    }
 
     const newCondition = data[7];
     const teamId = data[9];

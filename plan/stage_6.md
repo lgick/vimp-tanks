@@ -1,4 +1,4 @@
-# Этап 6 — рендер PixiJS: слои, порядок отрисовки, see-through
+# Этап 6 — рендер PixiJS: слои, порядок отрисовки, see-through ✅ выполнен
 
 **Репозиторий:** `T` = `/Users/dmitry/Sites/my/vimp-tanks`
 **Каталог:** `src/client/`

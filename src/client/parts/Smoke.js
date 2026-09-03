@@ -1,6 +1,10 @@
 import { Container, ParticleContainer, Rectangle, Ticker } from 'pixi.js';
 import ParticlePool from './ParticlePool.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
+import { levelZ } from '../levelZ.js';
+
+// базовый zIndex дыма внутри своего уровня
+const SMOKE_BASE_Z = 4;
 
 // щедрый отступ вокруг эмиттера для boundsArea:
 // покрывает разлёт частиц с учётом скорости танка и порыва при смене состояния
@@ -61,7 +65,8 @@ export default class Smoke extends Container {
   constructor(data, assets) {
     super();
 
-    this.zIndex = 4;
+    this._level = data[12] || 0;
+    this.zIndex = levelZ(SMOKE_BASE_Z, this._level);
 
     const { texture, contentSize } = assets.smokeTexture;
 
@@ -112,6 +117,13 @@ export default class Smoke extends Container {
 
   update(data) {
     const prevCondition = this._condition;
+    const level = data[12] || 0;
+
+    // танк переехал на эстакаду — дым едет за ним на её слой
+    if (level !== this._level) {
+      this._level = level;
+      this.zIndex = levelZ(SMOKE_BASE_Z, level);
+    }
 
     this._emitterX = data[0];
     this._emitterY = data[1];

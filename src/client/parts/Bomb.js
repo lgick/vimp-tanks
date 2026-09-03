@@ -1,10 +1,15 @@
 import { Text, Ticker, Container, Sprite } from 'pixi.js';
+import { levelZ } from '../levelZ.js';
+
+// базовый zIndex бомбы внутри своего уровня
+const BOMB_BASE_Z = 2;
 
 export default class Bomb extends Container {
   constructor(params, assets, dependencies) {
     super();
 
-    this.zIndex = 2;
+    // 2.5D: уровень, на котором лежит бомба (строка w2, индекс 6)
+    this.zIndex = levelZ(BOMB_BASE_Z, params[6]);
 
     this.body = new Sprite(assets.bombTexture);
     this.body.anchor.set(0.5);

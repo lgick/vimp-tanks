@@ -28,6 +28,7 @@ Imports maps, models, and weapons from `src/data/`.
 | `currentMap` | `'pool mini'` | The default map |
 | `mapsInVote` | `4` | How many maps show up in a vote |
 | `mapSetId` | `'c1'` | The default snapshot key for the map constructor |
+| `coreParams.levels` | `fallTime: 0.35, fallDamage: 15` | 2.5D level rules handed to the game's Rust core as-is (the engine neither reads nor validates `coreParams`): how long a fall from the overpass lasts, in seconds, and the damage a landing costs (`0` — falling is free). A flat map never touches them |
 | `roomDefaults.maxPlayers` | `8` | The bounds for the lobby's room settings: caps the limit picked by the creator (also published in `GameManifest.roomDefaults`) |
 | `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v3): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`text`/`checkbox`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog. `scripts/build-game-manifest.js` adds `regExp` **and** `min`/`max` to `maxPlayers`/`roundTime`/`mapTime` from these same bounds — the engine renders `min`/`max` as a "(min–max)" hint next to the field's label and checks them client-side; the authoritative clamp stays in the engine's `applyRoomOverrides.js` |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Scripted-participant (bot) parameters: the `Bot<id>` name prefix and the default tank model |
@@ -143,14 +144,20 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
 
 - **`componentDependencies`** — which services get injected into which
   components (`renderer` → Map; `assetsBase` → Map; `soundManager` →
-  ExplosionEffect, ShotEffect, Bomb, Tank; `mapDynamics` → ShotEffect).
+  ExplosionEffect, ShotEffect, Bomb, Tank; `mapDynamics` → ShotEffect;
+  `levelView` → Tank, Map; `localPlayer` → Tank).
   `mapDynamics` is the map-dynamics geometry from the client core
   (`toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`),
   handed to the pool by the plugin itself (`hooks.services`, see
   [architecture.md](architecture.md)): the shot effect keeps an anchor on a
   body and asks where that body is drawn at the moment the impact spawns. The
   service exists only with client-side prediction on — an undeclared service
-  silently arrives as `undefined`. `assetsBase` is the engine's
+  silently arrives as `undefined`. `levelView` is the game's own service too
+(`src/client/levelView.js`): where the local player is and on which level —
+the local `Tank` writes it (`localPlayer`, an engine service, is what tells
+it that it is the local one), and `Map` layers of level >= 1 read it to fade
+out over the player (see [architecture.md](architecture.md)).
+`assetsBase` is the engine's
   asset base for this package: `Map` turns it into
   `${assetsBase}img/<file>` for the tile sheets and dynamic-body sprites
   it loads (see [extending.md](extending.md#new-map-image)).
@@ -226,8 +233,24 @@ mechanics — the engine's
 Registered as `HostPlugin.gameConfig.snapshot`: `m1`, `w1`, `w2`, `w2e`,
 `c1`, `c2` → a numeric id + `kind`, which drives the block's byte layout
 (the engine's schema-driven packer/unpacker, see
-[core.md](core.md)). An unregistered key breaks frame packing. `c1`/`c2`
-declare `optionalFrom: 3`: a dynamic map element ships `[vx, vy, angvel]`
+[core.md](core.md)). An unregistered key breaks frame packing.
+
+The tank row (`m1`) ends with `angvel`, `z` and `level`: `z` is the visual
+height `0.0..1.0` and is interpolated — a ramp climb and a fall must look
+smooth — while `level` is the discrete 2.5D level with no intermediate
+values, since it switches the zIndex and the collision set. That tail's
+width and order are a positional contract with three places at once:
+`TankRow::fields` and `players_json` in the host core, and `render_overlay`
+in the client core.
+
+The 2.5D level travels with the shot blocks as well: the tracer (`w1`)
+ends with `startLevel`/`endLevel` — the level the ray started at and the one
+it ended at (they differ where the ray drops off a ledge) — while the bomb
+(`w2`) and its explosion (`w2e`) each carry a `level`. The client could
+derive all four from its own copy of the layers, but then the picture would
+depend on one more repeated algorithm; four bytes are cheaper.
+
+`c1`/`c2` declare `optionalFrom: 3`: a dynamic map element ships `[vx, vy, angvel]`
 only while it moves, so a resting crate costs 12 bytes less per frame
 (decoding still yields the full six-field row, the missing tail as zeros). Full
 mechanism — the engine's
@@ -270,11 +293,41 @@ Two architecturally different weapon types:
 
 ### maps/
 
-Three maps: `pool mini` (small), `canopy`, `garden`. Each describes tile
-layers (`layers`, `tiles`), respawn points (`respawns`), static
-(`physicsStatic`) and dynamic (`physicsDynamic`) physics. Registration —
-`src/data/maps/index.js`. How to add a map — see
+Four maps: `pool mini` (small), `canopy`, `garden` and `overpass` (the 2.5D
+demo). Each describes tile layers (`layers`, `tiles`), respawn points
+(`respawns`), static (`physicsStatic`) and dynamic (`physicsDynamic`)
+physics. Registration — `src/data/maps/index.js`. How to add a map — see
 [extending.md](extending.md#new-map).
+
+#### The 2.5D fields (`levels`, `ramps`)
+
+The format is additive: `map` / `physicsStatic` / `layers` stay level 0, so
+a map without the fields below loads exactly as before. `overpass.js` is the
+reference: ground plus a through overpass with railings, two ramps and two
+gaps in the railings.
+
+| Field | Meaning |
+| --- | --- |
+| `levels` | Upper levels, key — the level number as a string (`1`). `MAX_LEVELS = 2`, so only `"1"` today; levels must run from 1 without gaps |
+| `levels[n].map` | The level's own grid, **the same dimensions** as `map`. `0` is emptiness — no level here, the one below shows through |
+| `levels[n].floor` | Tiles you can drive on at this level (the slab). A railing tile belongs here too |
+| `levels[n].walls` | Wall tiles of the level (railings): they block movement and the ray at this level and screen the slab edge from a shot from below. Every `walls` tile must also be in `floor` — the core rejects the map otherwise |
+| `levels[n].layers` | Render layers of that grid (`zIndex` → tiles), the same base values as level 0; the renderer shifts them by `LEVEL_Z_STRIDE = 100` itself |
+| `ramps[]` | Transitions: `{ tile, dir, from, to }` — the tile index in the `from` level's grid, and `dir` (`north`/`south`/`west`/`east`) is the direction you drive **to climb** |
+| `physicsDynamic[].level` | The level a box stands on (`0` by default). Bodies of different levels never touch |
+| `respawns[team][i][3]` | Optional 4th element of a respawn point — the level. Without it the level is derived from the geometry (`GameMap::level_at`), i.e. a ground point that happens to sit under the slab would spawn the tank **on** the bridge |
+
+A ramp is a directed run of level-0 tiles: the core groups equal tiles into
+runs along the ramp axis and interpolates `z` from `from` to `to` along the
+run (`MapLevels::build`). The level flips at the halfway point of the run,
+and while a tank's centre is on a ramp cell it collides with **both**
+levels' geometry, so the flip pushes nothing.
+
+The core validates all of this when the map loads (`MapConfig::validate`)
+and refuses a map with mismatched grid dimensions, a gap in the level
+numbering, a railing outside `floor`, a ramp tile missing from its grid or a
+level number out of range in `respawns`/`physicsDynamic`. Structural checks
+of the same kind run offline as contract rule `E4` (`vimp-contract`).
 
 ---
 

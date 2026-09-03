@@ -5,6 +5,8 @@ import ShotEffectController from '../../../../src/client/parts/effects/shot/Shot
 // Проверяется проводка якоря попадания, а не отрисовка: контроллер обязан
 // пересчитать точку удара по ТЕКУЩЕМУ трансформу задетого ящика и уметь
 // обойтись без якоря (авторитетный трассер) и без сервиса (спектатор).
+// Строка w1: [startX, startY, endX, endY, bodyX, bodyY, wasHit, shooterId,
+// startLevel, endLevel] + якорь одиннадцатым элементом у своего трассера.
 const assets = {
   impactParticleTexture: { texture: Texture.EMPTY, contentSize: 8 },
 };
@@ -66,7 +68,7 @@ afterEach(() => {
 
 describe('ShotEffectController: попадание без якоря', () => {
   it('промах (hit=false): попадание не создаётся', () => {
-    const controller = makeController([0, 0, 100, 0, 0, 0, false, 1]);
+    const controller = makeController([0, 0, 100, 0, 0, 0, false, 1, 0, 0]);
 
     controller.run();
     finishTracer(controller);
@@ -74,8 +76,8 @@ describe('ShotEffectController: попадание без якоря', () => {
     expect(controller.impact).toBeNull();
   });
 
-  it('попадание в стену (строка длины 8): эффект в мировой точке удара', () => {
-    const controller = makeController([0, 0, 100, 0, 0, 0, true, 1]);
+  it('попадание в стену (строка длины 10): эффект в мировой точке удара', () => {
+    const controller = makeController([0, 0, 100, 0, 0, 0, true, 1, 0, 0]);
 
     controller.run();
     finishTracer(controller);
@@ -86,7 +88,19 @@ describe('ShotEffectController: попадание без якоря', () => {
   });
 
   it('якорь есть, но сервиса нет (спектатор): откат к мировой точке', () => {
-    const controller = makeController([0, 0, 100, 0, 0, 0, true, 1, ['d0', -5, 0]]);
+    const controller = makeController([
+      0,
+      0,
+      100,
+      0,
+      0,
+      0,
+      true,
+      1,
+      0,
+      0,
+      ['d0', -5, 0],
+    ]);
 
     controller.run();
     finishTracer(controller);
@@ -105,9 +119,12 @@ describe('ShotEffectController: попадание в динамику карт�
   });
 
   it('осколки появляются в мировой точке удара по ящику', () => {
-    const controller = makeController([0, 0, 0, 10, 0, 0, true, 1, ['d0', -10, 0]], {
-      mapDynamics,
-    });
+    const controller = makeController(
+      [0, 0, 0, 10, 0, 0, true, 1, 0, 0, ['d0', -10, 0]],
+      {
+        mapDynamics,
+      },
+    );
 
     controller.run();
     finishTracer(controller);
@@ -118,9 +135,12 @@ describe('ShotEffectController: попадание в динамику карт�
   });
 
   it('точка удара берётся из ТЕКУЩЕГО трансформа ящика, а не из момента выстрела', () => {
-    const controller = makeController([0, 0, 0, 10, 0, 0, true, 1, ['d0', -10, 0]], {
-      mapDynamics,
-    });
+    const controller = makeController(
+      [0, 0, 0, 10, 0, 0, true, 1, 0, 0, ['d0', -10, 0]],
+      {
+        mapDynamics,
+      },
+    );
 
     controller.run();
 
@@ -137,9 +157,12 @@ describe('ShotEffectController: попадание в динамику карт�
   // осколки должны остаться там, где пуля встретила препятствие,
   // и НЕ ехать за ящиком дальше
   it('осколки остаются на месте, когда ящик едет дальше', () => {
-    const controller = makeController([0, 0, 0, 10, 0, 0, true, 1, ['d0', -10, 0]], {
-      mapDynamics,
-    });
+    const controller = makeController(
+      [0, 0, 0, 10, 0, 0, true, 1, 0, 0, ['d0', -10, 0]],
+      {
+        mapDynamics,
+      },
+    );
 
     controller.run();
     finishTracer(controller);
@@ -155,9 +178,12 @@ describe('ShotEffectController: попадание в динамику карт�
   });
 
   it('ящик исчез (смена карты): откат к точке удара из данных трассера', () => {
-    const controller = makeController([0, 0, 0, 10, 0, 0, true, 1, ['d0', -10, 0]], {
-      mapDynamics,
-    });
+    const controller = makeController(
+      [0, 0, 0, 10, 0, 0, true, 1, 0, 0, ['d0', -10, 0]],
+      {
+        mapDynamics,
+      },
+    );
 
     controller.run();
 

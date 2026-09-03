@@ -61,3 +61,20 @@ describe('ClientPlugin.hooks', () => {
     expect(core.cycle_weapon).toHaveBeenCalledTimes(0);
   });
 });
+
+// Сервисы игры для её же партов: движок их не описывает, только раздаёт
+// тем, кто объявил их в componentDependencies (src/config/client.js)
+describe('ClientPlugin.hooks.services', () => {
+  it('отдаёт levelView — где и на каком уровне локальный игрок', () => {
+    const services = clientPlugin.hooks.services(makeCore());
+
+    expect(services.levelView).toBeDefined();
+    expect(services.levelView.level).toBe(0);
+
+    services.levelView.set(1, 320, 640);
+
+    expect(services.levelView.level).toBe(1);
+    expect(services.levelView.x).toBe(320);
+    expect(services.levelView.y).toBe(640);
+  });
+});

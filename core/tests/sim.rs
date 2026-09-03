@@ -81,6 +81,10 @@ fn flat_config_json() -> serde_json::Value {
             "nextWeapon": { "key": 256, "type": 1 },
             "prevWeapon": { "key": 512, "type": 1 }
         },
+        "levels": {
+            "fallTime": 0.35,
+            "fallDamage": 15
+        },
         "panel": {
             "health": { "key": "h", "value": 100 },
             "w1": { "key": "w1", "value": 200 },
@@ -101,7 +105,9 @@ fn flat_config_json() -> serde_json::Value {
                     { "name": "condition", "ty": "u8" },
                     { "name": "size", "ty": "u8" },
                     { "name": "team", "ty": "u8" },
-                    { "name": "angvel", "ty": "f32", "interp": "lerp" }
+                    { "name": "angvel", "ty": "f32", "interp": "lerp" },
+                    { "name": "z", "ty": "f32", "interp": "lerp" },
+                    { "name": "level", "ty": "u8" }
                 ] },
                 "w1": { "id": 2, "kind": "list16", "class": "event", "fields": [
                     { "name": "startX", "ty": "f32" },
@@ -111,7 +117,9 @@ fn flat_config_json() -> serde_json::Value {
                     { "name": "bodyX", "ty": "f32" },
                     { "name": "bodyY", "ty": "f32" },
                     { "name": "wasHit", "ty": "u8" },
-                    { "name": "shooterId", "ty": "u8" }
+                    { "name": "shooterId", "ty": "u8" },
+                    { "name": "startLevel", "ty": "u8" },
+                    { "name": "endLevel", "ty": "u8" }
                 ] },
                 "w2": { "id": 3, "kind": "indexed32", "class": "event", "fields": [
                     { "name": "x", "ty": "f32" },
@@ -119,12 +127,14 @@ fn flat_config_json() -> serde_json::Value {
                     { "name": "angle", "ty": "f32" },
                     { "name": "size", "ty": "u8" },
                     { "name": "time", "ty": "u16" },
-                    { "name": "ownerId", "ty": "u8" }
+                    { "name": "ownerId", "ty": "u8" },
+                    { "name": "level", "ty": "u8" }
                 ] },
                 "w2e": { "id": 4, "kind": "list16", "class": "event", "fields": [
                     { "name": "x", "ty": "f32" },
                     { "name": "y", "ty": "f32" },
-                    { "name": "radius", "ty": "f32" }
+                    { "name": "radius", "ty": "f32" },
+                    { "name": "level", "ty": "u8" }
                 ] },
                 "c1": { "id": 5, "kind": "indexedNoNull8", "class": "hot", "optionalFrom": 3, "fields": [
                     { "name": "x", "ty": "f32", "interp": "lerp" },
@@ -175,6 +185,65 @@ fn map_json() -> String {
         }
     })
     .to_string()
+}
+
+/// Слоёная карта: тот же периметр, плита моста (тайл 2 уровня 1) в
+/// колонках 10..12 строк 5..14 и рампа (тайл 3 уровня 0) в строке 9,
+/// колонках 6..9, поднимающая на восток к подножию плиты.
+fn layered_map_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for x in 0..20 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[19] = 1;
+    }
+
+    for x in 6..10 {
+        grid[9][x] = 3;
+    }
+
+    let mut slab: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for row in slab.iter_mut().take(15).skip(5) {
+        for cell in row.iter_mut().take(13).skip(10) {
+            *cell = 2;
+        }
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[100, 100, 0]],
+            "team2": [[500, 100, 180]]
+        },
+        "levels": {
+            "1": { "map": slab, "floor": [2], "walls": [] }
+        },
+        "ramps": [{ "tile": 3, "dir": "east", "from": 0, "to": 1 }]
+    })
+    .to_string()
+}
+
+/// Точка на плите моста (колонка 11, строка 8).
+const SLAB: (f32, f32) = (368.0, 272.0);
+/// Точка на земле вне плиты и вне рампы.
+const GROUND: (f32, f32) = (112.0, 112.0);
+
+/// Уровень танка из players_data (индекс 12 строки схемы m1).
+fn level_of(core: &GameCore, game_id: u32) -> u64 {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()][12].as_u64().unwrap()
 }
 
 fn make_core() -> GameCore {
@@ -681,3 +750,398 @@ fn dynamic_box_ships_velocity_tail_only_while_moving() {
 // проверке). Покрытие валидации — юнит-тесты `config.rs::validate_tests`,
 // которые тестируют `SnapshotConfig::validate()` напрямую, в обход
 // wasm-bindgen обёртки.
+
+/// Та же слоёная карта, но колонка 10 плиты — перила (тайл 4: и пол, и
+/// стена уровня 1). Ими закрыт западный край моста.
+fn railed_map_json() -> String {
+    let mut map: serde_json::Value = serde_json::from_str(&layered_map_json()).unwrap();
+
+    {
+        let slab = map["levels"]["1"]["map"].as_array_mut().unwrap();
+
+        for row in slab.iter_mut().take(15).skip(5) {
+            row.as_array_mut().unwrap()[10] = serde_json::json!(4);
+        }
+    }
+
+    map["levels"]["1"]["floor"] = serde_json::json!([2, 4]);
+    map["levels"]["1"]["walls"] = serde_json::json!([4]);
+
+    map.to_string()
+}
+
+/// Здоровье, объявленное панелью для игрока `id` (последнее значение).
+fn health_of(all: &[CoreEvent], id: u32) -> Option<f64> {
+    all.iter()
+        .filter_map(|event| match event {
+            CoreEvent::PanelSet { id: got, field, value } if *got == id && field == "health" => {
+                Some(*value)
+            }
+            _ => None,
+        })
+        .last()
+}
+
+/// Один выстрел активным оружием игрока 1 и `count` шагов после него.
+fn fire(core: &mut GameCore, seq: u32, count: usize) {
+    core.apply_input(1, seq, "down", "fire");
+    steps(core, count);
+}
+
+#[test]
+fn spawn_on_slab_starts_on_level_one() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, SLAB.0, SLAB.1, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, GROUND.0, GROUND.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 1, "танк на плите — уровень 1");
+    assert_eq!(level_of(&core, 2), 0, "танк на земле — уровень 0");
+}
+
+#[test]
+fn set_actor_level_overrides_geometry() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, SLAB.0, SLAB.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+
+    // респаун под мостом: уровень назван явно и геометрия его не перебивает
+    core.set_actor_level(1, 0);
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 0);
+}
+
+#[test]
+fn ramp_lifts_tank_to_level_one() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // подножие рампы: колонка 6, строка 9
+    core.spawn_actor(1, "m1", 1, 208.0, 304.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 0, "у подножия рампа ещё внизу");
+
+    steps(&mut core, 120);
+
+    assert_eq!(level_of(&core, 1), 1, "проехав рампу, танк наверху");
+}
+
+#[test]
+fn landing_applies_fall_damage() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, GROUND.0, GROUND.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.take_events();
+
+    // над землёй плиты нет: уровень 1 в этой точке — обрыв
+    core.set_actor_level(1, 1);
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+
+    // fallTime = 0.35 c = 42 шага
+    steps(&mut core, 50);
+
+    let all = events(&mut core);
+    let health = all
+        .iter()
+        .filter_map(|event| match event {
+            CoreEvent::PanelSet { id: 1, field, value } if field == "health" => Some(*value),
+            _ => None,
+        })
+        .last();
+
+    assert_eq!(health, Some(85.0), "приземление стоит fallDamage");
+    assert_eq!(level_of(&core, 1), 0, "танк оказался на земле");
+
+    // добивание падениями: 100 - 15 * 7 < 0
+    let mut killed = false;
+
+    for _ in 0..7 {
+        core.set_actor_level(1, 1);
+        steps(&mut core, 52);
+
+        killed = events(&mut core)
+            .iter()
+            .any(|event| matches!(event, CoreEvent::Death { victim: 1, killer: 1 }));
+
+        if killed {
+            break;
+        }
+    }
+
+    assert!(killed, "смерть от падения засчитывается самоубийством");
+}
+
+#[test]
+fn tanks_on_different_levels_do_not_collide() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, SLAB.0, SLAB.1, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, GROUND.0, GROUND.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+
+    // второй танк переезжает под мост и остаётся на земле
+    core.reset_actor(2, 2, SLAB.0, SLAB.1, 0.0);
+    core.set_actor_level(2, 0);
+
+    steps(&mut core, 120);
+
+    let a = core.position_of(1);
+    let b = core.position_of(2);
+
+    assert!(
+        (a[0] - SLAB.0).abs() < 1.0 && (a[1] - SLAB.1).abs() < 1.0,
+        "танк уровня 1 стоит на месте: {a:?}"
+    );
+    assert!(
+        (b[0] - SLAB.0).abs() < 1.0 && (b[1] - SLAB.1).abs() < 1.0,
+        "танк уровня 0 стоит на месте: {b:?}"
+    );
+
+    // контроль: на одном уровне те же тела расталкиваются
+    core.set_actor_level(2, 1);
+    steps(&mut core, 120);
+
+    let a = core.position_of(1);
+    let b = core.position_of(2);
+    let distance = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+
+    assert!(distance > 1.0, "на одном уровне контакт есть: {distance}");
+}
+
+
+#[test]
+fn bridge_shot_hits_bridge_tank_not_ground_tank() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // стрелок на западном краю плиты, обе цели — в одной точке на востоке:
+    // одна на мосту, вторая под ним
+    core.spawn_actor(1, "m1", 1, 336.0, 272.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 400.0, 272.0, 0.0).unwrap();
+    core.spawn_actor(3, "m1", 2, 400.0, 272.0, 0.0).unwrap();
+
+    // уровень назначается после первого шага: он пересчитывает уровни всех
+    // танков по свежей геометрии карты
+    steps(&mut core, 2);
+    core.set_actor_level(3, 0);
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 1);
+    assert_eq!(level_of(&core, 2), 1);
+    assert_eq!(level_of(&core, 3), 0);
+    core.take_events();
+
+    fire(&mut core, 1, 4);
+
+    let all = events(&mut core);
+
+    assert!(health_of(&all, 2).is_some_and(|h| h < 100.0), "события: {all:?}");
+    assert_eq!(health_of(&all, 3), None, "под мостом плита экранирует: {all:?}");
+}
+
+#[test]
+fn shot_past_the_ledge_hits_the_ground_tank() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 336.0, 272.0, 0.0).unwrap();
+    // цель за восточной кромкой моста, на земле
+    core.spawn_actor(2, "m1", 2, 460.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+    assert_eq!(level_of(&core, 2), 0);
+    core.take_events();
+
+    fire(&mut core, 1, 4);
+
+    let all = events(&mut core);
+
+    assert!(
+        health_of(&all, 2).is_some_and(|h| h < 100.0),
+        "за кромкой луч падает на землю: {all:?}"
+    );
+}
+
+#[test]
+fn ground_shot_hits_the_tank_on_the_open_edge() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // стрелок на земле западнее моста, цель — в первой же клетке плиты
+    core.spawn_actor(1, "m1", 1, 290.0, 272.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 336.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 0);
+    assert_eq!(level_of(&core, 2), 1);
+    core.take_events();
+
+    fire(&mut core, 1, 4);
+
+    let all = events(&mut core);
+
+    assert!(
+        health_of(&all, 2).is_some_and(|h| h < 100.0),
+        "кромка без перил открыта снизу: {all:?}"
+    );
+}
+
+#[test]
+fn railing_protects_the_tank_from_below() {
+    let mut core = make_core();
+
+    core.load_map(&railed_map_json()).unwrap();
+    // тот же выстрел снизу, но первая клетка плиты на пути — перила
+    core.spawn_actor(1, "m1", 1, 290.0, 272.0, 0.0).unwrap();
+    // за перилами: клетка перил непроезжая, цель стоит на следующей плите
+    core.spawn_actor(2, "m1", 2, 368.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 2), 1);
+    core.take_events();
+
+    fire(&mut core, 1, 4);
+
+    let all = events(&mut core);
+
+    assert_eq!(health_of(&all, 2), None, "перила закрывают край: {all:?}");
+}
+
+#[test]
+fn falling_tank_is_not_hit() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 112.0, 112.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 172.0, 112.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.take_events();
+
+    // контроль: на земле цель поражается
+    fire(&mut core, 1, 4);
+    assert!(health_of(&events(&mut core), 2).is_some());
+
+    // уровень 1 над открытой землёй — обрыв: танк падает
+    core.set_actor_level(2, 1);
+    steps(&mut core, 2);
+    core.take_events();
+
+    // fallTime = 0.35 c = 42 шага: выстрел и проверка — внутри падения
+    fire(&mut core, 2, 4);
+
+    let all = events(&mut core);
+
+    assert_eq!(health_of(&all, 2), None, "падающий неуязвим: {all:?}");
+}
+
+#[test]
+fn slab_shields_the_explosion() {
+    // бомба на земле ровно под танком на мосту: плита экранирует взрыв
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 368.0, 300.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 368.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.set_actor_level(1, 0);
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 0, "стрелок под мостом");
+    assert_eq!(level_of(&core, 2), 1, "цель на мосту");
+    core.take_events();
+
+    core.apply_input(1, 1, "down", "nextWeapon");
+    steps(&mut core, 1);
+    fire(&mut core, 2, 50);
+
+    let all = events(&mut core);
+
+    assert_eq!(health_of(&all, 2), None, "плита экранирует взрыв: {all:?}");
+
+    // та же бомба, сброшенная на мосту, цель достаёт
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 368.0, 300.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 368.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+    core.take_events();
+
+    core.apply_input(1, 1, "down", "nextWeapon");
+    steps(&mut core, 1);
+    fire(&mut core, 2, 50);
+
+    let all = events(&mut core);
+
+    assert!(
+        health_of(&all, 2).is_some_and(|h| h < 100.0),
+        "на одном уровне взрыв достаёт: {all:?}"
+    );
+}
+
+#[test]
+fn bomb_dropped_over_the_void_lands_on_the_ground() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // верхняя половина рампы: уровень 1, но плиты под танком нет
+    core.spawn_actor(1, "m1", 1, 280.0, 304.0, 0.0).unwrap();
+    // цель на земле рядом с рампой
+    core.spawn_actor(2, "m1", 2, 280.0, 336.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1, "танк на верхней половине рампы");
+    assert_eq!(level_of(&core, 2), 0);
+    core.take_events();
+
+    core.apply_input(1, 1, "down", "nextWeapon");
+    steps(&mut core, 1);
+    fire(&mut core, 2, 50);
+
+    let all = events(&mut core);
+
+    assert!(
+        health_of(&all, 2).is_some_and(|h| h < 100.0),
+        "бомба над пустотой ложится на землю: {all:?}"
+    );
+}
+
+#[test]
+fn players_json_matches_schema_width() {
+    let mut core = make_core();
+
+    core.spawn_actor(1, "m1", 1, 0.0, 0.0, 0.0).unwrap();
+    steps(&mut core, 1);
+
+    let schema = flat_config_json();
+    let width = schema["snapshot"]["keys"]["m1"]["fields"]
+        .as_array()
+        .unwrap()
+        .len();
+
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+    let row = data["m1"]["1"].as_array().unwrap();
+
+    assert_eq!(row.len(), width, "строка JSON-пути обязана быть полной");
+}

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "seed": 2201,
+  "map": "overpass",
+  "participants": [{ "id": "p1", "name": "P1", "model": "m1" }],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    {
+      "tick": 20,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "forward"
+    },
+    { "tick": 92, "op": "key", "who": "p1", "action": "up", "name": "forward" },
+    {
+      "tick": 250,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "right"
+    },
+    { "tick": 310, "op": "key", "who": "p1", "action": "up", "name": "right" },
+    {
+      "tick": 360,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "forward"
+    },
+    {
+      "tick": 800,
+      "op": "key",
+      "who": "p1",
+      "action": "up",
+      "name": "forward"
+    },
+    { "tick": 880, "op": "key", "who": "p1", "action": "down", "name": "left" },
+    { "tick": 940, "op": "key", "who": "p1", "action": "up", "name": "left" },
+    {
+      "tick": 1000,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "forward"
+    },
+    {
+      "tick": 1120,
+      "op": "key",
+      "who": "p1",
+      "action": "up",
+      "name": "forward"
+    }
+  ],
+  "unusedSnapshotKeys": ["w1", "w2", "w2e", "c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "ticks": 1400,
+  "dumpTicks": [95, 600, 1080, 1400]
+}

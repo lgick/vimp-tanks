@@ -11,7 +11,9 @@ pub mod bomb;
 pub mod bots;
 pub mod client;
 pub mod config;
+pub mod level;
 pub mod motion;
+pub mod shot_levels;
 pub mod tank;
 pub mod tanks;
 

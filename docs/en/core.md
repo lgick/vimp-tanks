@@ -34,6 +34,10 @@ src/
 │                              #   the authoritative side (Rapier impulses) and the predictor replica
 ├── bomb.rs                    # Bomb — the projectile body (detonation lives in tanks.rs)
 ├── config.rs                  # ModelConfig/WeaponConfig/TanksConfig/TanksClientConfig
+├── level.rs                   # 2.5D level rules: ramps, ledges, falling, collision
+│                              #   masks — pure functions over the engine's MapLevels
+├── shot_levels.rs             # 2.5D shot ray split into single-level segments
+│                              #   (shared by the authoritative hitscan and the client)
 ├── bots/
 │   └── controller.rs         # BotBrain — bot AI (input is generated inside the core)
 └── client/                    # the core's client mode: TanksClient (impl GameClientDef)
@@ -246,15 +250,15 @@ cleared wholesale and there is no one left to deliver a `null` to.
 `[0]` — flags (`HOT_FLAGS` in the engine's `opcodes.js`: game/camera/
 predicted/frames), `[1..2]` — camera x/y (already resolved by the core:
 predicted position or interpolated), `[3]` — the tank count N, followed by
-N×13 (`keyId, gameId, x, y, angle, gun, vx, vy, engineLoad, condition,
-size, teamId, angvel`), then M dynamics × 8 (`keyId, index, x, y, angle,
+N×15 (`keyId, gameId, x, y, angle, gun, vx, vy, engineLoad, condition,
+size, teamId, angvel, z, level`), then M dynamics × 8 (`keyId, index, x, y, angle,
 vx, vy, angvel` — a resting body ships no velocities in the frame, but the
 record is still full width: the missing tail decodes as zeros); the
 local tank's predicted record comes last. This tail is written by the
 engine verbatim from `GameClientDef::render_overlay`'s
 `RenderOverlay.tail` — the engine only knows the camera
 (`RenderOverlay.camera`) and the presence flag, not the tail's field
-layout (`TanksClient::render_overlay` builds it as the same 13-value
+layout (`TanksClient::render_overlay` builds it as the same 15-value
 shape). `keyId` — numeric ids from this game's snapshot schema
 (`src/config/snapshot.js`); client JS reads the records generically off
 the same schema (record width = 2 service fields + the key's `fields`
@@ -448,6 +452,155 @@ Because the contact is now honest, `brakingFactor` no longer has to
 compensate for it — hence the low value in
 [configuration.md](configuration.md#modelsjs).
 
+## 2.5D levels (`core/src/level.rs`)
+
+On a layered map (the engine's `levels`/`ramps` fields, see
+[the engine docs][engine-map]) every tank carries a `LevelState`: the
+discrete `level` (`0` — ground, `1` — the overpass), the visual height
+`z` (`0.0..1.0`) and the `Transit` it is in.
+
+| `Transit` | When | Collision mask | Input |
+| --- | --- | --- | --- |
+| `Grounded` | standing on its own level | that level only | normal |
+| `Ramp` | the hull's centre is on a ramp tile | **both** levels | normal |
+| `Falling` | drove off a ledge | empty — hits nothing | locked |
+
+`step_level()` is the single source of these rules for both sides: the
+authoritative path (`TanksSim::update_levels`) and the client replica call
+exactly it, so a level predicted on the client cannot silently drift from
+the authoritative one.
+
+- **Ramps.** `z` follows the ramp's progress; `level` snaps at `z >= 0.5`.
+  The snap costs nothing physically — on a ramp the mask already contains
+  both levels — it only makes the state defined once the tank leaves the
+  ramp at either end.
+- **Ledges.** A tank on level 1 over a tile with no slab enters `Falling`.
+  The fall lasts `coreParams.levels.fallTime`, during which input is
+  ignored (held keys are picked up on landing) and the body collides with
+  nothing while coasting on inertia. On landing the tank is on level 0 and
+  takes `coreParams.levels.fallDamage`; a lethal landing emits
+  `Death { victim, killer: victim }` — a suicide, so the engine's round
+  meta awards no frag.
+- **Flat maps** are untouched: `step_level` resets the state to level 0 and
+  the mask stays the level-0 group, exactly what a tank had before levels
+  existed.
+
+Collision masks live on the hull collider (`Tank::collider`) and are
+rewritten by `Tank::sync_collision_groups` only when the mask actually
+changes.
+
+`TanksSim` keeps its own copy of the map's `MapLevels` (`spawn_actor` never
+sees the map): it is refreshed in `on_fixed_step` whenever the map's
+fingerprint — `setId` plus the level-0 grid dimensions — changes, and every
+tank is then re-levelled by geometry. `on_fixed_step` runs in this order:
+
+```
+1. sync_levels(ctx)      # the levels copy follows the current map
+2. update_levels(ctx)    # level, z, masks, fall damage — BEFORE input
+3. tank.update(...)      # input -> impulses -> shot
+4. process_shots_expired_by_time
+```
+
+Levels reach the client in the `m1` block as the `z`/`level` fields
+(`src/config/snapshot.js`); the frame format itself did not change —
+`PLAYER_STATE_LEN` is still 8.
+
+### The level replica on the client (`core/src/client/predictor.rs`)
+
+The client does not take `z`/`level` off the player block — they are not in
+it. `Predictor` calls `step_level()` itself, over the same `MapLevels` it
+builds from MAP_DATA and with the same `coreParams.levels` rules (they reach
+the client core as `prediction.coreParams` in CONFIG_DATA), at the very
+start of a step — before the input, exactly like `TanksSim::update_levels`;
+a falling replica ignores input just as the host does. That is why
+`PLAYER_STATE_LEN` was not widened: a value derived from the position costs
+nothing on the wire and cannot fall out of sync with the position it is
+derived from. `LevelEvent::Landed` is ignored on the client — the damage is
+authoritative and arrives with the panel.
+
+The frame is still the last word: `track_frame` hands the row's `level` to
+`Predictor::correct_level`, which applies it **only while the replica is
+`Grounded`**. On a ramp the frame lags by the interpolation buffer, and a
+correction there would drag the climb back on every tick. An unfinished
+`Falling` is dropped before a reconciliation replay: the replay starts from
+the authoritative position, to which a fall from a discarded branch of the
+prediction does not belong.
+
+Levels gate the predicted contact pass too. Every body of the step carries
+its own mask — `LevelState::collision_mask()` for the tank (on a ramp,
+both levels), `level_group(PredictedBody::level)` for a subsystem body
+(`MapDynamics` reads it from `physicsDynamic`, `RemoteTanks` from the row).
+Wall tiles are collected per level from that mask, and a pair of bodies
+whose masks do not intersect never becomes a contact — a tank on the bridge
+does not push a box below it. A falling tank has an empty mask, so it
+produces no contacts at all while the subsystems keep stepping.
+
+`ShotPredictor` cuts its ray with the same `ray_segments()` the host uses,
+and each segment sees only the walls, the boxes and the hulls of its own
+level; the resulting `startLevel`/`endLevel` go into the local tracer row,
+and a locally planted bomb picks its level by the host's rule (over a cell
+with no slab of its level it lands on the ground).
+
+### Shooting and explosions across levels (`core/src/shot_levels.rs`)
+
+`ray_segments()` cuts a shot ray into single-level segments, by the very
+rules the player sees ([gameplay.md](gameplay.md#shooting-across-levels)).
+Like `step_level`, this function must be the single one for both sides: the
+authoritative `TanksSim::process_hitscan` and the client shot predictor call
+exactly it.
+
+- A ray from level 1 stays up until the first cell without a slab, drops to
+  the ground there and lives on level 0 from then on — two segments.
+- A ray from level 0 runs along the ground for the full range, and in the
+  first slab cell it enters (unless that cell is a railing) it gets a short
+  level 1 **probe**, one cell diagonal long: a tank on an open ledge is
+  reachable from below. A shooter deep under the bridge gets no probe — it
+  is added only when the cell behind the ray has no slab.
+- The level segments overlap on purpose: `process_hitscan` casts a ray per
+  segment and takes the **nearest** hit, so a ground wall in front of the
+  ledge still beats the probe. Each segment is filtered with
+  `level_interaction(segment.level)`; on a flat map no group filter is set
+  at all and the shooting path stays exactly as it was.
+- An explosion reads its target's level **from the target's collider masks**
+  (`collision_groups().memberships`) rather than from the game tag: that way
+  a tank and dynamic map geometry (which carries no tag) read the same.
+- A bomb remembers its owner's level (`Bomb::level`, a sensor collider with
+  `level_interaction`); dropped over a cell without a slab of that level —
+  on a ramp, say — it lands on the ground.
+
+The levels reach the client as `startLevel`/`endLevel` (`w1`) and `level`
+(`w2`, `w2e`).
+
+### Bots on the levels (`core/src/bots/controller.rs`)
+
+`BotView` — the bot's view of the world — carries the map's layered
+geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
+`tank_level()` / `tank_input_locked()`. From them the brain caches its own
+`my_level` every frame, next to `my_position`.
+
+- The path is a `Vec<PathPoint>` (the engine's point + level), built by
+  `find_path_on()`, so ramps and ledges are ordinary graph edges. On a
+  waypoint that changes the level the "reached it" threshold is doubled: on
+  a ramp the tank cannot stand exactly in the node of the level it is
+  driving to.
+- A falling bot is skipped at the top of `update()`: keys released, the
+  stuck timer zeroed — otherwise the 0.35 s of locked input would throw it
+  into `ClearingObstacle` on flat ground.
+- `level_at_distance()` (`shot_levels.rs`) answers "which level is my ray
+  on at that distance": the upper segment wins where the ground segment and
+  the ledge probe overlap. A bot holds fire unless that level equals its
+  target's level, and keeps driving to it instead.
+- The line of sight, the strafe point after a shot and the obstacle
+  avoidance rays all run on the bot's own level
+  (`has_obstacle_between_on`, `is_walkable_on`,
+  `level_interaction(my_level)`); a flat map sets no group filter at all.
+
+`BotBrain` is `Serialize`/`Deserialize` (the handoff dump), so the path
+type change moved the dump's shape — the dump is internal and unversioned,
+and an old one no longer restores.
+
+[engine-map]: https://github.com/lgick/vimp-engine/blob/main/docs/en/core.md
+
 ## Determinism
 
 - `rapier2d` is built with `enhanced-determinism` (bit-for-bit across
@@ -464,7 +617,7 @@ compensate for it — hence the low value in
 | --- | --- | --- |
 | Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, cross-level shots and explosions) |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
 
 `tests/core/` tests are part of `npm test` and **are skipped** if

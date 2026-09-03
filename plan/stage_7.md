@@ -1,4 +1,4 @@
-# Этап 7 — боты на мостах
+# Этап 7 — боты на мостах ✅ выполнен
 
 **Репозиторий:** `T` = `/Users/dmitry/Sites/my/vimp-tanks`
 **Файлы:** `core/src/bots/controller.rs`, `core/src/tanks.rs` (`BotView`)

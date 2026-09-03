@@ -1,4 +1,4 @@
-# Этап 2 — JS движка: транспорт слоёв до хоста и клиента
+# Этап 2 — JS движка: транспорт слоёв до хоста и клиента ✅ выполнен
 
 **Репозиторий:** `E` = `/Users/dmitry/Sites/my/vimp`
 **Пакет:** `packages/engine` (npm `vimp-engine`)
@@ -86,6 +86,19 @@
 ```
 
 Обновить JSDoc функции: описать `gameConfig.coreParams`.
+
+### Довесок 2.3a — `coreParams` до КЛИЕНТСКОГО ядра ✅ выполнен
+
+Обнаружено на этапе 5: `buildCoreConfig` довозит `coreParams` только до
+хостового ядра, а клиентское собирается двумя другими функциями по белому
+списку — `levels.fallTime` до реплики не доезжал, и падение на клиенте
+шло бы по своему дефолту.
+
+* `packages/engine/src/lib/buildClientConfig.js` — `config.prediction`
+  дополняется полем `coreParams: game.coreParams`.
+* `packages/engine/src/lib/clientCoreConfig.js` — `coreParams` из
+  `prediction` раскрывается в половину `game` тем же правилом, что в
+  `coreConfig.js` (известные движку ключи перекрывают одноимённые).
 
 ## 2.4 `packages/engine/src/client/main.js` — `applyMapData`
 
@@ -256,6 +269,32 @@ title: 'layered maps are structurally sound'
 * `docs/ai/04-client-plugin.md`: новые поля данных статического слоя карты.
 * `docs/ai/07-maps-and-assets.md`: доработать после этапа 1 — добавить,
   что именно доезжает до клиента.
+
+### Отклонения от плана (сделано осознанно)
+
+* **Правило контракта — `E4`, а не `E3`.** Идентификатор `E3` в реестре уже
+  занят (`e3-sound-registry.js`), поэтому файл называется
+  `e4-map-layers.js`, id — `E4`. Доки (`debugging.md`, `plugin-api.md`) и
+  ожидание пропуска в `tests/devtools/contract/miniGame.test.js` обновлены
+  под `E4`.
+* **`eslint.config.js` → `FROZEN_CORE_ABI`.** Прямой вызов
+  `this._core.set_actor_level` запрещён правилом `no-restricted-syntax`
+  (новая возможность ядра обязана ехать опкодом `dispatch`). Метод уже вошёл
+  в замороженный слепок `contract/surface.json` на этапе 1 (решение 4), а
+  вызов защищён проверкой `typeof`, поэтому список в eslint синхронизирован
+  со слепком, а не переписан на опкод.
+* **`2.8` — правок не потребовалось.** `startStandaloneGame` карту не
+  фильтрует: `gameConfig.maps` доезжает до `RoundManager` целиком, и
+  `sendMap` шлёт клиенту весь объект.
+* **`2.5` — из двух правок применима одна.** У `VirtualClient` нет сборки
+  `staticData` (он headless и не рендерит), поэтому продублирован только
+  `set_map`.
+* **Осознанный пропуск теста `applyMapData`.** Точки тестирования у
+  `client/main.js` в репозитории нет (в happy-dom он не поднимается — см.
+  `tests/standalone/startStandaloneGame.test.js`), новая не изобреталась.
+  Сборка `staticData` по уровням покрывается сценарным тестом этапа 8.
+* **Тесты `coreConfig`** заведены новым файлом `tests/lib/coreConfig.test.js`
+  — раньше `buildCoreConfig` тестов не имел.
 
 ## Критерии готовности этапа
 

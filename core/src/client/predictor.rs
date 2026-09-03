@@ -15,7 +15,8 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::config::{KeyConfig, ModelConfig};
+use crate::config::{KeyConfig, LevelRules, ModelConfig};
+use crate::level::{self, LevelState, Transit};
 use crate::motion::{self, TurretInput};
 use vimp_engine_core::client::collision::{Contact, collect_tile_contacts, obb_vs_obb};
 use vimp_engine_core::client::raycast::Box2;
@@ -24,12 +25,12 @@ use vimp_engine_core::client::rigid_body::{
     separate_bodies,
 };
 use vimp_engine_core::config::PLAYER_STATE_LEN;
+use vimp_engine_core::map::{MapLevels, level_group};
 use vimp_engine_core::physics::normalize_angle;
 
-use super::Grid;
 use super::map_dynamics::MapDynamics;
 use super::remote_tanks::RemoteTanks;
-use super::predicted_set::PredictedBodies;
+use super::predicted_set::{PredictedBodies, PredictedBody};
 
 // максимальный возраст записей истории ввода (мс)
 const HISTORY_MAX_AGE: f64 = 2000.0;
@@ -115,6 +116,10 @@ pub struct RenderState {
     pub vy: f32,
     pub engine_load: f32,
     pub angvel: f32,
+    /// визуальная высота 0..1 (рампа/падение) и дискретный уровень —
+    /// предсказанные теми же правилами, что считает хост
+    pub z: f32,
+    pub level: u8,
 }
 
 struct HistoryEntry {
@@ -140,7 +145,13 @@ pub struct Predictor {
     // шагах. Без подсистем и без set_map проход столкновений — полный no-op,
     // а реплика движения остаётся бит-в-бит прежней (паритет с хостом)
     sets: Vec<Box<dyn PredictedBodies>>,
-    grid: Option<Rc<Grid>>,
+    levels: Option<Rc<MapLevels>>,
+    /// Уровень/высота/переход своего танка. Считается теми же функциями
+    /// `crate::level`, что и на хосте, — иначе реплика уедет от
+    /// авторитетного уровня и на границе рампы танк начнёт мигать между
+    /// слоями
+    level_state: LevelState,
+    level_rules: LevelRules,
     // часы симуляции, общие с предсказанным миром
     local_now: f64,
 
@@ -187,6 +198,7 @@ impl Predictor {
         step_ms: f64,
         player_keys: &IndexMap<String, KeyConfig>,
         models: &IndexMap<String, ModelConfig>,
+        level_rules: LevelRules,
     ) -> Self {
         let mut keys = IndexMap::new();
 
@@ -208,7 +220,9 @@ impl Predictor {
             model: None,
             shape: None,
             sets: Vec::new(),
-            grid: None,
+            levels: None,
+            level_state: LevelState::default(),
+            level_rules,
             local_now: 0.0,
             forward_bit: bit("forward"),
             back_bit: bit("back"),
@@ -305,25 +319,41 @@ impl Predictor {
             .find_map(|set| set.as_any_mut().downcast_mut::<RemoteTanks>())
     }
 
-    /// Стены карты (MAP_DATA) — тайловая сетка для сбора контактов. Сетку
-    /// строит `TanksClient::set_map` и отдаёт её же предсказанию выстрела:
-    /// разбирать JSON здесь второй раз нельзя, иначе луч и контакт могут
-    /// разъехаться.
-    pub(crate) fn set_map(&mut self, cfg: &super::ClientMapConfig, grid: Rc<Grid>) {
+    /// Геометрия карты (MAP_DATA) — слои, стены и рампы для сбора контактов
+    /// и правил уровня. Структуру строит `TanksClient::set_map` и отдаёт её
+    /// же предсказанию выстрела: разбирать JSON здесь второй раз нельзя,
+    /// иначе луч и контакт могут разъехаться.
+    pub(crate) fn set_map(&mut self, cfg: &super::ClientMapConfig, levels: Rc<MapLevels>) {
         // геометрия динамики — целиком из этой карты (см. map_dynamics.rs:
         // сброса по CLEAR у неё намеренно нет)
         if let Some(dynamics) = self.map_dynamics_mut() {
             dynamics.set_map(cfg);
         }
 
-        self.grid = Some(grid);
+        self.levels = Some(levels);
     }
 
-    /// Сетка стен предикта — для проверки того, что обе клиентские
+    /// Геометрия карты предикта — для проверки того, что обе клиентские
     /// подсистемы получили одну и ту же карту.
     #[cfg(test)]
-    pub(crate) fn grid(&self) -> Option<&Rc<Grid>> {
-        self.grid.as_ref()
+    pub(crate) fn levels(&self) -> Option<&Rc<MapLevels>> {
+        self.levels.as_ref()
+    }
+
+    /// Авторитетный уровень из кадра. Применяется только вне перехода —
+    /// кадр отстаёт на буфер интерполяции, и на рампе он тянул бы реплику
+    /// назад каждым тиком.
+    pub fn correct_level(&mut self, level: u8) {
+        if matches!(self.level_state.transit, Transit::Grounded) && self.level_state.level != level
+        {
+            self.level_state.level = level;
+            self.level_state.z = level as f32;
+        }
+    }
+
+    /// Предсказанное состояние уровня своего танка.
+    pub fn level_state(&self) -> LevelState {
+        self.level_state
     }
 
     /// Предикт включается для играющего (keySet 1) и выключается у спектатора.
@@ -348,6 +378,7 @@ impl Predictor {
     /// из следующего player-блока без replay.
     pub fn reset(&mut self) {
         self.pending_reset = true;
+        self.level_state = LevelState::default();
         // до прихода следующего player-блока рендерить нечего: иначе предикт
         // дорисовывает актора в позиции уже несуществующего мира
         self.has_state = false;
@@ -479,6 +510,13 @@ impl Predictor {
         self.centering = centering;
         self.has_state = true;
 
+        // реплей начинается с авторитетной позиции: незавершённое падение
+        // из прошлой ветки предсказания к ней не относится (уровень и z
+        // пересчитает сам реплей, шаг за шагом)
+        if let Transit::Falling { .. } = self.level_state.transit {
+            self.level_state.transit = Transit::Grounded;
+        }
+
         // replay: от serverTime кадра до текущей оценки серверного времени
         let server_now_est = local_now + offset;
         let mut history_index = 0;
@@ -559,6 +597,8 @@ impl Predictor {
             vy: self.state.vy,
             engine_load: self.engine_load,
             angvel: self.state.angvel,
+            z: self.level_state.z,
+            level: self.level_state.level,
         })
     }
 
@@ -579,11 +619,31 @@ impl Predictor {
     // один фикс-шаг реплики движения: формулы тика общие с Tank::update
     // (crate::motion), интеграция — эмпирический порядок Rapier
     fn step(&mut self, keys: u32) {
-        let Some(model) = &self.model else {
+        if self.model.is_none() {
             return;
-        };
+        }
 
         let dt = (self.step_ms / 1000.0) as f32;
+
+        // правила уровня — до применения ввода, ровно как в
+        // TanksSim::update_levels: иначе шаг падения посчитался бы по
+        // позиции, которую ввод уже сдвинул. Событие приземления реплика
+        // игнорирует: урон авторитетен и приедет кадром панели
+        if let Some(levels) = &self.levels {
+            level::step_level(
+                &mut self.level_state,
+                self.state.x,
+                self.state.y,
+                levels,
+                &self.level_rules,
+                dt,
+            );
+        }
+
+        // падение: ввод игнорируется целиком (зеркало Tank::update)
+        let keys = if self.level_state.input_locked() { 0 } else { keys };
+
+        let model = self.model.as_ref().unwrap();
 
         let forward = keys & self.forward_bit != 0;
         let back = keys & self.back_bit != 0;
@@ -646,7 +706,7 @@ impl Predictor {
         // толкает, а захват тел в предсказание привязал бы их к нему
         // (см. release_predicted). Проверка защитная: при `frozen` сюда не
         // доходит `update`, второго пути вызова искать не нужно
-        if self.frozen || (self.grid.is_none() && self.sets.is_empty()) {
+        if self.frozen || (self.levels.is_none() && self.sets.is_empty()) {
             return;
         }
 
@@ -679,6 +739,10 @@ impl Predictor {
             linear_damping: model.damping.linear,
             angular_damping: model.damping.angular,
         }];
+        // маска уровней своего танка: в падении она пуста — падающий не
+        // рождает ни одного контакта, но подсистемы всё равно шагают (иначе
+        // ящики замерли бы на время полёта)
+        let tank_mask = self.level_state.collision_mask();
         let mut geometry = vec![(tank_obb.half_w, tank_obb.half_h)];
         let mut surfaces = vec![Surface {
             friction: model.fixture.friction,
@@ -703,9 +767,22 @@ impl Predictor {
         let movable = sim.len();
         let mut contacts: Vec<(usize, usize, Contact, Surface)> = Vec::new();
 
-        // контакты со стенами (партнёр — статика в точке задетого тайла)
-        if let Some(grid) = &self.grid {
+        // маска тела шага: индекс 0 — свой танк (переход по рампе даёт обе),
+        // остальные — уровень своей сущности. Тела разных уровней друг
+        // друга не касаются: танк на мосту не толкает ящик под мостом
+        let mask_of = |index: usize, bodies: &[&mut PredictedBody]| {
+            if index == 0 {
+                tank_mask
+            } else {
+                level_group(bodies[index - 1].level)
+            }
+        };
+
+        // контакты со стенами (партнёр — статика в точке задетого тайла):
+        // стены собираются по КАЖДОМУ уровню из маски тела
+        if let Some(levels) = &self.levels {
             for index in 0..movable {
+                let mask = mask_of(index, &bodies);
                 let obb = Box2 {
                     x: sim[index].x,
                     y: sim[index].y,
@@ -714,21 +791,35 @@ impl Predictor {
                     half_h: geometry[index].1,
                 };
 
-                let hits =
-                    collect_tile_contacts(&obb, &grid.map, &grid.solid_tiles, grid.tile_size);
+                for level in 0..levels.level_count() as u8 {
+                    if !mask.intersects(level_group(level)) {
+                        continue;
+                    }
 
-                for hit in hits {
-                    let partner = sim.len();
+                    let Some(grid) = levels.grid(level) else {
+                        continue;
+                    };
 
-                    sim.push(static_body(hit.tile_x, hit.tile_y));
-                    geometry.push((0.0, 0.0));
-                    surfaces.push(MAP_SURFACE);
-                    contacts.push((
-                        index,
-                        partner,
-                        hit.contact,
-                        combine_surfaces(&surfaces[index], &MAP_SURFACE),
-                    ));
+                    let hits = collect_tile_contacts(
+                        &obb,
+                        grid,
+                        levels.solid(level),
+                        levels.tile_size(),
+                    );
+
+                    for hit in hits {
+                        let partner = sim.len();
+
+                        sim.push(static_body(hit.tile_x, hit.tile_y));
+                        geometry.push((0.0, 0.0));
+                        surfaces.push(MAP_SURFACE);
+                        contacts.push((
+                            index,
+                            partner,
+                            hit.contact,
+                            combine_surfaces(&surfaces[index], &MAP_SURFACE),
+                        ));
+                    }
                 }
             }
         }
@@ -736,6 +827,11 @@ impl Predictor {
         // свой танк ↔ каждое предсказанное тело и все пары между собой
         for a in 0..movable {
             for b in (a + 1)..movable {
+                // тела разных уровней не касаются
+                if (mask_of(a, &bodies) & mask_of(b, &bodies)).is_empty() {
+                    continue;
+                }
+
                 let obb_a = Box2 {
                     x: sim[a].x,
                     y: sim[a].y,
@@ -896,7 +992,7 @@ mod tests {
 
     fn make_predictor() -> Predictor {
         let cfg = core_config();
-        let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models);
+        let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels);
 
         p.set_model("m1");
         p.set_active(true);
@@ -986,7 +1082,7 @@ mod tests {
         // шаг 10 мс: точен в f64 — число шагов детерминировано
         let make = || {
             let cfg = core_config();
-            let mut p = Predictor::new(10.0, &cfg.player_keys, &cfg.models);
+            let mut p = Predictor::new(10.0, &cfg.player_keys, &cfg.models, cfg.levels);
 
             p.set_model("m1");
             p.set_active(true);
@@ -1173,9 +1269,9 @@ mod tests {
     // один, сетка одна на все подсистемы
     fn apply_map(p: &mut Predictor, json: &str) {
         let mut cfg: super::super::ClientMapConfig = serde_json::from_str(json).unwrap();
-        let grid = Rc::new(cfg.take_grid());
+        let levels = Rc::new(cfg.take_levels());
 
-        p.set_map(&cfg, grid);
+        p.set_map(&cfg, levels);
     }
 
     // минимальный двойник подсистемы с одним предсказанным ящиком
@@ -1384,6 +1480,208 @@ mod tests {
         assert_eq!(body.vx, 0.0);
     }
 
+    // — 2.5D: уровни, рампы, падение —
+
+    // слоёная карта 6×6 клеток по 40 юнитов (тот же формат, что MAP_DATA):
+    //   колонка 1 — перила уровня 1 (тайл 4) без плиты;
+    //   колонка 2 — рампа на восток (тайл 3);
+    //   колонки 3–4 — плита моста (тайл 2);
+    //   колонка 5 — стена уровня 0 (тайл 1)
+    fn layered_map() -> String {
+        serde_json::json!({
+            "step": 40,
+            "scale": 1,
+            "map": vec![vec![0, 0, 3, 0, 0, 1]; 6],
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "levels": {
+                "1": {
+                    "map": vec![vec![0, 4, 0, 2, 2, 0]; 6],
+                    "floor": [2],
+                    "walls": [4],
+                },
+            },
+            "ramps": [{ "tile": 3, "dir": "east", "from": 0, "to": 1 }],
+        })
+        .to_string()
+    }
+
+    // реплика обязана считать уровень ровно теми же функциями, что хост
+    fn reference_level(p: &Predictor, from: LevelState, x: f32, y: f32) -> LevelState {
+        let levels = Rc::clone(p.levels().unwrap());
+        let mut state = from;
+
+        level::step_level(
+            &mut state,
+            x,
+            y,
+            &levels,
+            &p.level_rules,
+            (STEP_MS / 1000.0) as f32,
+        );
+
+        state
+    }
+
+    #[test]
+    fn replica_climbs_the_ramp() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.state.x = 90.0; // клетка рампы: x от 80 до 120
+        p.state.y = 100.0;
+
+        let expected = reference_level(&p, LevelState::default(), 90.0, 100.0);
+
+        p.step(0);
+
+        assert_eq!(p.level_state(), expected);
+        assert_eq!(p.level_state().transit, Transit::Ramp);
+        assert!((p.level_state().z - 0.25).abs() < 1e-5);
+        assert_eq!(p.level_state().level, 0);
+
+        // вторая половина прогона — уровень щёлкает на середине
+        p.state.x = 110.0;
+
+        let expected = reference_level(&p, p.level_state(), 110.0, 100.0);
+
+        p.step(0);
+
+        assert_eq!(p.level_state(), expected);
+        assert_eq!(p.level_state().level, 1);
+
+        // с рампы на плиту: переход закончен
+        p.state.x = 140.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().transit, Transit::Grounded);
+        assert_eq!(p.level_state().level, 1);
+        assert_eq!(p.level_state().z, 1.0);
+    }
+
+    #[test]
+    fn replica_falls_off_the_ledge() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Grounded,
+        };
+        p.state.x = 20.0; // колонка 0: плиты нет
+        p.state.y = 100.0;
+        p.step(0);
+
+        assert!(p.level_state().input_locked());
+
+        // управление заблокировано: газ в падении не действует
+        let x_before = p.state.x;
+
+        for _ in 0..10 {
+            p.step(p.forward_bit);
+        }
+
+        assert_eq!(p.state.x, x_before);
+
+        // приземление за fallTime
+        let steps = (p.level_rules.fall_time as f64 / (STEP_MS / 1000.0)).ceil() as usize + 1;
+
+        for _ in 0..steps {
+            p.step(0);
+        }
+
+        assert_eq!(p.level_state().transit, Transit::Grounded);
+        assert_eq!(p.level_state().level, 0);
+        assert_eq!(p.level_state().z, 0.0);
+    }
+
+    #[test]
+    fn falling_replica_makes_no_contacts() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Falling {
+                elapsed: 0.0,
+                from: 1,
+            },
+        };
+        // корпус внутри стены уровня 0 (колонка 5: x от 200 до 240)
+        p.state.x = 220.0;
+        p.state.y = 100.0;
+        p.step(0);
+
+        // выталкивания нет: маска падающего пуста
+        assert_eq!(p.state.x, 220.0);
+        assert_eq!(p.state.vx, 0.0);
+    }
+
+    #[test]
+    fn tank_and_box_on_different_levels_do_not_touch() {
+        let mut p = make_predictor();
+        let mut set = BoxSet::new(40.0);
+
+        set.set.bodies_mut()["box"].level = 1; // ящик на мосту, танк на земле
+
+        p.add_predicted_set(Box::new(set));
+        p.state.x = 26.0; // правый край танка 30, левая грань ящика 30
+        p.state.y = 20.0;
+        p.state.vx = 200.0;
+
+        for _ in 0..30 {
+            p.step(0);
+        }
+
+        let body = box_body(&mut p).body;
+
+        assert_eq!(body.x, 40.0);
+        assert_eq!(body.vx, 0.0);
+    }
+
+    #[test]
+    fn wall_of_the_other_level_is_ignored() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        // перила уровня 1 (колонка 1) танку уровня 0 не помеха
+        p.state.x = 20.0;
+        p.state.y = 100.0;
+        p.state.vx = 300.0;
+
+        // ввод удерживается: иначе демпфирование гасит скорость раньше,
+        // чем корпус пересечёт колонку перил
+        for _ in 0..60 {
+            p.step(p.forward_bit);
+        }
+
+        assert!(p.state.x > 80.0, "танк застрял на перилах: x={}", p.state.x);
+    }
+
+    #[test]
+    fn correct_level_only_when_grounded() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // на плоскости кадр перебивает реплику
+        p.correct_level(1);
+        assert_eq!(p.level_state().level, 1);
+        assert_eq!(p.level_state().z, 1.0);
+
+        // на рампе — нет: кадр отстаёт на буфер интерполяции
+        p.state.x = 90.0;
+        p.state.y = 100.0;
+        p.step(0);
+
+        let on_ramp = p.level_state();
+
+        p.correct_level(1);
+        assert_eq!(p.level_state(), on_ramp);
+    }
+
     #[test]
     fn box_out_of_contact_leaves_tank_untouched() {
         let mut p = make_predictor();
@@ -1428,7 +1726,7 @@ mod parity {
 
         game.spawn_actor(1, "m1", 1, 0.0, 0.0, 0.0).unwrap();
 
-        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models);
+        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels);
 
         predictor.set_model("m1");
         predictor.set_active(true);

@@ -478,3 +478,69 @@ describe.skipIf(!coreAvailable)('HostGame: эстафета Worker\'ов (5.2)',
     );
   });
 });
+
+// Сквозной путь уровня 2.5D: точка респауна с явным 4-м элементом →
+// set_actor_level в ядре → поле `level` строки m1 в кадре. Ошибка на любом
+// звене молчит: танк просто окажется под мостом вместо моста.
+describe.skipIf(!coreAvailable)('HostGame: спавн на мосту (overpass)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  // карта та же, но в списке респаунов оставлены ТОЛЬКО мостовые точки:
+  // иначе первым свободным окажется наземный респаун
+  const bridgeOnly = map => ({
+    ...map,
+    respawns: Object.fromEntries(
+      Object.entries(map.respawns).map(([team, list]) => [
+        team,
+        list.filter(point => point[3] === 1),
+      ]),
+    ),
+  });
+
+  it('точка [x, y, angle, 1] даёт level 1 в строке m1', async () => {
+    const overpass = (await import('../../src/data/maps/overpass.js')).default;
+    const { host, socket } = await createHost({
+      game: { currentMap: 'overpass', maps: { overpass: bridgeOnly(overpass) } },
+    });
+
+    const gameId = await connectPlayer(host, { socketId: 's1' });
+
+    joinTeam(host, gameId, 'team1');
+    tick(host, 2);
+
+    const row = socket.lastFrame('s1').snapshot.m1[gameId];
+
+    // хвост строки m1: [... angvel, z, level] (src/config/snapshot.js)
+    expect(row[row.length - 1]).toBe(1);
+    expect(row[row.length - 2]).toBe(1);
+  });
+
+  it('наземная точка без 4-го элемента даёт level 0', async () => {
+    const overpass = (await import('../../src/data/maps/overpass.js')).default;
+    const ground = {
+      ...overpass,
+      respawns: Object.fromEntries(
+        Object.entries(overpass.respawns).map(([team, list]) => [
+          team,
+          list.filter(point => point[3] === undefined),
+        ]),
+      ),
+    };
+    const { host, socket } = await createHost({
+      game: { currentMap: 'overpass', maps: { overpass: ground } },
+    });
+
+    const gameId = await connectPlayer(host, { socketId: 's1' });
+
+    joinTeam(host, gameId, 'team1');
+    tick(host, 2);
+
+    const row = socket.lastFrame('s1').snapshot.m1[gameId];
+
+    expect(row[row.length - 1]).toBe(0);
+    expect(row[row.length - 2]).toBe(0);
+  });
+});

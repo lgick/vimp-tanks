@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
+import { readFileSync } from 'node:fs';
 import {
   coreAvailable,
   makeCore,
@@ -22,6 +23,12 @@ const HAS_GAME = 1;
 const HAS_CAMERA = 2;
 const HAS_PREDICTED = 4;
 const HAS_FRAMES = 8;
+
+// слоёная карта-фикстура (2.5D): та же, что в core.test.js
+const layeredMap = readFileSync(
+  new URL('./fixtures/layered.json', import.meta.url),
+  'utf8',
+);
 
 const push = (client, buffer, localNow) =>
   client.push_frame(new Uint8Array(buffer), localNow);
@@ -103,17 +110,18 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       let decoded = decodeFrame(client, packFrame(core, 0, 1));
       const row = decoded.snapshot.m1['2'];
 
-      expect(row).toHaveLength(11);
+      expect(row).toHaveLength(13);
       expect(row[0]).toBe(100.57); // round2
       expect(row.slice(7, 10)).toEqual([3, 2, 1]); // condition, size, teamId
       expect(row[10]).toBe(0); // angvel — стоящий танк не крутится
+      expect(row.slice(11, 13)).toEqual([0, 0]); // z, level — карты нет
 
       core.remove_actor(2);
       decoded = decodeFrame(client, packFrame(core, 0, 2));
       expect(decoded.snapshot.m1['2']).toBeNull();
     });
 
-    it('распаковывает трассер с wasHit и shooterId', () => {
+    it('распаковывает трассер с wasHit, shooterId и уровнями', () => {
       const core = makeCore();
       const client = makeClientCore();
 
@@ -124,9 +132,10 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       const decoded = decodeFrame(client, packFrame(core, 0, 1));
       const tracer = decoded.snapshot.w1[0];
 
-      expect(tracer).toHaveLength(8);
+      expect(tracer).toHaveLength(10);
       expect(tracer[6]).toBe(0); // wasHit (u8 по wire-формату, промах)
       expect(tracer[7]).toBe(1); // shooterId
+      expect(tracer.slice(8, 10)).toEqual([0, 0]); // startLevel/endLevel
     });
   });
 
@@ -249,9 +258,9 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       expect(hot[0] & HAS_PREDICTED).toBeTruthy();
 
-      // predicted-запись последняя (13 f32: keyId, gameId + 11 полей m1),
+      // predicted-запись последняя (15 f32: keyId, gameId + 13 полей m1),
       // x — третье поле записи
-      expect(hot[hot.length - 11]).toBeCloseTo(100, 3);
+      expect(hot[hot.length - 13]).toBeCloseTo(100, 3);
 
       client.apply_input('down', 'forward', 1150);
 
@@ -261,7 +270,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       hot = client.hot_values();
 
-      const x = hot[hot.length - 11];
+      const x = hot[hot.length - 13];
 
       expect(x).toBeGreaterThan(105);
 
@@ -297,7 +306,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       const [coreX] = core.position_of(1);
       const hot = client.hot_values();
-      const predictedX = hot[hot.length - 11];
+      const predictedX = hot[hot.length - 13];
 
       // допуск шире cargo-паритета: рендер-тик клиента дробит время
       // аккумулятором (float-режим реального цикла)
@@ -330,9 +339,12 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       const tracer = spawn.w1[0];
 
-      expect(tracer).toHaveLength(8);
+      expect(tracer).toHaveLength(10);
       expect(tracer[7]).toBe(1); // shooterId
       expect(tracer[6]).toBe(false); // мир пуст — промах
+      // 2.5D-хвост: одноуровневая карта — оба уровня нулевые
+      expect(tracer[8]).toBe(0);
+      expect(tracer[9]).toBe(0);
     });
 
     it('не стреляет без предикта или мёртвым танком', () => {
@@ -367,6 +379,37 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       expect(frames).toHaveLength(1);
       expect(frames[0].game.w1).toEqual([]); // свой дубль вычищен
+    });
+
+    // 2.5D: клиент предсказывает уровень своего танка по той же слоёной
+    // карте, что и хост, и режет луч теми же сегментами
+    it('на слоёной карте трассер с моста падает за кромкой плиты', () => {
+      const core = makeCore();
+      const client = makeClientCore();
+
+      core.load_map(layeredMap);
+      client.set_map(layeredMap);
+
+      // плита моста: колонки 10..12 (x 320..416), строки 5..14 (y 160..480)
+      core.spawn_actor(1, 'm1', 1, 352, 300, 0);
+      stepTicks(core, 1);
+      client.set_model('m1');
+      client.set_active(true);
+      push(client, packFrame(core, 1000, 1, { playerId: 1 }), 1000);
+      client.sample(1150);
+      client.take_frames();
+
+      // предсказанный хвост своей строки: z и уровень (последние два поля)
+      const hot = client.hot_values();
+
+      expect(hot[hot.length - 1]).toBe(1); // level
+      expect(hot[hot.length - 2]).toBe(1); // z
+
+      const tracer = JSON.parse(client.try_fire(1200)).w1[0];
+
+      // ствол смотрит на восток: кромка плиты на x = 416
+      expect(tracer[8]).toBe(1); // startLevel — мост
+      expect(tracer[9]).toBe(0); // endLevel — луч упал на землю
     });
   });
 });

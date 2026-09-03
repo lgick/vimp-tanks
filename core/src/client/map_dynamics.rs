@@ -145,6 +145,7 @@ impl MapDynamics {
 
             body.half_w = half_w;
             body.half_h = half_h;
+            body.level = item.level;
 
             // масса и момент инерции прямоугольника (как у Rapier на хосте)
             let mass = box_mass_properties(width, height, item.density);
@@ -175,11 +176,12 @@ impl MapDynamics {
     }
 
     /// Все симуляционные боксы (raycast выстрела идёт по всей динамике).
-    pub fn sim_boxes(&self) -> Vec<(&str, Box2)> {
+    /// Третий элемент — уровень ящика: сегмент луча видит только свой.
+    pub fn sim_boxes(&self) -> Vec<(&str, Box2, u8)> {
         self.set
             .bodies()
             .iter()
-            .map(|(key, body)| (key.as_str(), sim_obb(body)))
+            .map(|(key, body)| (key.as_str(), sim_obb(body), body.level))
             .collect()
     }
 
@@ -549,6 +551,30 @@ mod tests {
         dynamics.set_map(&map_config(serde_json::Value::Array(objects), 1.0));
 
         dynamics
+    }
+
+    #[test]
+    fn body_carries_the_level_from_the_map() {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [0.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 },
+                { "position": [100.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0, "level": 1 }
+            ]),
+            1.0,
+        ));
+
+        // уровень едет из physicsDynamic; без поля — земля
+        assert_eq!(dynamics.set.bodies()["d0"].level, 0);
+        assert_eq!(dynamics.set.bodies()["d1"].level, 1);
+
+        let boxes = dynamics.sim_boxes();
+
+        assert_eq!(boxes[0].2, 0);
+        assert_eq!(boxes[1].2, 1);
     }
 
     // OBB танка (центр), которым проверяется захват тел в предсказание

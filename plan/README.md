@@ -46,14 +46,14 @@
 
 | # | Репо | Файл | Что | Статус |
 | --- | --- | --- | --- | --- |
-| 1 | E | [stage_1.md](stage_1.md) | Крейт движка: слоёный формат карты, `MapLevels`, рампы, `InteractionGroups`, `level_at`, `set_actor_level`, слоёный нав-граф | ☐ |
-| 2 | E | [stage_2.md](stage_2.md) | JS движка: `scaleMapData`, `MAP_DATA` → `set_map`, слои рендера, `coreParams`, capability `map.layers`, правило контракта E3 | ☐ |
-| 3 | T | [stage_3.md](stage_3.md) | Ядро танков: `level`/`z`/`Transit`, рампы, падение, группы коллизий, схема `m1`, `players_json` | ☐ |
-| 4 | T | [stage_4.md](stage_4.md) | Стрельба и взрывы между уровнями: сегментный hitscan, уровень бомбы, экранирование взрыва | ☐ |
-| 5 | T | [stage_5.md](stage_5.md) | Клиентское предсказание: `Predictor`, `RemoteTanks`, `MapDynamics`, `ShotPredictor` по уровням | ☐ |
-| 6 | T | [stage_6.md](stage_6.md) | Рендер PixiJS: слои, zIndex, see-through моста, радар, эффекты | ☐ |
-| 7 | T | [stage_7.md](stage_7.md) | Боты: пути через рампы, прыжки с обрыва, выбор цели по уровням | ☐ |
-| 8 | T+E | [stage_8.md](stage_8.md) | Демо-карта `overpass`, сценарии отладки, тесты, документация, релиз | ☐ |
+| 1 | E | [stage_1.md](stage_1.md) | Крейт движка: слоёный формат карты, `MapLevels`, рампы, `InteractionGroups`, `level_at`, `set_actor_level`, слоёный нав-граф | ✅ выполнен |
+| 2 | E | [stage_2.md](stage_2.md) | JS движка: `scaleMapData`, `MAP_DATA` → `set_map`, слои рендера, `coreParams`, capability `map.layers`, правило контракта E4 | ✅ выполнен |
+| 3 | T | [stage_3.md](stage_3.md) | Ядро танков: `level`/`z`/`Transit`, рампы, падение, группы коллизий, схема `m1`, `players_json` | ✅ выполнен |
+| 4 | T | [stage_4.md](stage_4.md) | Стрельба и взрывы между уровнями: сегментный hitscan, уровень бомбы, экранирование взрыва | ✅ выполнен |
+| 5 | T | [stage_5.md](stage_5.md) | Клиентское предсказание: `Predictor`, `RemoteTanks`, `MapDynamics`, `ShotPredictor` по уровням | ✅ выполнен |
+| 6 | T | [stage_6.md](stage_6.md) | Рендер PixiJS: слои, zIndex, see-through моста, радар, эффекты | ✅ выполнен |
+| 7 | T | [stage_7.md](stage_7.md) | Боты: пути через рампы, прыжки с обрыва, выбор цели по уровням | ✅ выполнен |
+| 8 | T+E | [stage_8.md](stage_8.md) | Демо-карта `overpass`, сценарии отладки, тесты, документация, релиз | ◐ 8.1–8.9 сделаны, релиз (8.10) ждёт публикации движка |
 
 Порядок строгий: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. Этапы 1–2 обязаны быть
 зелёными до старта 3: без них у танков нет ни данных, ни геометрии.

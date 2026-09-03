@@ -115,6 +115,33 @@ pub struct WeaponConfig {
     pub radius: f32,
 }
 
+/// Правила 2.5D-уровней (game.js coreParams.levels). Одноуровневая карта
+/// их не использует, поэтому все поля имеют умолчания: игра, забывшая
+/// секцию, не падает — она просто не платит за падение.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LevelRules {
+    /// Длительность падения с моста до земли (секунды).
+    #[serde(default = "default_fall_time")]
+    pub fall_time: f32,
+    /// Урон при приземлении (0 — падение бесплатно).
+    #[serde(default)]
+    pub fall_damage: f64,
+}
+
+impl Default for LevelRules {
+    fn default() -> Self {
+        Self {
+            fall_time: default_fall_time(),
+            fall_damage: 0.0,
+        }
+    }
+}
+
+fn default_fall_time() -> f32 {
+    0.35
+}
+
 /// Игровая половина init-JSON хостового ядра (`GameCore::new`) — см.
 /// `vimp_engine_core::sim::GameDef::Config`.
 #[derive(Clone, Deserialize)]
@@ -127,6 +154,10 @@ pub struct TanksConfig {
     pub player_keys: IndexMap<String, KeyConfig>,
     /// Стартовые значения панели: health + боезапас по оружию (game.js panel).
     pub panel: IndexMap<String, PanelValue>,
+    /// Правила 2.5D-уровней (coreParams.levels); одноуровневая карта их
+    /// не касается, поэтому секция необязательна.
+    #[serde(default)]
+    pub levels: LevelRules,
 }
 
 impl TanksConfig {
@@ -141,6 +172,21 @@ impl TanksConfig {
                 ));
             }
         }
+
+        if self.levels.fall_time <= 0.0 {
+            return Err(format!(
+                "levels.fallTime must be > 0, got {}",
+                self.levels.fall_time
+            ));
+        }
+
+        if self.levels.fall_damage < 0.0 {
+            return Err(format!(
+                "levels.fallDamage must be >= 0, got {}",
+                self.levels.fall_damage
+            ));
+        }
+
         Ok(())
     }
 }
@@ -171,6 +217,11 @@ pub struct TanksClientConfig {
     /// авторитетный трассер приходит кадром).
     #[serde(default = "default_seed")]
     pub seed: u64,
+    /// Правила 2.5D-уровней (coreParams.levels) — те же, что у хоста:
+    /// реплика считает падение и рампы теми же функциями `crate::level`,
+    /// и разное `fallTime` заставило бы танк мигать уровнем.
+    #[serde(default)]
+    pub levels: LevelRules,
 }
 
 fn default_seed() -> u64 {
@@ -214,6 +265,7 @@ mod validate_tests {
             weapons,
             player_keys: IndexMap::new(),
             panel,
+            levels: LevelRules::default(),
         }
     }
 
@@ -231,6 +283,39 @@ mod validate_tests {
             .unwrap_err();
 
         assert!(err.contains("w3"));
+    }
+
+    #[test]
+    fn level_rules_default_when_absent() {
+        let json = serde_json::json!({
+            "models": {},
+            "weapons": {},
+            "playerKeys": {},
+            "panel": {}
+        });
+        let cfg: TanksConfig = serde_json::from_value(json).unwrap();
+
+        assert_eq!(cfg.levels.fall_time, 0.35);
+        assert_eq!(cfg.levels.fall_damage, 0.0);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_fall_time() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.fall_time = 0.0;
+
+        assert!(cfg.validate().unwrap_err().contains("fallTime"));
+    }
+
+    #[test]
+    fn validate_rejects_negative_fall_damage() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.fall_damage = -1.0;
+
+        assert!(cfg.validate().unwrap_err().contains("fallDamage"));
     }
 
     #[test]

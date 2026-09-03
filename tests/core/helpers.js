@@ -57,6 +57,9 @@ export const makeClientCore = (overrides = {}) => {
         playerKeys: tanksGameConfig.playerKeys,
         models,
         weapons,
+        // тем же путём, что buildClientConfig на хосте: правила уровня
+        // обязаны доехать до реплики, иначе падение считается по дефолту
+        coreParams: tanksGameConfig.coreParams,
       },
       interpolation: clientDefaults.interpolation,
       snapshot: tanksGameConfig.snapshot,

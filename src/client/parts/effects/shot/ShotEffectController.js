@@ -1,12 +1,14 @@
 import { Container } from 'pixi.js';
 import TracerEffect from './TracerEffect.js';
 import ImpactEffect from './ImpactEffect.js';
+import { levelZ } from '../../../levelZ.js';
+
+// базовый zIndex трассера и осколков внутри своего уровня
+const SHOT_BASE_Z = 2;
 
 export default class ShotEffectController extends Container {
   constructor(data, assets, dependencies) {
     super();
-
-    this.zIndex = 2;
 
     this.startPositionX = data[0];
     this.startPositionY = data[1];
@@ -16,16 +18,24 @@ export default class ShotEffectController extends Container {
     this.soundPositionY = data[5];
     this.hit = data[6];
 
-    // якорь попадания в динамику карты — девятый элемент строки, только
+    // 2.5D: уровни начала (data[8]) и конца (data[9]) луча. Трассер
+    // рисуется целиком на уровне КОНЦА — ломать линию на кромке плиты
+    // отложено (plan/README.md), а осколки обязаны лежать там же, где
+    // луч закончился, иначе они провалятся под мост
+    this.startLevel = data[8] || 0;
+    this.endLevel = data[9] || 0;
+    this.zIndex = levelZ(SHOT_BASE_Z, this.endLevel);
+
+    // якорь попадания в динамику карты — одиннадцатый элемент строки, только
     // у своего локально предсказанного трассера (см. build_tracer в
-    // core/src/client/shot.rs); авторитетные трассеры (длина 8) его не
-    // несут — data[8] === undefined
+    // core/src/client/shot.rs); авторитетные трассеры (длина 10) его не
+    // несут — data[10] === undefined
     this.anchorKey = null;
     this.anchorLocalX = 0;
     this.anchorLocalY = 0;
 
-    if (Array.isArray(data[8])) {
-      [this.anchorKey, this.anchorLocalX, this.anchorLocalY] = data[8];
+    if (Array.isArray(data[10])) {
+      [this.anchorKey, this.anchorLocalX, this.anchorLocalY] = data[10];
     }
 
     this._assets = assets;

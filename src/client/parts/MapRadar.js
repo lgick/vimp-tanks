@@ -1,4 +1,11 @@
 import { Container, Graphics } from 'pixi.js';
+import { levelZ } from '../levelZ.js';
+
+// базовый zIndex схемы карты внутри своего уровня
+const MAP_RADAR_BASE_Z = 2;
+
+// цвет стен по уровням: эстакада читается отдельно от земли
+const LEVEL_COLORS = [0xffffff, 0x8fb7ff];
 
 export default class MapRadar extends Container {
   constructor(data) {
@@ -6,10 +13,18 @@ export default class MapRadar extends Container {
 
     // сохраняем необходимые данные для схематичной карты
     this._map = data.map;
-    this._physicsStatic = data.physicsStatic;
+    this._level = data.level || 0;
+    // solid — препятствия своего уровня (у земли это physicsStatic,
+    // у эстакады — её перила)
+    this._solid = data.solid || data.physicsStatic || [];
+    this._tiles = data.tiles || [];
     this._step = data.step;
-    this.zIndex = 2;
+    this.zIndex = levelZ(MAP_RADAR_BASE_Z, this._level);
     this.scale = data.scale;
+
+    // рисуем стены только тем слоем, который эти стены и показывает:
+    // иначе каждый рендер-слой карты дублировал бы одну и ту же графику
+    this._draws = this._tiles.some(tile => this._solid.includes(tile));
 
     this.radarGraphics = new Graphics();
     this.addChild(this.radarGraphics);
@@ -19,6 +34,10 @@ export default class MapRadar extends Container {
   }
 
   createRadarMap() {
+    if (!this._draws) {
+      return;
+    }
+
     const graphics = this.radarGraphics;
 
     graphics.clear();
@@ -32,7 +51,7 @@ export default class MapRadar extends Container {
             const tileType = row[x];
 
             // проверяем, является ли текущий тайл препятствием (physicsStatic)
-            if (this._physicsStatic.includes(tileType)) {
+            if (this._solid.includes(tileType)) {
               graphics.rect(
                 x * this._step,
                 y * this._step,
@@ -45,7 +64,7 @@ export default class MapRadar extends Container {
       }
     }
 
-    graphics.fill(0xffffff);
+    graphics.fill(LEVEL_COLORS[this._level] ?? LEVEL_COLORS[0]);
   }
 
   update() {}
@@ -60,6 +79,7 @@ export default class MapRadar extends Container {
 
     this.radarGraphics = null;
     this._map = null;
-    this._physicsStatic = null;
+    this._solid = null;
+    this._tiles = null;
   }
 }

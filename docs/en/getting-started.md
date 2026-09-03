@@ -197,6 +197,20 @@ the snapshot schema or the panel. The scenarios:
 | `combat.json` | two players, both weapons, explosions, a map with dynamic bodies (`c1`) |
 | `round.json` | bots, friendly fire, death → round end → respawn (invariant 10) |
 | `contact.json` | two tanks in contact: one pushes the other, both predict the remote hull (`remote_tanks.rs`) |
+| `bridge.json` | `overpass`: up the west ramp, across the bridge, down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
+| `fall.json` | `overpass`: off a gap in the railings — `Falling`, `z` down to 0, landing at level 0 |
+| `crosslevel.json` | `overpass`: two players on different levels, hitscan across the levels and a bomb on the slab that does not touch the tank underneath |
+| `bots_bridge.json` | `overpass`: a player plus `/bot 2` over a long run — bots use the ramp and do not get stuck (invariants 10/11) |
+
+Three of them run with the same drift thresholds as `movement.json`;
+`bots_bridge.json` sets `divergence: null` on purpose — over 1800 ticks the
+bots ram the player and blow him up, and neither an authoritative contact
+impulse nor an explosion is something the client replica predicts. Both
+kinds of divergence are also worth knowing when writing a new scenario: a
+tank ramming a wall at speed and a state transition that depends on the
+position (the edge of a ledge, the end of a ramp) legitimately break the
+tight thresholds for a few ticks — steer around walls and coast over the
+ledge instead of loosening the thresholds.
 
 Threshold calibration and the scenario format live in the engine's
 [debugging.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/debugging.md).

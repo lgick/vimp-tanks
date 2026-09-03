@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
 use crate::config::{KeyConfig, ModelConfig, PanelValue, WeaponConfig};
+use crate::level::LevelState;
 use vimp_engine_core::config::PLAYER_STATE_LEN;
 use vimp_engine_core::events::CoreEvent;
 use crate::motion::{self, TurretInput};
+use vimp_engine_core::map::{level_interaction, levels_interaction};
 use vimp_engine_core::physics::{deg_to_rad, round2};
 use vimp_engine_core::rng::Rng;
 
@@ -65,6 +67,12 @@ pub struct Tank {
     pub team_id: u8,
     pub model: String,
     pub body: RigidBodyHandle,
+    /// Хендл коллайдера корпуса: маска уровней переписывается каждый раз,
+    /// когда танк меняет уровень, а искать коллайдер через тело на каждом
+    /// шаге — лишняя работа в горячем пути.
+    pub collider: ColliderHandle,
+    /// Уровень, высота и переход (2.5D-карты).
+    pub level_state: LevelState,
 
     // производные от модели
     width: f32,
@@ -134,13 +142,16 @@ impl Tank {
                 .user_data(tag.encode()),
         );
 
-        world.insert_collider(
+        let collider = world.insert_collider(
             ColliderBuilder::cuboid(width / 2.0, height / 2.0)
                 .density(model.fixture.density)
                 .friction(model.fixture.friction)
                 .restitution(model.fixture.restitution)
                 // события контактов (попадания снарядов) собирает game
-                .active_events(ActiveEvents::COLLISION_EVENTS),
+                .active_events(ActiveEvents::COLLISION_EVENTS)
+                // стартуем на земле; слоёная карта переставит маску первым
+                // же шагом `update_levels`
+                .collision_groups(level_interaction(0)),
             Some(body_handle),
         );
 
@@ -161,6 +172,8 @@ impl Tank {
             team_id,
             model: model_name.to_string(),
             body: body_handle,
+            collider,
+            level_state: LevelState::default(),
             width,
             height,
             mass,
@@ -366,6 +379,15 @@ impl Tank {
     ) -> Option<ShotCommand> {
         let keys = self.keys_for_processing();
 
+        // падение: ввод игнорируется целиком (клавиши остаются нажатыми и
+        // подхватятся при приземлении), выстрел не производится
+        if self.level_state.input_locked() {
+            self.update_cooldowns(dt);
+            self.engine_load = 0.0;
+
+            return None;
+        }
+
         let forward = keys & bits.forward != 0;
         let back = keys & bits.back != 0;
         let left = keys & bits.left != 0;
@@ -477,8 +499,26 @@ impl Tank {
         self.engine_throttle = 0.0;
         self.engine_load = 0.0;
         self.centering_gun = false;
+        // фактический уровень выставит set_level/update_levels сразу после
+        self.level_state = LevelState::default();
 
         self.reset_keys();
+    }
+
+    /// Явный уровень (точка респауна назвала его) — снапом, без перехода.
+    pub fn set_level(&mut self, level: u8) {
+        self.level_state = LevelState {
+            level,
+            z: level as f32,
+            transit: crate::level::Transit::Grounded,
+        };
+    }
+
+    /// Переписывает маску коллизий корпуса под текущее состояние уровня.
+    pub fn sync_collision_groups(&self, world: &mut PhysicsWorld) {
+        if let Some(collider) = world.colliders.get_mut(self.collider) {
+            collider.set_collision_groups(levels_interaction(self.level_state.collision_mask()));
+        }
     }
 
     /// Сброс здоровья/боезапаса к дефолтам (аналог Panel.reset для игрока).
@@ -512,7 +552,9 @@ impl Tank {
     /// Строка снапшота (Tank.getData): значения скруглены до 2 знаков.
     /// Последним идёт `angvel` — клиенту он нужен, чтобы предсказать доворот
     /// чужого корпуса за задержку интерполяции (кадр v5, см. RemoteTanks).
-    pub fn snapshot_row(&self, body: &RigidBody, size: f32) -> ([f32; 7], u8, u8, u8, f32) {
+    /// Хвост строки — `angvel`, `z` и `level` (2.5D): порядок обязан
+    /// совпадать со схемой `m1` (src/config/snapshot.js).
+    pub fn snapshot_row(&self, body: &RigidBody, size: f32) -> ([f32; 7], u8, u8, u8, f32, f32, u8) {
         let pos = body.translation();
         let vel = body.linvel();
 
@@ -530,6 +572,8 @@ impl Tank {
             size as u8,
             self.team_id,
             round2(body.angvel()),
+            round2(self.level_state.z),
+            self.level_state.level,
         )
     }
 
@@ -551,5 +595,165 @@ impl Tank {
             ],
             self.centering_gun,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PanelValue;
+    use crate::level::Transit;
+    use indexmap::IndexMap;
+
+    fn model() -> ModelConfig {
+        serde_json::from_value(serde_json::json!({
+            "currentWeapon": "w1",
+            "size": 2,
+            "accelerationFactor": 1000,
+            "brakingFactor": 0.3,
+            "maxForwardSpeed": 260,
+            "maxReverseSpeed": -130,
+            "baseTurnTorqueFactor": 215,
+            "damping": { "linear": 3, "angular": 100.0 },
+            "fixture": { "density": 200, "friction": 0.5, "restitution": 0.1 },
+            "lateralGrip": 20,
+            "turnSpeedThreshold": 10,
+            "baseTurnFactorRatio": 0.8,
+            "reverseTurnMultiplier": 0.7,
+            "throttleIncreaseRate": 2.0,
+            "throttleDecreaseRate": 2.5,
+            "strainFactor": 1.5,
+            "maxGunAngle": 1.4,
+            "gunRotationSpeed": 3.0,
+            "gunCenterSpeed": 10.0
+        }))
+        .unwrap()
+    }
+
+    fn weapons() -> IndexMap<String, WeaponConfig> {
+        serde_json::from_value(serde_json::json!({
+            "w1": {
+                "type": "hitscan",
+                "damage": 40,
+                "range": 1500,
+                "fireRate": 0.01,
+                "consumption": 1
+            }
+        }))
+        .unwrap()
+    }
+
+    fn panel() -> IndexMap<String, PanelValue> {
+        let mut panel = IndexMap::new();
+
+        panel.insert("health".to_string(), PanelValue { value: 100.0 });
+        panel.insert("w1".to_string(), PanelValue { value: 10.0 });
+        panel
+    }
+
+    fn key_bits() -> PlayerKeyBits {
+        let keys: IndexMap<String, KeyConfig> = serde_json::from_value(serde_json::json!({
+            "forward": { "key": 1 },
+            "fire": { "key": 128, "type": 1 }
+        }))
+        .unwrap();
+
+        PlayerKeyBits::from_config(&keys)
+    }
+
+    fn make_tank(world: &mut PhysicsWorld) -> Tank {
+        Tank::new(
+            world,
+            &weapons(),
+            &panel(),
+            "m1",
+            &model(),
+            1,
+            1,
+            0.0,
+            0.0,
+            0.0,
+        )
+    }
+
+    #[test]
+    fn falling_tank_ignores_input() {
+        let mut world = PhysicsWorld::new();
+        let mut tank = make_tank(&mut world);
+        let bits = key_bits();
+        let mut rng = Rng::new(1);
+        let mut events = Vec::new();
+
+        tank.update_keys("down", bits.forward, &bits);
+        tank.update_keys("down", bits.fire, &bits);
+        tank.level_state.transit = Transit::Falling {
+            elapsed: 0.0,
+            from: 1,
+        };
+
+        let body = &mut world.bodies[tank.body];
+        let shot = tank.update(
+            1.0 / 120.0,
+            body,
+            &model(),
+            &weapons(),
+            &bits,
+            &mut rng,
+            &mut events,
+        );
+
+        assert!(shot.is_none(), "падающий танк не стреляет");
+        assert_eq!(body.linvel().length(), 0.0, "и не получает импульсов");
+
+        // после приземления удерживаемая клавиша подхватывается
+        tank.level_state = LevelState::default();
+
+        let body = &mut world.bodies[tank.body];
+
+        tank.update(
+            1.0 / 120.0,
+            body,
+            &model(),
+            &weapons(),
+            &bits,
+            &mut rng,
+            &mut events,
+        );
+
+        assert!(body.linvel().length() > 0.0);
+    }
+
+    #[test]
+    fn snapshot_row_carries_level_and_z() {
+        let mut world = PhysicsWorld::new();
+        let mut tank = make_tank(&mut world);
+
+        tank.level_state = LevelState {
+            level: 1,
+            z: 0.456,
+            transit: Transit::Ramp,
+        };
+
+        let (_floats, _condition, _size, _team, _angvel, z, level) =
+            tank.snapshot_row(&world.bodies[tank.body], 2.0);
+
+        assert_eq!(z, 0.46);
+        assert_eq!(level, 1);
+    }
+
+    #[test]
+    fn set_level_snaps_state_and_mask() {
+        let mut world = PhysicsWorld::new();
+        let mut tank = make_tank(&mut world);
+
+        tank.set_level(1);
+        tank.sync_collision_groups(&mut world);
+
+        assert_eq!(tank.level_state.level, 1);
+        assert_eq!(tank.level_state.z, 1.0);
+        assert_eq!(
+            world.colliders[tank.collider].collision_groups().memberships,
+            vimp_engine_core::map::level_group(1)
+        );
     }
 }

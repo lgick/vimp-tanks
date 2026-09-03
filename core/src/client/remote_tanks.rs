@@ -68,6 +68,8 @@ const FIELD_CONDITION: usize = 7;
 const FIELD_SIZE: usize = 8;
 const FIELD_TEAM: usize = 9;
 const FIELD_ANGVEL: usize = 10;
+const FIELD_Z: usize = 11;
+const FIELD_LEVEL: usize = 12;
 
 fn field_f32(fields: &[FieldValue], i: usize) -> f32 {
     match fields.get(i) {
@@ -104,6 +106,11 @@ struct TankMeta {
     condition: u8,
     size: u8,
     team: u8,
+    /// 2.5D-хвост строки: визуальная высота и уровень. Реплика их не
+    /// считает (правила уровня — только для своего танка), а рендер-строка
+    /// обязана повторять форму блока модели целиком
+    z: f32,
+    level: u8,
 }
 
 /// Предсказание чужих танков в контакте.
@@ -141,12 +148,15 @@ impl RemoteTanks {
 
     /// СИМУЛЯЦИОННЫЕ боксы корпусов по `gameId` — цели raycast выстрела:
     /// интерполированные корпуса отстают на `interpolation.delay`, и по
-    /// едущему танку луч ушёл бы мимо.
-    pub fn sim_boxes(&self) -> Vec<(u32, Box2)> {
+    /// едущему танку луч ушёл бы мимо. Третий элемент — уровень корпуса:
+    /// сегмент луча бьёт только цели своего уровня.
+    pub fn sim_boxes(&self) -> Vec<(u32, Box2, u8)> {
         self.set
             .bodies()
             .iter()
-            .filter_map(|(key, body)| Some((self.meta.get(key)?.game_id, sim_obb(body))))
+            .filter_map(|(key, body)| {
+                Some((self.meta.get(key)?.game_id, sim_obb(body), body.level))
+            })
             .collect()
     }
 
@@ -259,6 +269,8 @@ impl PredictedBodies for RemoteTanks {
                     apply_size(body, size, density);
                 }
 
+                body.level = field_u8(&row.fields, FIELD_LEVEL);
+
                 self.meta.insert(
                     key.clone(),
                     TankMeta {
@@ -269,6 +281,8 @@ impl PredictedBodies for RemoteTanks {
                         condition: field_u8(&row.fields, FIELD_CONDITION),
                         size,
                         team: field_u8(&row.fields, FIELD_TEAM),
+                        z: field_f32(&row.fields, FIELD_Z),
+                        level: field_u8(&row.fields, FIELD_LEVEL),
                     },
                 );
                 seen.insert(key);
@@ -324,6 +338,36 @@ impl PredictedBodies for RemoteTanks {
         entries
     }
 
+    /// Реконсиляция плюс уровень корпуса из того же СЫРОГО кадра:
+    /// интерполированный сэмпл (`update`) отстаёт на буфер интерполяции, а
+    /// маска коллизий переигранных шагов обязана совпадать с хостовой.
+    fn begin_reconcile(&mut self, snapshot: &DecodedSnapshot) {
+        let entries = self.snapshot_bodies(snapshot);
+        let mut levels: Vec<(String, u8)> = Vec::new();
+
+        for model_key in self.models.keys() {
+            let Some(BlockData::Indexed8(items)) = snapshot.block_by_key(model_key) else {
+                continue;
+            };
+
+            for (id, row) in items {
+                let Some(fields) = row else {
+                    continue;
+                };
+
+                levels.push((body_key(model_key, *id as u32), field_u8(fields, FIELD_LEVEL)));
+            }
+        }
+
+        self.set.begin_reconcile(&entries);
+
+        for (key, level) in levels {
+            if let Some(body) = self.set.bodies_mut().get_mut(&key) {
+                body.level = level;
+            }
+        }
+    }
+
     /// Переводит в `Predicted` чужие танки, попавшие в раздутый OBB своего.
     /// Транзитивного замыкания нет: цепочка «танк толкает танк толкает танк»
     /// практически не встречается, а лишние предсказанные тела — это лишнее
@@ -377,6 +421,8 @@ impl PredictedBodies for RemoteTanks {
                         meta.size as f32,
                         meta.team as f32,
                         body.body.angvel,
+                        meta.z,
+                        meta.level as f32,
                     ],
                 })
             })
@@ -545,6 +591,15 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Vec<FieldValue> {
         tank_row(x, y, 0.0, 0.0, 0.0, 0.0)
+    }
+
+    // строка с 2.5D-хвостом: z и уровень корпуса
+    fn at_level(x: f32, y: f32, level: u8) -> Vec<FieldValue> {
+        let mut row = at(x, y);
+
+        row.push(FieldValue::F32(level as f32));
+        row.push(FieldValue::U8(level));
+        row
     }
 
     // интерполированный сэмпл: скоростей он не несёт (см. snapshot_bodies)
@@ -906,7 +961,8 @@ mod tests {
         assert_eq!(rows[0].id, 7);
         assert_eq!(
             rows[0].fields,
-            vec![0.0, 0.0, 0.5, 0.0, 3.0, -1.0, 0.0, 3.0, 10.0, 1.0, 0.7]
+            // хвост 2.5D (z, level) — из строки кадра: реплика их не считает
+            vec![0.0, 0.0, 0.5, 0.0, 3.0, -1.0, 0.0, 3.0, 10.0, 1.0, 0.7, 0.0, 0.0]
         );
     }
 
@@ -964,6 +1020,23 @@ mod tests {
         // корпус там, где танк у хоста, а не там, где он нарисован
         assert_eq!(boxes[0].1.x, 60.0);
         assert_eq!((boxes[0].1.half_w, boxes[0].1.half_h), (20.0, 15.0));
+    }
+
+    #[test]
+    fn body_carries_the_level_from_the_row() {
+        let mut tanks = remote_tanks();
+
+        // интерполированный сэмпл
+        tanks.update(&game(&[("m1", 7, at_level(0.0, 0.0, 1))]));
+
+        assert_eq!(tanks.set.bodies()["m1:7"].level, 1);
+        assert_eq!(tanks.sim_boxes()[0].2, 1);
+
+        // сырой кадр реконсиляции — тот же уровень, но раньше сэмпла
+        tanks.update(&game(&[("m1", 7, at_level(0.0, 0.0, 1))]));
+        tanks.begin_reconcile(&snapshot(&[(7, Some(at_level(0.0, 0.0, 0)))]));
+
+        assert_eq!(tanks.set.bodies()["m1:7"].level, 0);
     }
 
     #[test]

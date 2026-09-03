@@ -101,3 +101,85 @@ describe('Tank: звук двигателя', () => {
     expect(soundManager.unregisterSound).toHaveBeenCalledWith(soundId);
   });
 });
+
+// 2.5D: уровень танка задаёт слой отрисовки, а свой танк ещё и сообщает
+// сервису levelView, где он и на каком уровне — по этому плита моста над
+// игроком становится полупрозрачной (Map.onRender).
+describe('Tank: уровни 2.5D', () => {
+  // строка m1 целиком: [..., angvel, z, level]
+  const row = (level, z = 0, x = 0, y = 0) => [
+    x,
+    y,
+    0,
+    0,
+    0,
+    0,
+    0,
+    100,
+    10,
+    1,
+    0,
+    z,
+    level,
+  ];
+
+  const makeLevelView = () => ({
+    level: 0,
+    x: 0,
+    y: 0,
+    set: vi.fn(function set(level, x, y) {
+      this.level = level;
+      this.x = x;
+      this.y = y;
+    }),
+  });
+
+  // localPlayer — движковый сервис: сравнивает id сущности со своим gameId
+  const makeLocalPlayer = myId => ({ is: id => String(id) === String(myId) });
+
+  const makeTankAt = (level, dependencies, id = '1') =>
+    new Tank(
+      row(level),
+      assets,
+      { soundManager: makeSoundManager(), ...dependencies },
+      { id },
+    );
+
+  it('zIndex следует за уровнем', () => {
+    const tank = makeTankAt(0, {});
+
+    expect(tank.zIndex).toBe(3);
+
+    tank.update(row(1));
+
+    expect(tank.zIndex).toBe(103);
+
+    tank.update(row(0));
+
+    expect(tank.zIndex).toBe(3);
+  });
+
+  it('свой танк публикует свой уровень и позицию в levelView', () => {
+    const levelView = makeLevelView();
+    const tank = makeTankAt(0, {
+      levelView,
+      localPlayer: makeLocalPlayer('1'),
+    });
+
+    tank.update(row(1, 1, 320, 640));
+
+    expect(levelView.set).toHaveBeenCalledWith(1, 320, 640);
+  });
+
+  it('чужой танк в levelView не пишет', () => {
+    const levelView = makeLevelView();
+    const tank = makeTankAt(0, {
+      levelView,
+      localPlayer: makeLocalPlayer('7'),
+    });
+
+    tank.update(row(1, 1, 320, 640));
+
+    expect(levelView.set).not.toHaveBeenCalled();
+  });
+});

@@ -30,6 +30,61 @@ files serve as templates), and every change ends with a green `npx eslint
    [New map image](#new-map-image); `npm run build:manifest` fails if a
    name has no file.
 
+### Upper levels (2.5D)
+
+An optional `levels` field adds an overpass over the same grid (`ramps`
+holds the transitions). Each level brings its own `layers`, over its own
+`map`, plus `floor` (drivable slab tiles) and `walls` (railings).
+
+- **Render layers.** A level's `layers` keys are the same base `zIndex`
+  values as level 0 (1 under tanks, 2 tank level, 3+ above): the renderer
+  shifts them by `LEVEL_Z_STRIDE = 100` per level itself
+  (`src/client/levelZ.js`). So keep base layers below 100 — everything from
+  100 up belongs to level 1 and would draw over the bridge. Nothing else
+  has to be done to make an upper layer cover the ground.
+- **Railings must be part of the slab** — a `walls` tile also belongs in
+  `floor`, otherwise the railing hangs in the air and a shot from below
+  does not see it.
+- **Do not put a railing right where a ramp meets the slab**: a tank that
+  has just climbed up would drive straight into it. Leave the ramp exit and
+  the tile in front of it free.
+- **Cap the ends of the bridge with railings.** Level-0 walls are no
+  obstacle to a tank on the slab, so a bridge that simply ends drops the
+  driver into the void beyond the map border.
+- **Keep ground respawn points from under the slab.** A point without the
+  4th element takes its level from the geometry, so one under the bridge
+  spawns the tank on the bridge. Put an explicit `0` there, or move the
+  point out.
+- **A box on the slab needs `level: 1`** — without it the box stands on the
+  ground under the bridge and the tank on the bridge drives right through
+  it. `position` is the top-left corner of the body, not its centre.
+
+Step by step, the way `overpass.js` was built:
+
+1. Build both grids with one constructor function (80 × 60 by hand is not
+   maintainable) — level 0 in `map`, the overpass in `levels[1].map`, the
+   same dimensions.
+2. Lay the ramp tiles into the level-0 grid and declare them in `ramps`
+   with the direction you drive to climb. Open a gap in the railing where
+   the ramp meets the slab.
+3. Leave a gap or two in the railing away from the ramps — those are the
+   ledges people fall from and shoot through from below.
+4. Give the level its `floor`/`walls`/`layers` and give each `physicsDynamic`
+   body its `level`.
+5. Register the map in `src/data/maps/index.js` and check it:
+
+```bash
+npm test -- --silent          # tests/config/game.test.js checks tiles and respawns
+npm run build                 # export + manifest (a missing image stops it)
+npx vimp-contract             # rule E4 — structure of the layered fields
+npm run sim:scenarios         # bridge/fall/crosslevel/bots_bridge on overpass
+npm run dev                   # by eye: set room.map in src/standalone.js
+```
+
+The core validates the same structure at load time and refuses a broken
+map, so a mistake is loud rather than silent — see
+[configuration.md](configuration.md#the-25d-fields-levels-ramps).
+
 ## New map image
 
 Images are part of this package, not of the engine: `Map`

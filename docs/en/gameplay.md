@@ -111,6 +111,44 @@ The tank carries two weapons (switch with `n`/`p`, the active one is highlighted
 
 Health is 100. The tank's `condition` visually degrades with damage (smoke), and it's destroyed at 0. Stats — [configuration.md](configuration.md#weaponsjs).
 
+## Bridges and levels (2.5D)
+
+A map may carry a second level — an overpass over the ground. There is no
+jump key: the tank changes level only by driving.
+
+- **Up and down a ramp.** A ramp is a directional run of ground tiles.
+  Driving along it lifts the tank smoothly; halfway up it starts belonging
+  to the upper level. While on the ramp the tank collides with the geometry
+  of *both* levels, so it neither falls through the bridge nor clips into
+  the wall at the top.
+- **On the bridge.** Tanks on different levels ignore each other
+  completely: a tank driving under the overpass will not bump into the one
+  above it, and vice versa.
+- **Off the ledge.** A bridge edge without railings is a ledge. Driving off
+  it starts a fall: controls are dead for 0.35 s, the tank coasts on
+  inertia and collides with nothing, and the landing costs 15 health. A
+  fatal landing counts as a suicide — the stats record a loss and nobody
+  gets a frag.
+
+### Shooting across levels
+
+A ray always travels at the shooter's level and changes it only by these
+rules:
+
+| Situation | Rule |
+| --- | --- |
+| **Bridge to bridge** | While the ray is over the slab it only hits level 1 targets; railings block it. |
+| **Bridge to ground** | At the first cell without a slab the ray drops to the ground and from there only hits level 0 targets. It never climbs back. |
+| **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it. |
+| **Ground to bridge** | In the very first slab cell it enters, the ray can hit a level 1 tank — unless that cell is a railing. Past it the slab shields everything and the ray continues along the ground. |
+| **Tank on a ramp** | Visible to rays of both levels. |
+| **Falling tank** | Invulnerable: while airborne (0.35 s) neither rays nor explosions reach it. This is a rule, not a side effect. |
+| **Explosion** | Only hits targets on its own level — the slab shields it both upwards and downwards. |
+| **Bomb** | Lands on its owner's level; if there is no slab of that level under the drop point (on a ramp, for instance), the bomb ends up on the ground. |
+
+Which maps have levels and how they are authored — see
+[extending.md](extending.md#new-map).
+
 ## HUD panel
 
 Left to right: round time, health, `w1`/`w2` ammo (the active weapon is highlighted). Spectators see hidden values (an empty panel). Values reset to defaults every round.
@@ -122,6 +160,24 @@ they show up in stats, drive tanks, and shoot through the same input as
 players. Navigation is the engine's grid-based pathfinding plus a spatial grid for target
 search. Added via `/bot` or a vote; a bot is evicted when a human joins a
 full team (also when a human connects past the combined `maxPlayers` limit).
+
+On a 2.5D map (levels, ramps, bridges) a bot knows its own level:
+
+- it paths through ramps — a route to the bridge goes over a ramp, because
+  the nav graph carries level transitions as its own edges;
+- it jumps off a ledge only when the shortcut is worth it — a ledge edge
+  costs extra in the graph, since the landing costs health;
+- while falling it is not steered at all, and the fall is not mistaken for
+  being stuck;
+- it prefers a target on its own level, and holds fire when the bridge slab
+  shields the target — instead it drives towards it, over a ramp;
+- it strafes after a shot only to a point walkable on its own level, and it
+  steers around obstacles of its own level (railings above a bot on the
+  ground are not obstacles).
+
+What it does not do: it does not jump off a ledge to shorten a chase (only
+when the path itself is shorter), it does not weigh its remaining health
+against `fallDamage`, and it does not shoot at a level it cannot reach.
 
 ## Kicks
 

@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "seed": 4401,
+  "map": "overpass",
+  "participants": [
+    { "id": "p1", "name": "P1", "model": "m1" },
+    { "id": "p2", "name": "P2", "model": "m1" }
+  ],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p2", "team": "team2" },
+    { "tick": 20, "op": "key", "who": "p1", "action": "down", "name": "forward" },
+    { "tick": 92, "op": "key", "who": "p1", "action": "up", "name": "forward" },
+    { "tick": 100, "op": "key", "who": "p2", "action": "down", "name": "forward" },
+    { "tick": 145, "op": "key", "who": "p2", "action": "up", "name": "forward" },
+    { "tick": 250, "op": "key", "who": "p1", "action": "down", "name": "right" },
+    { "tick": 310, "op": "key", "who": "p1", "action": "up", "name": "right" },
+    { "tick": 360, "op": "key", "who": "p1", "action": "down", "name": "forward" },
+    { "tick": 630, "op": "key", "who": "p1", "action": "up", "name": "forward" },
+    { "tick": 700, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 700, "op": "key", "who": "p2", "action": "down", "name": "fire" },
+    { "tick": 740, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 740, "op": "key", "who": "p2", "action": "down", "name": "fire" },
+    { "tick": 800, "op": "key", "who": "p1", "action": "down", "name": "right" },
+    { "tick": 800, "op": "key", "who": "p2", "action": "down", "name": "forward" },
+    { "tick": 850, "op": "key", "who": "p2", "action": "up", "name": "forward" },
+    { "tick": 860, "op": "key", "who": "p1", "action": "up", "name": "right" },
+    { "tick": 920, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 940, "op": "key", "who": "p2", "action": "down", "name": "fire" },
+    { "tick": 960, "op": "key", "who": "p1", "action": "down", "name": "fire" },
+    { "tick": 980, "op": "key", "who": "p2", "action": "down", "name": "fire" },
+    { "tick": 1000, "op": "key", "who": "p1", "action": "down", "name": "nextWeapon" },
+    { "tick": 1040, "op": "key", "who": "p1", "action": "down", "name": "fire" }
+  ],
+  "unusedSnapshotKeys": ["c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "ticks": 1400,
+  "dumpTicks": [700, 940, 1075, 1400]
+}

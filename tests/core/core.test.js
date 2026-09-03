@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
 import poolMini from '../../src/data/maps/pool_mini.js';
 import {
@@ -15,6 +16,13 @@ import {
 // клиентское ядро (ClientCore.decode_frame, срез 2.6).
 
 const DT = 1 / 120;
+
+// слоёная карта-фикстура (2.5D): плита моста в колонках 10..12 строк 5..14,
+// рампа на восток в строке 9. scale 1 — координаты фикстуры мировые
+const layeredMap = readFileSync(
+  new URL('./fixtures/layered.json', import.meta.url),
+  'utf8',
+);
 
 // распаковка кадров клиентским ядром (лениво: без pkg-node тесты скипаются)
 let decoder = null;
@@ -73,6 +81,77 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
     });
   });
 
+  describe('2.5D-уровни', () => {
+    it('танк на плите моста едет в кадре с level = 1, танк на земле — с 0', () => {
+      core.load_map(layeredMap);
+      // (368, 272) — центр плиты, (112, 112) — земля вне моста
+      core.spawn_actor(1, 'm1', 1, 368, 272, 0);
+      core.spawn_actor(2, 'm1', 2, 112, 112, 0);
+
+      stepTicks(core, 2);
+      core.pack_body();
+      core.pack_frame(1000, 1, false, 0, 0, false, undefined, -1);
+
+      const { m1 } = decode(frameBuffer(core)).snapshot;
+
+      // хвост строки m1: [..., angvel, z, level]
+      expect(m1['1'][12]).toBe(1);
+      expect(m1['1'][11]).toBe(1);
+      expect(m1['2'][12]).toBe(0);
+      expect(m1['2'][11]).toBe(0);
+    });
+
+    it('трассер w1 несёт уровни луча, бомба w2 и взрыв w2e — свой уровень', () => {
+      core.load_map(layeredMap);
+      // стрелок на плите, цель за её восточной кромкой на земле:
+      // луч уходит с уровня 1 и падает на уровень 0
+      core.spawn_actor(1, 'm1', 1, 336, 272, 0);
+      core.spawn_actor(2, 'm1', 2, 460, 272, 0);
+
+      stepTicks(core, 2);
+      core.apply_input(1, 1, 'down', 'fire');
+      stepTicks(core, 1);
+
+      core.pack_body();
+      core.pack_frame(0, 1, false, 0, 0, false, undefined, -1);
+
+      const tracer = decode(frameBuffer(core)).snapshot.w1[0];
+
+      // [startX, startY, endX, endY, bodyX, bodyY, wasHit, shooterId,
+      //  startLevel, endLevel]
+      expect(tracer).toHaveLength(10);
+      expect(tracer[6]).toBe(1);
+      expect(tracer[8]).toBe(1);
+      expect(tracer[9]).toBe(0);
+
+      // бомба, сброшенная на плите: уровень 1 и в w2, и во взрыве w2e
+      core.apply_input(1, 2, 'down', 'nextWeapon');
+      stepTicks(core, 1);
+      core.apply_input(1, 3, 'down', 'fire');
+      stepTicks(core, 1);
+
+      core.pack_body();
+      core.pack_frame(0, 2, false, 0, 0, false, undefined, -1);
+
+      const bombs = decode(frameBuffer(core)).snapshot.w2;
+      const [id] = Object.keys(bombs);
+
+      // [x, y, angle, size, time, ownerId, level]
+      expect(bombs[id]).toHaveLength(7);
+      expect(bombs[id][6]).toBe(1);
+
+      stepTicks(core, 50);
+      core.pack_body();
+      core.pack_frame(0, 3, false, 0, 0, false, undefined, -1);
+
+      const [explosion] = decode(frameBuffer(core)).snapshot.w2e;
+
+      // [x, y, radius, level]
+      expect(explosion).toHaveLength(4);
+      expect(explosion[3]).toBe(1);
+    });
+  });
+
   describe('round-trip кадра v5 через decode_frame', () => {
     it('кадр играющего: заголовок, камера, player-блок, танки, динамика', () => {
       core.load_map(JSON.stringify(poolMini));
@@ -105,12 +184,14 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       // танк в блоке m1: формат Tank.getData
       const tank = decoded.snapshot.m1[1];
 
-      expect(tank).toHaveLength(11);
+      expect(tank).toHaveLength(13);
       expect(tank[0]).toBeCloseTo(decoded.player.state[0], 1); // x
       expect(tank[7]).toBe(3); // condition
       expect(tank[8]).toBe(2); // size
       expect(tank[9]).toBe(1); // teamId
       expect(tank[10]).toBeCloseTo(decoded.player.state[5], 1); // angvel
+      expect(tank[11]).toBe(0); // z — одноуровневая карта
+      expect(tank[12]).toBe(0); // level
 
       // динамика карты присутствует всегда (пустой объект для pool_mini)
       expect(decoded.snapshot.c1).toEqual({});

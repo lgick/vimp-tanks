@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ENGINE_API_VERSION } from 'vimp-engine/config/opcodes.js';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
 import gameConfig from '../src/config/game.js';
+import hostPlugin from '../src/host/index.js';
 import { rangeToPattern } from './lib/rangeToPattern.js';
 import {
   collectRequiredImages,
@@ -154,6 +155,9 @@ if (hasNodeCore) {
 const manifest = {
   id: 'tanks',
   engineApi: ENGINE_API_VERSION,
+  // список возможностей движка — один источник, сам HostPlugin: манифест и
+  // обе половины плагина обязаны совпадать (правило контракта B2)
+  ...(hostPlugin.requires ? { requires: hostPlugin.requires } : {}),
   version,
   title: 'Tanks',
   entries: {

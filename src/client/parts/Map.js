@@ -1,5 +1,20 @@
-import { Container, Sprite, Assets, Spritesheet, Rectangle } from 'pixi.js';
+import {
+  Container,
+  Sprite,
+  Assets,
+  Spritesheet,
+  Rectangle,
+  Ticker,
+} from 'pixi.js';
 import { degToRad } from 'vimp-engine/lib/math.js';
+import { levelZ } from '../levelZ.js';
+
+// доля непрозрачности плиты, когда локальный игрок под ней
+const UNDER_BRIDGE_ALPHA = 0.4;
+
+// скорость перехода прозрачности (доля в секунду): мгновенный скачок
+// читается как мигание при каждом въезде под край моста
+const ALPHA_FADE_RATE = 6;
 
 export default class Map extends Container {
   constructor(data, _assets, dependencies) {
@@ -11,6 +26,12 @@ export default class Map extends Container {
 
     this._renderer = dependencies.renderer;
     this._imageBase = null;
+
+    // где локальный игрок (сервис игры, src/client/levelView.js): нужен
+    // только слоям уровня >= 1 — они уступают ему видимость
+    this._levelView = dependencies.levelView || null;
+    this._level = 0;
+    this._targetAlpha = 1;
 
     this.scale = data.scale;
 
@@ -54,9 +75,12 @@ export default class Map extends Container {
       // step - размер шага.
       this._map = data.map;
       this._tiles = data.tiles;
+      this._level = data.level || 0;
+      this._solid = data.solid || data.physicsStatic || [];
+      this._floor = data.floor || [];
       this._spriteSheetData = data.spriteSheet;
       this._step = data.step;
-      this.zIndex = data.layer || 1;
+      this.zIndex = levelZ(Number(data.layer) || 1, this._level);
 
       this.createStatic();
     }
@@ -65,7 +89,8 @@ export default class Map extends Container {
       this._assetUrl = `${this._imageBase}${data.img}`;
       this._baseTexturePromise = Assets.load(this._assetUrl);
 
-      this.zIndex = data.layer || 2;
+      this._level = data.level || 0;
+      this.zIndex = levelZ(Number(data.layer) || 2, this._level);
       this._rotation = degToRad(data.angle);
       this._width = data.width;
       this._height = data.height;
@@ -171,6 +196,38 @@ export default class Map extends Container {
     }
   }
 
+  // прозрачность плиты моста над локальным игроком: в GTA 2 игрок под
+  // эстакадой продолжает видеть свою машину. Считается по НАШЕМУ гриду
+  // уровня: парт уже знает и карту слоя, и список тайлов пола
+  onRender() {
+    if (this._level < 1 || !this._levelView || !this.mapSprite) {
+      return;
+    }
+
+    const under =
+      this._levelView.level < this._level &&
+      this._hasFloorAt(this._levelView.x, this._levelView.y);
+
+    this._targetAlpha = under ? UNDER_BRIDGE_ALPHA : 1;
+
+    // сглаживание по времени тикера общего приложения
+    const dt = Ticker.shared.deltaMS / 1000;
+
+    this.alpha +=
+      (this._targetAlpha - this.alpha) * Math.min(1, ALPHA_FADE_RATE * dt);
+  }
+
+  // позиция приходит в мировых единицах, а грид слоя не масштабирован:
+  // контейнер целиком носит `data.scale`, поэтому деление на масштаб живёт
+  // ЗДЕСЬ (ровно как в update() для динамики), а сервис хранит мир как есть
+  _hasFloorAt(worldX, worldY) {
+    const col = Math.floor(worldX / this.scale.x / this._step);
+    const row = Math.floor(worldY / this.scale.y / this._step);
+    const tile = this._map?.[row]?.[col];
+
+    return tile !== undefined && this._floor.includes(tile);
+  }
+
   update(data) {
     if (this.sprite) {
       this.sprite.x = data[0] / this.scale.x;
@@ -216,7 +273,10 @@ export default class Map extends Container {
     this._assetUrl = null;
     this._map = null;
     this._tiles = null;
+    this._solid = null;
+    this._floor = null;
     this._spriteSheetData = null;
     this._renderer = null;
+    this._levelView = null;
   }
 }

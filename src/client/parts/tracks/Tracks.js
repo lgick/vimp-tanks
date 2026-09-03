@@ -1,11 +1,22 @@
 import { Container, Ticker } from 'pixi.js';
 import TrackMark from './TrackMark.js';
 import { normalizeAngle } from 'vimp-engine/lib/math.js';
+import { levelZ } from '../../levelZ.js';
+
+// базовый zIndex следов внутри своего уровня
+const TRACKS_BASE_Z = 1;
 
 export default class Tracks extends Container {
   constructor(data, assets) {
     super();
-    this.zIndex = 1;
+
+    // 2.5D: след принадлежит тому уровню, на котором он оставлен, и остаётся
+    // на нём, даже когда танк уже уехал по рампе. Поэтому отметки живут не в
+    // самом парте, а в контейнере СВОЕГО уровня: контейнер парта один, а
+    // слоёв два, и разъехаться по zIndex они могут только сиблингами на сцене
+    this._level = data[12] || 0;
+    this._markLayers = new Map();
+    this.zIndex = levelZ(TRACKS_BASE_Z, this._level);
 
     this._currentX = data[0] || 0;
     this._currentY = data[1] || 0;
@@ -91,6 +102,36 @@ export default class Tracks extends Container {
     this._currentRotation = data[2];
     this._engineLoad = data[6];
     this._condition = data[7];
+
+    const level = data[12] || 0;
+
+    if (level !== this._level) {
+      this._level = level;
+      this.zIndex = levelZ(TRACKS_BASE_Z, level);
+    }
+  }
+
+  // контейнер отметок уровня: сиблинг парта на сцене (у эффектов взрыва тот
+  // же приём). Пока парт не добавлен на сцену, отметки складываются в него
+  // самого — кадр без родителя рисовать всё равно некуда
+  _markLayer(level) {
+    let layer = this._markLayers.get(level);
+
+    if (layer) {
+      return layer;
+    }
+
+    layer = new Container();
+    layer.zIndex = levelZ(TRACKS_BASE_Z, level);
+
+    this._markLayers.set(level, layer);
+
+    const host = this.parent || this;
+
+    host.addChild(layer);
+    host.sortChildren();
+
+    return layer;
   }
 
   _internalUpdate(deltaMs) {
@@ -100,15 +141,17 @@ export default class Tracks extends Container {
 
     // обновление всех существующих следов в одном цикле
     // итерация в обратном порядке,
-    // чтобы безопасно удалять элементы из массива this.children
-    for (let i = this.children.length - 1; i >= 0; i -= 1) {
-      const mark = this.children[i];
-      // если возвращается true, значит время жизни вышло
-      if (mark.update(deltaMs)) {
-        // уничтожение спрайта
-        // метод destroy() автоматически удаляет объект
-        // из родительского контейнера
-        mark.destroy();
+    // чтобы безопасно удалять элементы из массива children
+    for (const layer of this._markLayers.values()) {
+      for (let i = layer.children.length - 1; i >= 0; i -= 1) {
+        const mark = layer.children[i];
+        // если возвращается true, значит время жизни вышло
+        if (mark.update(deltaMs)) {
+          // уничтожение спрайта
+          // метод destroy() автоматически удаляет объект
+          // из родительского контейнера
+          mark.destroy();
+        }
       }
     }
 
@@ -182,6 +225,8 @@ export default class Tracks extends Container {
   }
 
   createTrackMarksAtPreviousPosition() {
+    const layer = this._markLayer(this._level);
+
     for (let i = -1; i <= 1; i += 2) {
       const sideOffsetX =
         Math.cos(this._prevRotation + Math.PI / 2) * this._trackOffset * i;
@@ -206,7 +251,7 @@ export default class Tracks extends Container {
         this._assets.trackMarkTexture,
       );
 
-      this.addChild(mark);
+      layer.addChild(mark);
     }
   }
 
@@ -219,6 +264,15 @@ export default class Tracks extends Container {
 
   destroy(options) {
     this._stopTimer();
+
+    // контейнеры отметок — сиблинги парта: движок их не знает и сам не снимет
+    for (const layer of this._markLayers.values()) {
+      if (!layer.destroyed) {
+        layer.destroy({ children: true });
+      }
+    }
+
+    this._markLayers.clear();
 
     super.destroy({
       children: true,

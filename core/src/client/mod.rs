@@ -12,11 +12,13 @@ pub mod shot;
 
 use std::rc::Rc;
 
+use indexmap::IndexMap;
 use serde::Deserialize;
 use vimp_engine_core::client::game::{GameClientDef, PredictedRow, RenderOverlay};
 use vimp_engine_core::client::interpolator::{FrameData, InterpolatedGame};
 use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::{EngineClientConfig, FieldValue, PLAYER_STATE_LEN, SnapshotConfig};
+use vimp_engine_core::map::MapLevels;
 
 use crate::config::TanksClientConfig;
 use map_dynamics::MapDynamics;
@@ -42,6 +44,12 @@ pub(crate) struct ClientMapConfig {
     pub(crate) physics_static: Vec<i32>,
     #[serde(default)]
     pub(crate) physics_dynamic: Vec<ClientDynamicObject>,
+    /// Надземные уровни карты (MAP_DATA). Ключ — номер уровня строкой.
+    #[serde(default)]
+    pub(crate) levels: IndexMap<String, vimp_engine_core::map::MapLevelConfig>,
+    /// Переходы между уровнями (направленные рампы).
+    #[serde(default)]
+    pub(crate) ramps: Vec<vimp_engine_core::map::RampConfig>,
 }
 
 pub(crate) fn default_scale() -> f32 {
@@ -64,6 +72,11 @@ pub(crate) struct ClientDynamicObject {
     pub(crate) linear_damping: f32,
     #[serde(default = "default_angular_damping")]
     pub(crate) angular_damping: f32,
+    /// Уровень 2.5D-карты, на котором стоит ящик: контакты считаются только
+    /// между телами пересекающихся уровней (ящик под мостом танк с моста
+    /// не толкает)
+    #[serde(default)]
+    pub(crate) level: u8,
 }
 
 pub(crate) fn default_angular_damping() -> f32 {
@@ -71,34 +84,34 @@ pub(crate) fn default_angular_damping() -> f32 {
 }
 
 impl ClientMapConfig {
-    /// Забирает из конфига сетку стен: карта и список сплошных тайлов —
-    /// единственные «дорогие» поля, поэтому они перемещаются, а не
-    /// копируются. Остаток конфига (динамика, scale, setId) после этого
-    /// по-прежнему валиден — динамике карты сетка не нужна.
-    fn take_grid(&mut self) -> Grid {
-        Grid {
-            map: std::mem::take(&mut self.map),
-            solid_tiles: std::mem::take(&mut self.physics_static),
-            tile_size: self.step * self.scale,
-        }
+    /// Слоистая геометрия карты. Одна структура на предсказание движения и
+    /// на предсказание выстрела: две одинаково построенные разъехались бы
+    /// молча (та же причина, по которой раньше здесь был общий `Grid`).
+    /// Гриды уровней — единственные «дорогие» поля, поэтому они
+    /// перемещаются, а не копируются. Остаток конфига (динамика, scale,
+    /// setId) после этого по-прежнему валиден — динамике карты грид не нужен.
+    fn take_levels(&mut self) -> MapLevels {
+        MapLevels::build(
+            &std::mem::take(&mut self.map),
+            &std::mem::take(&mut self.physics_static),
+            &self.levels,
+            &self.ramps,
+            self.step * self.scale,
+        )
     }
 }
 
-pub(crate) struct Grid {
-    pub(crate) map: Vec<Vec<i32>>,
-    pub(crate) solid_tiles: Vec<i32>,
-    pub(crate) tile_size: f32,
-}
-
 // индексы полей строки m1 (x, y, angle, gunRotation, vx, vy, engineLoad,
-// condition, size, teamId) — позиционный контракт со схемой opcodes.js.
+// condition, size, teamId, angvel, z, level) — позиционный контракт со
+// схемой src/config/snapshot.js.
 const TANK_FIELD_CONDITION: usize = 7;
 const TANK_FIELD_SIZE: usize = 8;
 const TANK_FIELD_TEAM: usize = 9;
+const TANK_FIELD_LEVEL: usize = 12;
 
 fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
-    match fields[i] {
-        FieldValue::U8(v) => v,
+    match fields.get(i) {
+        Some(FieldValue::U8(v)) => *v,
         _ => 0,
     }
 }
@@ -144,7 +157,12 @@ impl GameClientDef for TanksClient {
     type Config = TanksClientConfig;
 
     fn new(cfg: &Self::Config, engine_cfg: &EngineClientConfig) -> Self {
-        let mut predictor = Predictor::new(engine_cfg.time_step_ms, &cfg.player_keys, &cfg.models);
+        let mut predictor = Predictor::new(
+            engine_cfg.time_step_ms,
+            &cfg.player_keys,
+            &cfg.models,
+            cfg.levels,
+        );
         let shot = ShotPredictor::new(&cfg.models, &cfg.weapons, cfg.seed);
 
         // динамика карты считается в тех же шагах, что и свой танк: ящик,
@@ -240,7 +258,9 @@ impl GameClientDef for TanksClient {
         {
             match entry {
                 // null-маркер: танк удалён с полотна
-                None => self.my_tank_meta = None,
+                None => {
+                    self.my_tank_meta = None;
+                }
                 Some(row) => {
                     let (condition, size, team) = (
                         field_u8(row, TANK_FIELD_CONDITION),
@@ -250,6 +270,14 @@ impl GameClientDef for TanksClient {
 
                     self.my_tank_meta = Some((condition, size, team));
                     self.predictor.freeze(condition == 0);
+                    // авторитетный уровень: реплика считает его сама теми же
+                    // правилами, но кадр — последнее слово. Расхождение
+                    // возможно на границе рампы (кадр отстаёт на буфер
+                    // интерполяции), поэтому коррекция применяется только
+                    // когда реплика НЕ в переходе: иначе кадр отматывал бы
+                    // подъём назад на каждом тике
+                    self.predictor
+                        .correct_level(field_u8(row, TANK_FIELD_LEVEL));
                 }
             }
         }
@@ -279,9 +307,12 @@ impl GameClientDef for TanksClient {
     }
 
     // predicted-хвост hot-буфера: keyId, gameId, x, y, angle, gun, vx, vy,
-    // engineLoad, condition, size, teamId, angvel (13 f32) — порядок полей
-    // после gameId обязан совпадать со схемой m1 (src/config/snapshot.js);
-    // без meta своего танка не рендерится.
+    // engineLoad, condition, size, teamId, angvel, z, level (15 f32) —
+    // порядок полей после gameId обязан совпадать со схемой m1
+    // (src/config/snapshot.js); без meta своего танка не рендерится.
+    // z/level предсказанные: их считает предиктор теми же функциями
+    // `crate::level`, что и хост, а кадр только корректирует уровень вне
+    // перехода (см. `Predictor::correct_level`).
     fn render_overlay(&self, my_game_id: Option<u32>) -> Option<RenderOverlay> {
         let my_game_id = my_game_id?;
         let my_model_key_id = self.my_model_key_id?;
@@ -304,6 +335,8 @@ impl GameClientDef for TanksClient {
                 size as f32,
                 team as f32,
                 p.angvel,
+                p.z,
+                p.level as f32,
             ],
         })
     }
@@ -339,12 +372,12 @@ impl GameClientDef for TanksClient {
     fn set_map(&mut self, map_json: &str) -> Result<(), String> {
         let mut cfg: ClientMapConfig =
             serde_json::from_str(map_json).map_err(|e| e.to_string())?;
-        let grid = Rc::new(cfg.take_grid());
+        let levels = Rc::new(cfg.take_levels());
 
         self.predictor.reset();
         self.reset_remote_tanks();
-        self.predictor.set_map(&cfg, Rc::clone(&grid));
-        self.shot.set_map(grid);
+        self.predictor.set_map(&cfg, Rc::clone(&levels));
+        self.shot.set_map(levels);
 
         Ok(())
     }
@@ -453,7 +486,9 @@ mod tests {
                         { "name": "condition", "ty": "u8" },
                         { "name": "size", "ty": "u8" },
                         { "name": "team", "ty": "u8" },
-                        { "name": "angvel", "ty": "f32", "interp": "lerp" }
+                        { "name": "angvel", "ty": "f32", "interp": "lerp" },
+                        { "name": "z", "ty": "f32", "interp": "lerp" },
+                        { "name": "level", "ty": "u8" }
                     ] },
                     "w1": { "id": 2, "kind": "list16", "class": "event", "fields": [
                         { "name": "startX", "ty": "f32" },
@@ -518,6 +553,8 @@ mod tests {
             FieldValue::U8(2),
             FieldValue::U8(1),
             FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::U8(0),
         ]
     }
 
@@ -645,8 +682,9 @@ mod tests {
 
         assert!(flags & HOT_HAS_PREDICTED != 0);
 
-        // predicted-запись последняя: keyId, gameId, x, ..., condition/size/team, angvel
-        let p = &hot[hot.len() - 13..];
+        // predicted-запись последняя: keyId, gameId, x, ...,
+        // condition/size/team, angvel, z, level
+        let p = &hot[hot.len() - 15..];
 
         assert_eq!(p[0], 1.0);
         assert_eq!(p[1], 2.0);
@@ -655,6 +693,22 @@ mod tests {
 
         // камера следует предсказанной позиции
         assert_eq!(hot[1], 10.0);
+    }
+
+    #[test]
+    fn render_overlay_tail_matches_schema_width() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+        let schema = engine_client_config().snapshot.keys["m1"].fields.len();
+
+        client.set_model("m1");
+        client.predictor.set_active(true);
+        client.predictor.on_server_state([0.0; PLAYER_STATE_LEN], false, 0.0, 0.0, 0.0);
+        client.my_tank_meta = Some((3, 2, 1));
+
+        let overlay = client.render_overlay(Some(2)).unwrap();
+
+        // хвост = keyId + gameId + строка блока модели целиком
+        assert_eq!(overlay.tail.len(), 2 + schema);
     }
 
     #[test]
@@ -724,7 +778,7 @@ mod tests {
         state.sample(1450.0);
 
         let hot = state.hot().to_vec();
-        let p = &hot[hot.len() - 13..];
+        let p = &hot[hot.len() - 15..];
 
         // предсказанная позиция снаплена в 500 (без визуальной ошибки)
         assert_eq!(p[2], 500.0);
@@ -847,13 +901,13 @@ mod tests {
 
         client.set_map(&map_json).unwrap();
 
-        let predictor_grid = client.predictor.grid().unwrap();
-        let shot_grid = client.shot.grid().unwrap();
+        let predictor_levels = client.predictor.levels().unwrap();
+        let shot_levels = client.shot.levels().unwrap();
 
-        assert!(Rc::ptr_eq(predictor_grid, shot_grid));
-        assert_eq!(predictor_grid.tile_size, 64.0);
-        assert_eq!(predictor_grid.solid_tiles, vec![1]);
-        assert_eq!(predictor_grid.map, vec![vec![0, 1]]);
+        assert!(Rc::ptr_eq(predictor_levels, shot_levels));
+        assert_eq!(predictor_levels.tile_size(), 64.0);
+        assert_eq!(predictor_levels.solid(0), vec![1]);
+        assert_eq!(predictor_levels.grid(0), Some(&vec![vec![0, 1]]));
     }
 
     #[test]

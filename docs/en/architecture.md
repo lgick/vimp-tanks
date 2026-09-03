@@ -55,6 +55,12 @@ direct import.
   the browser's would prove nothing.
 - **Master**: never executes plugin code — it only serves this package's
   `dist/manifest.json` and the exported map JSON under `/games/tanks/*`.
+- **`requires: ['map.layers']`**: both plugin halves declare the engine
+  capability the 2.5D maps stand on, and `build-game-manifest.js` copies the
+  list into the manifest from `src/host/index.js` — one source, so the
+  contract rule `B2` has something to compare. Without layered maps in the
+  engine `overpass` would load without its second level and without a single
+  error, so the capability is a hard requirement rather than a hint.
 
 Full contract — the engine's
 [plugin-api.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/plugin-api.md).
@@ -92,7 +98,35 @@ services, the engine merges them into its own pool and hands them out by
 `componentDependencies` (`src/config/client.js`). Today that is `mapDynamics`
 — `toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`, by
 which `ShotEffect` anchors its debris to the box the shot hit (see
-[core.md](core.md)).
+[core.md](core.md)) — and `levelView` (`src/client/levelView.js`), where the
+local player is and on which level: the local `Tank` writes it, the bridge
+slab reads it (see below).
+
+### Draw order across levels (2.5D)
+
+Every part is a direct child of the stage with `sortableChildren = true`, so
+`zIndex` alone decides the order. `src/client/levelZ.js` turns a part's base
+`zIndex` into a level-aware one:
+
+```
+zIndex = base zIndex + LEVEL_Z_STRIDE * level     // LEVEL_Z_STRIDE = 100
+```
+
+Base values are the single-level ones (`Tracks` 1, `Bomb`/`TankRadar`/
+`MapRadar`/`ShotEffect`/funnel 2, `Tank` 3, `Smoke`/explosion 4, map layers
+from `data.layer`), so a map without upper levels draws exactly as before.
+The stride is larger than any base value, hence every level-1 layer covers
+every level-0 one — the bridge slab hides what drives under it.
+
+Two consequences the parts implement themselves:
+
+- **See-through bridge**: a `Map` layer of level >= 1 fades to
+  `UNDER_BRIDGE_ALPHA` while `levelView` reports the local player below it
+  and over a floor tile of that layer (`Map.onRender`); the fade is
+  time-smoothed so driving under an edge does not blink.
+- **Tracks keep their level**: track marks live in a per-level container
+  that is a sibling of the `Tracks` part on the stage, so a mark left on the
+  overpass stays on the overpass after the tank drives down.
 
 ### Texture and particle lifecycle
 
@@ -128,6 +162,13 @@ which `ShotEffect` anchors its debris to the box the shot hit (see
   integration parity is locked in by cargo tests (`client::predictor::parity`)
   — any edit to motion in the core or the `models.js` coefficients requires
   running `npm run core:test`.
+- **Level rules live in `core/src/level.rs`** and are called by both sides:
+  the authoritative `TanksSim::update_levels` and the client replica
+  (`Predictor::step`) run the very same `step_level()` over the same
+  `MapLevels`, with the same `coreParams.levels` (they reach the client core
+  through `prediction.coreParams` in CONFIG_DATA). A second copy of the
+  rules would drift from the authoritative level silently; the same holds
+  for `ray_segments()` (`core/src/shot_levels.rs`) and shooting.
 - The snapshot key schema (`src/config/snapshot.js`) is this plugin's data —
   an unregistered key breaks frame packing on both the host and the client.
 - `ENGINE_API_VERSION` compatibility is checked by the engine at plugin load

@@ -5,6 +5,8 @@ use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::tanks::BotView;
+use vimp_engine_core::map::level_interaction;
+use vimp_engine_core::nav::navigation::PathPoint;
 
 // константы поведения бота (из src/server/modules/bots/BotController.js)
 const AI_UPDATE_INTERVAL: f32 = 0.1;
@@ -73,7 +75,7 @@ pub struct BotBrain {
     pub state: BotState,
 
     target: Option<u32>,
-    path: Option<Vec<[f32; 2]>>,
+    path: Option<Vec<PathPoint>>,
     path_index: usize,
 
     repath_timer: f32,
@@ -90,13 +92,16 @@ pub struct BotBrain {
     reposition_timer: f32,
     reposition_target: Option<[f32; 2]>,
 
-    patrol_target: Option<[f32; 2]>,
+    patrol_target: Option<PathPoint>,
 
     key_states: [bool; 6],
 
     // кэш кадра (JS _updateCachedData)
     #[serde(skip)]
     my_position: Option<[f32; 2]>,
+    /// Уровень бота на этом кадре (2.5D-карты); 0 у одноуровневой карты.
+    #[serde(skip)]
+    my_level: u8,
 }
 
 fn dist_sq(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -135,7 +140,16 @@ impl BotBrain {
             patrol_target: None,
             key_states: [false; 6],
             my_position: None,
+            my_level: 0,
         }
+    }
+
+    /// Своя позиция как точка пути (с уровнем).
+    fn my_point(&self) -> Option<PathPoint> {
+        Some(PathPoint {
+            pos: self.my_position?,
+            level: self.my_level,
+        })
     }
 
     fn key_bit(&self, game: &BotView<'_>, key: HeldKey) -> u32 {
@@ -178,6 +192,7 @@ impl BotBrain {
     /// Главный метод обновления (вызывается на каждом тике ядра).
     pub(crate) fn update(&mut self, game: &mut BotView<'_>, dt: f32) {
         self.my_position = game.tank_position_rounded(self.game_id);
+        self.my_level = game.tank_level(self.game_id);
 
         let has_body = game
             .tanks
@@ -190,6 +205,17 @@ impl BotBrain {
                 self.state = BotState::Dead;
                 self.release_all_keys(game);
             }
+
+            return;
+        }
+
+        // танк в падении не управляется: любые клавиши всё равно
+        // игнорируются ядром, а таймер застревания за 0.35 c успел бы
+        // сорвать бота в ClearingObstacle на ровном месте
+        if game.tank_input_locked(self.game_id) {
+            self.release_all_keys(game);
+            self.stuck_timer = 0.0;
+            self.last_position = self.my_position;
 
             return;
         }
@@ -287,11 +313,11 @@ impl BotBrain {
             return;
         };
 
-        let random_node = nav.random_node(&mut game.rng);
+        let random = nav.random_point(&mut game.rng);
 
-        if let (Some(node), Some(my)) = (random_node, self.my_position) {
+        if let (Some(node), Some(my)) = (random, self.my_point()) {
             self.patrol_target = Some(node);
-            self.path = nav.find_path(my, node);
+            self.path = nav.find_path_on(my, node);
             self.path_index = 0;
         }
     }
@@ -350,7 +376,7 @@ impl BotBrain {
                 self.follow_path(game);
 
                 if let Some(my) = self.my_position {
-                    if dist_sq(my, patrol) < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE {
+                    if dist_sq(my, patrol.pos) < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE {
                         self.patrol_target = None;
                         self.path = None;
                     }
@@ -375,25 +401,42 @@ impl BotBrain {
             return;
         }
 
-        let next_waypoint = path[self.path_index];
+        let next = path[self.path_index];
 
-        self.move_to(game, MoveTarget::Point(next_waypoint));
+        // смена уровня между точками пути — это рампа или обрыв. Порог
+        // «дошёл до точки» на переходе делаем шире: на рампе танк
+        // физически не может встать точно в узел уровня, к которому едет
+        let reach = if next.level != self.my_level {
+            MIN_TARGET_DISTANCE * 2.0
+        } else {
+            MIN_TARGET_DISTANCE
+        };
+
+        self.move_to(game, MoveTarget::Point(next.pos));
 
         if let Some(my) = self.my_position {
-            if dist_sq(my, next_waypoint) < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE {
+            let distance_sq = dist_sq(my, next.pos);
+
+            if distance_sq < reach * reach
+                || (self.my_level == next.level
+                    && distance_sq < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE)
+            {
                 self.path_index += 1;
             }
         }
     }
 
-    /// Ближайший живой враг (через пространственную сетку).
+    /// Ближайший живой враг (через пространственную сетку). Цель своего
+    /// уровня всегда предпочтительнее: по чужому уровню бот чаще всего не
+    /// может стрелять, и без этого предпочтения он застревал бы в
+    /// Attacking, глядя в плиту моста.
     fn find_closest_enemy(&self, game: &BotView<'_>) -> Option<u32> {
         let my = self.my_position?;
         let my_team = game.tanks.get(&self.game_id)?.team_id;
 
         let candidates = game.spatial.query_nearby(my[0], my[1]);
-        let mut closest: Option<u32> = None;
-        let mut min_distance_sq = f32::INFINITY;
+        let mut same_level: Option<(u32, f32)> = None;
+        let mut other_level: Option<(u32, f32)> = None;
 
         for candidate in candidates {
             if candidate.game_id == self.game_id || candidate.team_id == my_team {
@@ -402,15 +445,22 @@ impl BotBrain {
 
             let distance_sq = dist_sq(my, [candidate.x, candidate.y]);
 
-            if distance_sq < min_distance_sq
-                && distance_sq < MAX_FIRING_DISTANCE * MAX_FIRING_DISTANCE * 1.5
-            {
-                min_distance_sq = distance_sq;
-                closest = Some(candidate.game_id);
+            if distance_sq >= MAX_FIRING_DISTANCE * MAX_FIRING_DISTANCE * 1.5 {
+                continue;
+            }
+
+            let slot = if game.tank_level(candidate.game_id) == self.my_level {
+                &mut same_level
+            } else {
+                &mut other_level
+            };
+
+            if slot.is_none_or(|(_, best)| distance_sq < best) {
+                *slot = Some((candidate.game_id, distance_sq));
             }
         }
 
-        closest
+        same_level.or(other_level).map(|(id, _)| id)
     }
 
     /// Движение к цели (gameId или точка) с обходом препятствий.
@@ -457,7 +507,15 @@ impl BotBrain {
         }
 
         let dir_norm = direction_to_target.normalize_or_zero();
-        let final_direction = avoid_obstacles(game, my_body_handle, my_position, dir_norm);
+        let layered = game.levels.is_some_and(|levels| levels.is_layered());
+        let final_direction = avoid_obstacles(
+            game,
+            my_body_handle,
+            my_position,
+            dir_norm,
+            self.my_level,
+            layered,
+        );
 
         let forward_vec = my_rotation.transform_vector(FORWARD);
         let angle_to_target = forward_vec
@@ -511,16 +569,41 @@ impl BotBrain {
         let gun_rotation = tank.gun_rotation;
         let current_weapon = tank.current_weapon;
 
-        let visible = game
-            .nav
-            .as_ref()
-            .is_some_and(|nav| !nav.has_obstacle_between([my_position.x, my_position.y], target_pos));
+        let visible = game.nav.as_ref().is_some_and(|nav| {
+            !nav.has_obstacle_between_on(self.my_level, [my_position.x, my_position.y], target_pos)
+        });
 
         if !visible {
             return;
         }
 
         let direction = Vector::new(target_pos[0], target_pos[1]) - my_position;
+
+        // цель на чужом уровне может быть закрыта плитой моста: тогда не
+        // стреляем, а идём к ней — путь пойдёт через рампу, потому что
+        // `find_path_on` знает уровни
+        if let Some(levels) = game.levels {
+            let target_level = game.tank_level(target);
+            let dir = direction.normalize_or_zero();
+            let range = game
+                .weapons
+                .get_index(current_weapon)
+                .and_then(|(_, weapon)| weapon.range)
+                .unwrap_or(MAX_FIRING_DISTANCE);
+            let segments = crate::shot_levels::ray_segments(
+                levels,
+                [my_position.x, my_position.y],
+                [dir.x, dir.y],
+                range,
+                self.my_level,
+            );
+
+            if crate::shot_levels::level_at_distance(&segments, direction.length())
+                != Some(target_level)
+            {
+                return;
+            }
+        }
         let distance_sq = direction.length_squared();
         let should_use_bomb = distance_sq < BOMB_USAGE_DISTANCE * BOMB_USAGE_DISTANCE
             && self.bomb_cooldown_timer <= 0.0;
@@ -650,6 +733,14 @@ impl BotBrain {
 
         let target = Vector::new(my[0], my[1]) + right_vec * (strafe_distance * strafe_direction);
 
+        // точка годится, только если она проходима на МОЁМ уровне: иначе
+        // бот на мосту побежит в точку, которой на мосту нет
+        if let Some(nav) = game.nav.as_ref() {
+            if !nav.is_walkable_on(self.my_level, target.x, target.y) {
+                return;
+            }
+        }
+
         self.reposition_target = Some([target.x, target.y]);
     }
 }
@@ -661,6 +752,8 @@ fn avoid_obstacles(
     my_body: RigidBodyHandle,
     my_position: Vector,
     desired_direction: Vector,
+    my_level: u8,
+    layered: bool,
 ) -> Vector {
     let rays = [
         desired_direction,
@@ -691,10 +784,17 @@ fn avoid_obstacles(
         let ray_vector = dir * OBSTACLE_AVOIDANCE_RAY_LENGTH;
         let ray = Ray::new(my_position, ray_vector);
 
-        let filter = QueryFilter::new()
+        let mut filter = QueryFilter::new()
             .exclude_sensors()
             .exclude_rigid_body(my_body)
             .predicate(&predicate);
+
+        // объезжаем препятствия СВОЕГО уровня: перила моста над головой
+        // бота на земле — не препятствие. На одноуровневой карте фильтра
+        // по группам нет вовсе — прежний путь бит-в-бит
+        if layered {
+            filter = filter.groups(level_interaction(my_level));
+        }
 
         if game.world.cast_ray(&ray, 1.0, true, filter).is_some() {
             obstacles_detected = true;
@@ -712,4 +812,375 @@ fn avoid_obstacles(
     }
 
     desired_direction
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use indexmap::IndexMap;
+    use vimp_engine_core::map::{MapLevelConfig, MapLevels, RampConfig, RampDir};
+    use vimp_engine_core::nav::navigation::NavigationSystem;
+    use vimp_engine_core::nav::spatial::{SpatialEntity, SpatialGrid};
+    use vimp_engine_core::rng::Rng;
+
+    use crate::config::{KeyConfig, ModelConfig, PanelValue, WeaponConfig};
+    use crate::level::Transit;
+    use crate::tank::{PlayerKeyBits, Tank};
+    use crate::tanks::BotView;
+
+    const TILE: f32 = 32.0;
+
+    /// Копия tests/core/fixtures/layered.json: 20×20, стены по периметру,
+    /// рампа на восток (строка 9, колонки 6..9) и мост (тайл 2) в
+    /// колонках 10..12, строках 5..14.
+    fn levels() -> MapLevels {
+        let mut grid0 = vec![vec![0; 20]; 20];
+
+        for col in 0..20 {
+            grid0[0][col] = 1;
+            grid0[19][col] = 1;
+        }
+
+        for row in grid0.iter_mut() {
+            row[0] = 1;
+            row[19] = 1;
+        }
+
+        for col in 6..10 {
+            grid0[9][col] = 3;
+        }
+
+        let mut grid1 = vec![vec![0; 20]; 20];
+
+        for row in grid1.iter_mut().take(15).skip(5) {
+            for cell in row.iter_mut().take(13).skip(10) {
+                *cell = 2;
+            }
+        }
+
+        let mut configs: IndexMap<String, MapLevelConfig> = IndexMap::new();
+
+        configs.insert(
+            "1".to_string(),
+            MapLevelConfig {
+                map: grid1,
+                floor: vec![2],
+                walls: Vec::new(),
+                layers: IndexMap::new(),
+            },
+        );
+
+        let ramps = [RampConfig {
+            tile: 3,
+            dir: RampDir::East,
+            from: 0,
+            to: 1,
+        }];
+
+        MapLevels::build(&grid0, &[1], &configs, &ramps, TILE)
+    }
+
+    fn model() -> ModelConfig {
+        serde_json::from_value(serde_json::json!({
+            "currentWeapon": "w1",
+            "size": 2,
+            "accelerationFactor": 1000,
+            "brakingFactor": 0.3,
+            "maxForwardSpeed": 260,
+            "maxReverseSpeed": -130,
+            "baseTurnTorqueFactor": 215,
+            "damping": { "linear": 3, "angular": 100.0 },
+            "fixture": { "density": 200, "friction": 0.5, "restitution": 0.1 },
+            "lateralGrip": 20,
+            "turnSpeedThreshold": 10,
+            "baseTurnFactorRatio": 0.8,
+            "reverseTurnMultiplier": 0.7,
+            "throttleIncreaseRate": 2.0,
+            "throttleDecreaseRate": 2.5,
+            "strainFactor": 1.5,
+            "maxGunAngle": 1.4,
+            "gunRotationSpeed": 3.0,
+            "gunCenterSpeed": 10.0
+        }))
+        .unwrap()
+    }
+
+    fn weapons() -> IndexMap<String, WeaponConfig> {
+        serde_json::from_value(serde_json::json!({
+            "w1": {
+                "type": "hitscan",
+                "damage": 40,
+                "range": 1500,
+                "fireRate": 0.01,
+                "consumption": 1
+            }
+        }))
+        .unwrap()
+    }
+
+    fn panel() -> IndexMap<String, PanelValue> {
+        let mut panel = IndexMap::new();
+
+        panel.insert("health".to_string(), PanelValue { value: 100.0 });
+        panel.insert("w1".to_string(), PanelValue { value: 10.0 });
+        panel
+    }
+
+    fn key_bits() -> PlayerKeyBits {
+        let keys: IndexMap<String, KeyConfig> = serde_json::from_value(serde_json::json!({
+            "forward": { "key": 1 },
+            "back": { "key": 2 },
+            "left": { "key": 4 },
+            "right": { "key": 8 },
+            "gunLeft": { "key": 16 },
+            "gunRight": { "key": 32 },
+            "fire": { "key": 128, "type": 1 },
+            "nextWeapon": { "key": 256, "type": 1 }
+        }))
+        .unwrap();
+
+        PlayerKeyBits::from_config(&keys)
+    }
+
+    /// Мир с ботом и произвольным числом других танков.
+    struct Fixture {
+        world: PhysicsWorld,
+        nav: Option<NavigationSystem>,
+        spatial: SpatialGrid,
+        rng: Rng,
+        tanks: IndexMap<u32, Tank>,
+        key_bits: PlayerKeyBits,
+        weapons: IndexMap<String, WeaponConfig>,
+        levels: MapLevels,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let levels = levels();
+            let nav = NavigationSystem::generate_layered(&levels, TILE);
+
+            Self {
+                world: PhysicsWorld::new(),
+                nav: Some(nav),
+                spatial: SpatialGrid::new(1000.0),
+                rng: Rng::new(7),
+                tanks: IndexMap::new(),
+                key_bits: key_bits(),
+                weapons: weapons(),
+                levels,
+            }
+        }
+
+        fn add_tank(&mut self, game_id: u32, team_id: u8, x: f32, y: f32, level: u8) {
+            let mut tank = Tank::new(
+                &mut self.world,
+                &self.weapons,
+                &panel(),
+                "m1",
+                &model(),
+                game_id,
+                team_id,
+                x,
+                y,
+                0.0,
+            );
+
+            if level > 0 {
+                tank.set_level(level);
+                tank.sync_collision_groups(&mut self.world);
+            }
+
+            self.spatial.insert(SpatialEntity {
+                game_id,
+                team_id,
+                x,
+                y,
+            });
+
+            self.tanks.insert(game_id, tank);
+        }
+
+        fn view(&mut self) -> BotView<'_> {
+            BotView {
+                world: &mut self.world,
+                nav: &self.nav,
+                spatial: &self.spatial,
+                rng: &mut self.rng,
+                tanks: &mut self.tanks,
+                key_bits: &self.key_bits,
+                weapons: &self.weapons,
+                levels: Some(&self.levels),
+            }
+        }
+    }
+
+    /// Бот в кэшированном состоянии «стою здесь, на этом уровне».
+    fn brain_at(game_id: u32, position: [f32; 2], level: u8) -> BotBrain {
+        let mut rng = Rng::new(3);
+        let mut brain = BotBrain::new(game_id, &mut rng);
+
+        brain.my_position = Some(position);
+        brain.my_level = level;
+        brain
+    }
+
+    #[test]
+    fn bot_path_crosses_the_ramp() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 112.0, 112.0, 0);
+
+        let mut brain = brain_at(1, [112.0, 112.0], 0);
+        let mut view = fixture.view();
+        let mut crossed = false;
+
+        // цель патрулирования случайна: ждём первую, что лежит на мосту
+        for _ in 0..500 {
+            brain.set_new_patrol_target(&mut view);
+
+            if brain.patrol_target.is_some_and(|point| point.level == 1) {
+                let path = brain.path.as_ref().expect("путь к мосту построен");
+
+                assert!(
+                    path.iter().any(|point| point.level == 1),
+                    "путь на мост обязан содержать точку уровня 1: {path:?}"
+                );
+
+                crossed = true;
+                break;
+            }
+        }
+
+        assert!(crossed, "мост ни разу не выпал целью патрулирования");
+    }
+
+    #[test]
+    fn bot_prefers_the_enemy_on_its_level() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 112.0, 112.0, 0);
+        // ближний враг — на мосту, дальний — на земле
+        fixture.add_tank(2, 2, 368.0, 208.0, 1);
+        fixture.add_tank(3, 2, 112.0, 432.0, 0);
+
+        let brain = brain_at(1, [112.0, 112.0], 0);
+        let view = fixture.view();
+
+        assert_eq!(brain.find_closest_enemy(&view), Some(3));
+    }
+
+    /// Прицеленный в цель бот: сколько попыток из `attempts` дошли до
+    /// выстрела (разброс прицела случаен, поэтому попыток несколько).
+    fn fires_within(fixture: &mut Fixture, brain: &mut BotBrain, attempts: usize) -> bool {
+        let mut view = fixture.view();
+
+        for _ in 0..attempts {
+            brain.execute_aim_and_shoot(&mut view);
+
+            if brain.firing_timer > 0.0 {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    #[test]
+    fn bot_holds_fire_through_the_slab() {
+        let mut fixture = Fixture::new();
+
+        // бот на мосту, цель — под плитой, на земле
+        fixture.add_tank(1, 1, 368.0, 208.0, 1);
+        fixture.add_tank(2, 2, 368.0, 432.0, 0);
+
+        let mut brain = brain_at(1, [368.0, 208.0], 1);
+
+        brain.state = BotState::Attacking;
+        brain.target = Some(2);
+        fixture.tanks[&1].gun_rotation = std::f32::consts::FRAC_PI_2;
+
+        assert!(
+            !fires_within(&mut fixture, &mut brain, 100),
+            "плита моста экранирует цель — выстрела быть не должно"
+        );
+    }
+
+    #[test]
+    fn bot_fires_at_the_enemy_on_the_open_edge() {
+        let mut fixture = Fixture::new();
+
+        // бот на земле западнее моста, цель — на кромке без перил
+        fixture.add_tank(1, 1, 200.0, 208.0, 0);
+        fixture.add_tank(2, 2, 336.0, 208.0, 1);
+
+        let mut brain = brain_at(1, [200.0, 208.0], 0);
+
+        brain.state = BotState::Attacking;
+        brain.target = Some(2);
+
+        assert!(
+            fires_within(&mut fixture, &mut brain, 100),
+            "цель на открытой кромке достижима с земли"
+        );
+    }
+
+    #[test]
+    fn falling_bot_releases_keys_and_does_not_get_stuck() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 368.0, 208.0, 1);
+
+        let mut brain = brain_at(1, [368.0, 208.0], 1);
+
+        brain.key_states = [true; 6];
+        brain.stuck_timer = 1.4;
+        fixture.tanks[&1].level_state.transit = Transit::Falling {
+            elapsed: 0.0,
+            from: 1,
+        };
+
+        let mut view = fixture.view();
+
+        brain.update(&mut view, 0.2);
+
+        assert_eq!(brain.key_states, [false; 6], "все клавиши отпущены");
+        assert_eq!(brain.stuck_timer, 0.0, "падение не считается застреванием");
+        assert!(matches!(brain.state, BotState::Patrolling));
+    }
+
+    #[test]
+    fn combat_reposition_stays_on_the_level() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 368.0, 320.0, 1);
+
+        let mut brain = brain_at(1, [368.0, 320.0], 1);
+        let nav = fixture.nav.clone().unwrap();
+        let mut accepted = 0;
+        let mut rejected = 0;
+
+        for _ in 0..60 {
+            brain.reposition_target = None;
+
+            let mut view = fixture.view();
+
+            brain.calculate_new_combat_position(&mut view);
+
+            match brain.reposition_target {
+                Some(point) => {
+                    assert!(
+                        nav.is_walkable_on(1, point[0], point[1]),
+                        "точка перепозиционирования вне моста: {point:?}"
+                    );
+
+                    accepted += 1;
+                }
+                None => rejected += 1,
+            }
+        }
+
+        assert!(accepted > 0, "ни одна точка не подошла");
+        assert!(rejected > 0, "точки за краем моста обязаны отбраковываться");
+    }
 }

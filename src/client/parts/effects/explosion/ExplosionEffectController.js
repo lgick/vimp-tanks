@@ -2,6 +2,11 @@ import { Container } from 'pixi.js';
 import ExplosionEffect from './ExplosionEffect.js';
 import FunnelEffect from './FunnelEffect.js';
 import { REFERENCE_BLAST_RADIUS } from './SmokeEffect.js';
+import { levelZ } from '../../../levelZ.js';
+
+// базовые zIndex вспышки и воронки внутри своего уровня
+const EXPLOSION_BASE_Z = 4;
+const FUNNEL_BASE_Z = 2;
 
 export default class ExplosionEffectController extends Container {
   constructor(data, assets, dependencies) {
@@ -12,6 +17,9 @@ export default class ExplosionEffectController extends Container {
     // радиус - единственный источник масштаба для вспышки, воронки и дыма:
     // гард здесь избавляет всех троих от NaN, если сервер его не прислал
     this.radius = data[2] ?? REFERENCE_BLAST_RADIUS;
+    // 2.5D: уровень взрыва — плита моста экранирует его и вверх, и вниз,
+    // значит и рисуется он только на своём слое
+    this.level = data[3] || 0;
 
     this._assets = assets;
     this._soundManager = dependencies.soundManager;
@@ -58,7 +66,7 @@ export default class ExplosionEffectController extends Container {
       this._assets,
     );
 
-    this.explosion.zIndex = 4;
+    this.explosion.zIndex = levelZ(EXPLOSION_BASE_Z, this.level);
 
     this.funnel = new FunnelEffect(
       this.originX,
@@ -68,7 +76,7 @@ export default class ExplosionEffectController extends Container {
       this._assets,
     );
 
-    this.funnel.zIndex = 2;
+    this.funnel.zIndex = levelZ(FUNNEL_BASE_Z, this.level);
 
     // эффекты добавляются вне GameView.add - порядок слоёв пересчитывается тут,
     // одной сортировкой на оба

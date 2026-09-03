@@ -7,6 +7,12 @@ import styles from './tanks.css?inline';
 import parts from './parts/index.js';
 import bakers from './bakers/index.js';
 import { isNodeCore, loadNodeCore } from '../nodeCore.js';
+import { createLevelView } from './levelView.js';
+
+// один экземпляр на клиента: создаётся при сборке модуля, живёт столько же,
+// сколько сам плагин — сервисы пересобираются на смену ядра, состояние
+// «где игрок» при этом переписывается первым же кадром локального танка
+const levelView = createLevelView();
 
 // ClientPlugin танков: рендеры сущностей (parts), процедурные текстуры
 // (bakers) и игровые хуки клиентского ядра (ClientCore). default export
@@ -17,6 +23,10 @@ import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 export default {
   id: 'tanks',
   engineApi: ENGINE_API_VERSION,
+
+  // см. комментарий в src/host/index.js: обе половины плагина обязаны
+  // объявлять одинаковый список возможностей
+  requires: ['map.layers'],
 
   // wasmUrl — из GameManifest.entries.wasm (общий с host-плагином ассет)
   async createClientCore(clientConfigJson, { wasmUrl }) {
@@ -41,9 +51,12 @@ export default {
     // сервисы игры для её же parts (движок их не описывает — только раздаёт
     // тем, кто объявил их в componentDependencies, см. src/config/client.js).
     // mapDynamics — геометрия предсказанной динамики карты из ядра: по ней
-    // ShotEffect пересчитывает точку удара по ТЕКУЩЕМУ трансформу ящика
+    // ShotEffect пересчитывает точку удара по ТЕКУЩЕМУ трансформу ящика.
+    // levelView — где и на каком уровне локальный игрок: по нему плита моста
+    // над ним становится полупрозрачной (2.5D)
     services(core) {
       return {
+        levelView,
         mapDynamics: {
           // локальная точка тела → мировая в рендерном фрейме;
           // null — ключ неизвестен (карта сменилась, ящика больше нет)

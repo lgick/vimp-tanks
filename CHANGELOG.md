@@ -7,13 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- 2.5D levels in the game core: a tank now carries a level (`0` — ground,
+  `1` — overpass) and a visual height `z`. Driving a ramp lifts it between
+  levels, a bridge ledge starts a fall (controls locked, no collisions),
+  and the landing applies `fallDamage` — a lethal one is recorded as a
+  suicide. Tanks on different levels do not collide. The rules live in one
+  place, `core/src/level.rs`, so the host and the client replica cannot
+  drift apart.
+- `coreParams.levels` in `src/config/game.js` (`fallTime` 0.35 s,
+  `fallDamage` 15): the level rules the engine hands to the game core
+  as-is. A game without the section keeps the defaults; a flat map never
+  touches them.
+- Fields `z` and `level` at the end of the `m1` snapshot row
+  (`src/config/snapshot.js`). The frame format itself is unchanged —
+  `PLAYER_STATE_LEN` is still 8 and the snapshot version did not move.
+- Shooting and explosions across 2.5D levels. A shot ray is split into
+  single-level segments (`core/src/shot_levels.rs`): a ray from the bridge
+  drops to the ground at the first cell without a slab, a ray from the
+  ground can hit a tank standing on an open ledge in the first slab cell it
+  enters (railings close that window), and past it the slab shields
+  everything. An explosion only reaches targets of its own level, a bomb
+  remembers the level it was dropped on (over a cell without a slab — a
+  ramp, say — it lands on the ground), and a falling tank is hit by neither
+  rays nor blasts. Flat maps keep the previous shooting path untouched.
+- Fields `startLevel`/`endLevel` in the tracer row (`w1`) and `level` in
+  the bomb (`w2`) and explosion (`w2e`) rows of the snapshot schema
+  (`src/config/snapshot.js`).
+- Client-side prediction of the own tank's level: the replica runs the same
+  `core/src/level.rs` rules as the host over the same layered geometry, so
+  a ramp climb and a fall are predicted rather than awaited. The frame's
+  `level` is a hard correction, applied only while the replica is not in a
+  transit — on a ramp the frame lags by the interpolation buffer and would
+  drag the climb back every tick. Predicted contacts are skipped between
+  bodies whose level masks do not intersect (a tank on the bridge does not
+  push a box below it), a falling tank makes no contacts at all, and the
+  local tracer is cut into the same per-level segments as the authoritative
+  ray. `PLAYER_STATE_LEN` is still 8: `level`/`z` are derived, not
+  transmitted.
+- `coreParams` now reaches the CLIENT core as well (`prediction.coreParams`
+  in `CONFIG_DATA`, needs an engine with that passthrough): the replica has
+  to see `levels.fallTime` exactly as the host does, otherwise a falling
+  tank lands early or late and flickers between levels.
+- 2.5D rendering: every part now draws on its own level. A part's base
+  `zIndex` is shifted by `LEVEL_Z_STRIDE = 100` per level
+  (`src/client/levelZ.js`), so an overpass layer always covers the ground
+  below it, and tanks, smoke, tracks, bombs, tracers and explosions follow
+  the level they belong to. Track marks stay on the level they were left
+  on. A map without upper levels keeps exactly the previous draw order.
+- See-through bridge: a map layer of level >= 1 fades while the local
+  player drives under its slab, and fades back smoothly on the way out.
+- Service `levelView` (`src/client/levelView.js`), handed to the parts by
+  `ClientPlugin.hooks.services`: where the local player is and on which
+  level. The local `Tank` writes it (`localPlayer` tells it that it is the
+  local one), the bridge layers read it.
+
+- Bots use the ramps and bridges: the path is built over the layered nav
+  graph (a level change is a ramp or a ledge), a falling bot is not steered
+  and is no longer mistaken for a stuck one, obstacle avoidance and the
+  strafe point after a shot stay on the bot's own level, a target on the
+  bot's own level is preferred, and a shot is held while the bridge slab
+  shields the target — the bot drives to it over a ramp instead.
+  `level_at_distance()` (`core/src/shot_levels.rs`) answers which level a
+  ray is on at a given distance.
+- Map `overpass` (`src/data/maps/overpass.js`): the 2.5D demo — a through
+  overpass with railings, two ramps at its ends, two gaps in the railings to
+  fall from and to shoot through from below, boxes on both levels and
+  respawn points on the ground and on the slab. Registered in the map
+  catalog; the default map stays `pool mini`.
+- `requires: ['map.layers']` in both plugin halves and in the generated
+  manifest: without layered maps in the engine `overpass` would load without
+  its second level and without a single error, so the capability is a hard
+  requirement. `scripts/build-game-manifest.js` takes the list from
+  `src/host/index.js` — one source for the manifest and the plugin.
+- Debug scenarios `bridge.json`, `fall.json`, `crosslevel.json` and
+  `bots_bridge.json` (`tests/scenarios/`): the ramp climb and the descent,
+  a fall off a ledge, hitscan and a bomb across levels, and bots using the
+  bridge over a long run.
+
 ### Changed
 
+- The internal `BotBrain` handoff dump changed shape: the path and the
+  patrol target are now points with a level (`PathPoint`), not bare
+  coordinates. The dump is internal and unversioned, so an old one no
+  longer restores — a handoff has to happen between equal builds.
+- Client map geometry moved from the flat `Grid` to the layered
+  `MapLevels`: prediction and the shot raycast share one structure built
+  once per `MAP_DATA`, and each of them reads the grid, the solid tiles and
+  the tile size of the level it works on.
 - Rebuilt against `vimp-engine` 0.23.0 and `vimp-engine-core` 0.9.0. Nothing
   in the game had to change: `dispatch`/`abi_describe` arrive from the
   `export_game_core_abi!` macro, and `engineApi` stays 4. The engine no
   longer rejects a package for being older than itself, so this update is
   the game following the engine by choice, not by necessity.
+
+### Fixed
+
+- `MapRadar` no longer duplicates the same wall graphics for every render
+  layer of a map: only the layer that owns the solid tiles draws them.
+- `ShotEffect` reads the map-dynamics anchor at its new index in the tracer
+  row: the row grew by `startLevel`/`endLevel`, and debris from a hit on a
+  moving box was landing at the pre-shot position again.
+- `players_data()` now emits the full-width `m1` row: it stopped at `team`
+  and silently dropped `angvel`, so the JSON path (the first frame's
+  `FIRST_SHOT_DATA`) and the binary frames disagreed on row width.
 
 ## [0.13.1] - 2026-08-26
 

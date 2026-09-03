@@ -1,5 +1,13 @@
 import { Container, Sprite } from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
+import { levelZ } from '../levelZ.js';
+
+// базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
+const TANK_BASE_Z = 3;
+
+// подъём спрайта при высоте z: масштаб корпуса даёт читаемую разницу
+// «внизу / наверху» без 3D. Отдельная тень спрайтом отложена
+const Z_SCALE_GAIN = 0.06;
 
 // скорость (высота тона) на холостом ходу
 const MIN_ENGINE_RATE = 1;
@@ -47,10 +55,8 @@ function calculateEngineSoundParams(load) {
 }
 
 export default class Tank extends Container {
-  constructor(data, assets, dependencies) {
+  constructor(data, assets, dependencies, context) {
     super();
-
-    this.zIndex = 3;
 
     // спрайты для отображения танка
     this.body = new Sprite();
@@ -69,7 +75,7 @@ export default class Tank extends Container {
 
     // параметры с сервера:
     // [x, y, rotation, gunRotation, vX, vY,
-    // engineLoad, condition, size, teamId]
+    // engineLoad, condition, size, teamId, angvel, z, level]
     this.x = data[0] || 0;
     this.y = data[1] || 0;
     this.rotation = data[2] || 0;
@@ -78,6 +84,16 @@ export default class Tank extends Container {
     this._condition = data[7];
     this._size = data[8];
     this._teamId = data[9];
+
+    // 2.5D: непрерывная высота (рампа/падение) и дискретный уровень
+    this._z = data[11] || 0;
+    this._level = data[12] || 0;
+    this.zIndex = levelZ(TANK_BASE_Z, this._level);
+
+    // свой танк — единственный, кто вправе писать в levelView: по нему
+    // плита моста над игроком становится полупрозрачной (Map.onRender)
+    this._isLocal = dependencies.localPlayer?.is(context?.id) === true;
+    this._levelView = dependencies.levelView || null;
 
     // правильный якорь для пушки в зависимости от команды
     const liveTextures =
@@ -94,12 +110,12 @@ export default class Tank extends Container {
 
     // коэффициент масштабирования, чтобы соответствовать размеру танка
     const BAKER_BASE_SIZE = 10; // размер, использованный в текстурах
-    const scaleFactor = this._size / BAKER_BASE_SIZE;
+    this._scaleFactor = this._size / BAKER_BASE_SIZE;
 
     // масштаб ко всем спрайтам
-    this.body.scale.set(scaleFactor);
-    this.gun.scale.set(scaleFactor);
-    this.wreck.scale.set(scaleFactor);
+    this.body.scale.set(this._scaleFactor);
+    this.gun.scale.set(this._scaleFactor);
+    this.wreck.scale.set(this._scaleFactor);
 
     this._soundManager = dependencies.soundManager;
     this._soundId = null;
@@ -179,6 +195,25 @@ export default class Tank extends Container {
     this.rotation = data[2];
     this.gun.rotation = data[3];
     this._engineLoad = data[6];
+
+    const level = data[12] || 0;
+
+    this._z = data[11] || 0;
+
+    if (level !== this._level) {
+      this._level = level;
+      this.zIndex = levelZ(TANK_BASE_Z, level);
+    }
+
+    // высота читается масштабом корпуса: танк на эстакаде крупнее наземного
+    const zScale = 1 + this._z * Z_SCALE_GAIN;
+
+    this.body.scale.set(this._scaleFactor * zScale);
+    this.gun.scale.set(this._scaleFactor * zScale);
+
+    if (this._isLocal && this._levelView) {
+      this._levelView.set(level, this.x, this.y);
+    }
 
     // обновление звуковой логики; страховка: живой танк без регистрации
     // (её мог снять частичный CLEAR) возвращает звук на следующем кадре
