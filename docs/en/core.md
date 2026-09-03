@@ -143,7 +143,7 @@ use it — `onCoreEvent` is left unset):
 Health and ammo are **the source of truth in the core**: the JS panel is a
 projection of these events.
 
-### Frames (v3, byte-for-byte with the decoder)
+### Frames (v5, byte-for-byte with the decoder)
 
 - `pack_body()` — the broadcast body, once per frame sent; it **drains**
   the snapshot's event accumulators (shots/explosions/removals accumulate
@@ -205,7 +205,7 @@ exists. Its config is assembled by the engine's
 | `try_fire(localNow)` | a local visual shot; gates (cooldown/ammo/pending bomb/alive/active) are internal; returns spawn JSON or `undefined` |
 | `cycle_weapon(back)` | a local weapon-cycle switch (authoritative confirmation comes via the panel) |
 | `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR. `reset()` also drops the local tank's meta, so the prediction overlay disappears right away instead of waiting for the spectator keyset |
-| `decode_frame(bytes)` | a plain v3 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
+| `decode_frame(bytes)` | a plain v5 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
 | `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
