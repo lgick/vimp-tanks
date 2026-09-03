@@ -25,7 +25,19 @@ const output = execFileSync(
   ['pack', '--dry-run', '--json', '--ignore-scripts'],
   { encoding: 'utf8' },
 );
-const files = JSON.parse(output)[0].files.map(file => file.path);
+// npm ≤ 11 отдавал массив пакетов, npm ≥ 12 — объект «имя пакета → пакет».
+// Пакет здесь ровно один (npm pack в корне игры), поэтому берём первую
+// запись любой из форм, а не индекс
+const parsed = JSON.parse(output);
+const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed ?? {})[0];
+
+if (!entry?.files) {
+  throw new Error(
+    `не разобрать вывод npm pack --json: нет files в ${JSON.stringify(entry)}`,
+  );
+}
+
+const files = entry.files.map(file => file.path);
 const missing = REQUIRED.filter(pattern => !files.some(f => pattern.test(f)));
 
 if (missing.length) {
