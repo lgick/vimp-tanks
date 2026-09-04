@@ -31,6 +31,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use vimp_engine_core::client::collision::{box_center_from_origin, obb_vs_obb};
 use vimp_engine_core::client::game::PredictedRow;
@@ -39,6 +40,7 @@ use vimp_engine_core::client::raycast::Box2;
 use vimp_engine_core::client::rigid_body::{MAP_SURFACE, box_mass_properties};
 use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::{FieldValue, SnapshotConfig};
+use vimp_engine_core::map::{BodyLevelState, FallModel, MapLevels, step_body_level};
 use vimp_engine_core::physics::deg_to_rad;
 
 use super::ClientMapConfig;
@@ -51,14 +53,18 @@ use super::predicted_set::{
 // (20 ящиков) иначе втянул бы её целиком
 const MAX_PREDICTED_BODIES: usize = 12;
 
-// индексы полей строки cN (x, y, angle, vx, vy, angvel) — позиционный
-// контракт со схемой снапшота игры (src/config/snapshot.js)
+// индексы полей строки cN (x, y, angle, z, level, vx, vy, angvel) —
+// позиционный контракт со схемой снапшота игры (src/config/snapshot.js).
+// Высота и уровень стоят в ГОЛОВЕ строки: покоящееся тело не шлёт хвост
+// скоростей, и уровень из хвоста читался бы нулём
 const FIELD_X: usize = 0;
 const FIELD_Y: usize = 1;
 const FIELD_ANGLE: usize = 2;
-const FIELD_VX: usize = 3;
-const FIELD_VY: usize = 4;
-const FIELD_ANGVEL: usize = 5;
+const FIELD_Z: usize = 3;
+const FIELD_LEVEL: usize = 4;
+const FIELD_VX: usize = 5;
+const FIELD_VY: usize = 6;
+const FIELD_ANGVEL: usize = 7;
 
 /// «Угол объекта» из центра бокса — обратный перевод
 /// `box_center_from_origin`.
@@ -75,6 +81,13 @@ fn field_f32(fields: &[FieldValue], i: usize) -> f32 {
     match fields.get(i) {
         Some(FieldValue::F32(v)) => *v,
         _ => 0.0,
+    }
+}
+
+fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
+    match fields.get(i) {
+        Some(FieldValue::U8(v)) => *v,
+        _ => 0,
     }
 }
 
@@ -96,6 +109,10 @@ pub struct MapDynamics {
     // ключ блока динамики текущей карты (c1/c2) и его id в схеме
     set_id: Option<String>,
     set_key_id: Option<u8>,
+    // геометрия слоёв и модель падения: предсказанное тело, у которого
+    // кончилась плита, обязано падать теми же правилами, что на хосте
+    levels: Option<Rc<MapLevels>>,
+    fall: FallModel,
 }
 
 impl MapDynamics {
@@ -106,6 +123,8 @@ impl MapDynamics {
             snapshot: snapshot.clone(),
             set_id: None,
             set_key_id: None,
+            levels: None,
+            fall: FallModel::default(),
         }
     }
 
@@ -146,6 +165,7 @@ impl MapDynamics {
             body.half_w = half_w;
             body.half_h = half_h;
             body.level = item.level;
+            body.z = item.level as f32;
 
             // масса и момент инерции прямоугольника (как у Rapier на хосте)
             let mass = box_mass_properties(width, height, item.density);
@@ -162,6 +182,14 @@ impl MapDynamics {
             self.indices.insert(key.clone(), index as u32);
             self.set.bodies_mut().insert(key, body);
         }
+    }
+
+    /// Геометрия слоёв и модель падения той же карты: тела карты живут по
+    /// правилам уровня, и без них предсказанный ящик за кромкой плиты
+    /// просто повис бы в воздухе.
+    pub(crate) fn set_levels(&mut self, levels: Rc<MapLevels>, fall: FallModel) {
+        self.levels = Some(levels);
+        self.fall = fall;
     }
 
     /// РЕНДЕРНЫЙ бокс тела (состояние плюс сглаживающая ошибка): где ящик
@@ -270,49 +298,45 @@ impl PredictedBodies for MapDynamics {
                 body.body.x = center[0];
                 body.body.y = center[1];
                 body.body.angle = angle;
+                // уровень и высота ведёт кадр: у тела, которым владеет
+                // интерполяция, своей фазы падения нет
+                body.level = field_u8(&row.fields, FIELD_LEVEL);
+                body.z = field_f32(&row.fields, FIELD_Z);
+                body.falling = None;
             }
         }
     }
 
     /// Авторитетное состояние тел из сырого кадра (реконсиляция).
     fn snapshot_bodies(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState)> {
-        let Some(BlockData::IndexedNoNull8(items)) =
-            self.block_key().and_then(|key| snapshot.block_by_key(key))
-        else {
-            return Vec::new();
-        };
+        self.snapshot_rows(snapshot)
+            .into_iter()
+            .map(|(key, state, _)| (key, state))
+            .collect()
+    }
 
-        let mut entries = Vec::new();
+    /// Реконсиляция плюс уровень, высота и фаза падения тела из того же
+    /// СЫРОГО кадра: интерполированный сэмпл (`update`) отстаёт на буфер, и
+    /// восстановленная по нему фаза приходила бы со сдвигом. Уровень
+    /// предсказанного тела ведёт кадр, а не `physicsDynamic`: тело успело
+    /// упасть, а конфиг карты знает только его стартовый уровень.
+    fn begin_reconcile(&mut self, snapshot: &DecodedSnapshot) {
+        let rows = self.snapshot_rows(snapshot);
 
-        for (index, fields) in items {
-            let key = body_key(*index as usize);
-            let Some(body) = self.set.bodies().get(&key) else {
-                continue;
-            };
-
-            let angle = field_f32(fields, FIELD_ANGLE);
-            let center = box_center_from_origin(
-                field_f32(fields, FIELD_X),
-                field_f32(fields, FIELD_Y),
-                angle,
-                body.half_w,
-                body.half_h,
-            );
-
-            entries.push((
-                key,
-                ServerState {
-                    x: center[0],
-                    y: center[1],
-                    angle,
-                    vx: field_f32(fields, FIELD_VX),
-                    vy: field_f32(fields, FIELD_VY),
-                    angvel: field_f32(fields, FIELD_ANGVEL),
-                },
-            ));
+        // уровень пишется ДО реконсиляции: переигранные шаги обязаны видеть
+        // авторитетную маску с первого же шага
+        for (key, _, level) in &rows {
+            if let Some(body) = self.set.bodies_mut().get_mut(key) {
+                body.set_level_state(*level);
+            }
         }
 
-        entries
+        let entries: Vec<(String, ServerState)> = rows
+            .into_iter()
+            .map(|(key, state, _)| (key, state))
+            .collect();
+
+        self.set.begin_reconcile(&entries);
     }
 
     /// Переводит в `Predicted` тела, связанные со своим танком: прямой
@@ -383,6 +407,25 @@ impl PredictedBodies for MapDynamics {
         }
     }
 
+    /// Шаг предсказанных тел: интеграция общая, плюс правила уровня —
+    /// тело, у которого кончилась плита, падает у зрителя ровно так же, как
+    /// на хосте (`step_body_level` — одна функция на обе стороны).
+    fn integrate_predicted(&mut self, dt: f32) {
+        self.set_mut().integrate_predicted(dt);
+
+        let Some(levels) = self.levels.clone() else {
+            return;
+        };
+        let fall = self.fall;
+
+        for body in self.set_mut().predicted_bodies_mut() {
+            let mut state = body.level_state();
+
+            step_body_level(&mut state, body.body.x, body.body.y, &levels, &fall, dt);
+            body.set_level_state(state);
+        }
+    }
+
     /// Строки предсказанных тел в соглашении «угол объекта» — ровно то, что
     /// ждёт рендер динамики карты (блок `cN` hot-буфера). Скорости строки
     /// движок дополняет нулями: рендеру они не нужны.
@@ -414,7 +457,16 @@ impl PredictedBodies for MapDynamics {
                 Some(PredictedRow {
                     key_id,
                     id,
-                    fields: vec![origin[0], origin[1], render.angle],
+                    // z и level идут в строке за трансформом: без них движок
+                    // дописал бы голову схемы нулями, и предсказанный ящик
+                    // на мосту рисовался бы на земле
+                    fields: vec![
+                        origin[0],
+                        origin[1],
+                        render.angle,
+                        body.z,
+                        body.level as f32,
+                    ],
                 })
             })
             .collect()
@@ -422,6 +474,81 @@ impl PredictedBodies for MapDynamics {
 }
 
 impl MapDynamics {
+    // строки блока динамики из сырого кадра: авторитетный трансформ со
+    // скоростями плюс состояние уровня тела
+    fn snapshot_rows(
+        &self,
+        snapshot: &DecodedSnapshot,
+    ) -> Vec<(String, ServerState, BodyLevelState)> {
+        let Some(BlockData::IndexedNoNull8(items)) =
+            self.block_key().and_then(|key| snapshot.block_by_key(key))
+        else {
+            return Vec::new();
+        };
+
+        let mut entries = Vec::new();
+
+        for (index, fields) in items {
+            let key = body_key(*index as usize);
+            let Some(body) = self.set.bodies().get(&key) else {
+                continue;
+            };
+
+            let angle = field_f32(fields, FIELD_ANGLE);
+            let center = box_center_from_origin(
+                field_f32(fields, FIELD_X),
+                field_f32(fields, FIELD_Y),
+                angle,
+                body.half_w,
+                body.half_h,
+            );
+
+            entries.push((
+                key,
+                ServerState {
+                    x: center[0],
+                    y: center[1],
+                    angle,
+                    vx: field_f32(fields, FIELD_VX),
+                    vy: field_f32(fields, FIELD_VY),
+                    angvel: field_f32(fields, FIELD_ANGVEL),
+                },
+                self.frame_level_state(
+                    field_u8(fields, FIELD_LEVEL),
+                    field_f32(fields, FIELD_Z),
+                    center[0],
+                    center[1],
+                ),
+            ));
+        }
+
+        entries
+    }
+
+    // состояние уровня по паре (level, z) кадра: `z` ниже своего уровня —
+    // тело в воздухе, и фаза падения восстанавливается той же геометрией и
+    // той же моделью, что у хоста (обнулять её нельзя — высота ящика тогда
+    // зависела бы от длины реплея, а не от времени падения)
+    fn frame_level_state(&self, level: u8, z: f32, x: f32, y: f32) -> BodyLevelState {
+        let Some(levels) = &self.levels else {
+            return BodyLevelState::grounded(level);
+        };
+
+        if z >= level as f32 {
+            return BodyLevelState::grounded(level);
+        }
+
+        // куда падаем, решает та же геометрия, что у хоста: под обрывом
+        // может лежать не земля, а плита нижнего уровня
+        let to = levels.landing_level(level, x, y);
+
+        BodyLevelState {
+            level,
+            z,
+            falling: Some((to, self.fall.elapsed_at(level as f32, to as f32, z))),
+        }
+    }
+
     // перевод тела в предсказание по его позиции в множестве
     fn promote_at(&mut self, index: usize, local_now: f64) {
         if let Some((_, body)) = self.set.bodies_mut().get_index_mut(index) {
@@ -590,14 +717,24 @@ mod tests {
 
     // интерполированный сэмпл блока динамики: ключ → строки [x, y, angle]
     fn game(key: &str, rows: &[(u32, [f32; 3])]) -> InterpolatedGame {
+        game_at_level(key, rows, 0)
+    }
+
+    // строка интерполяции: трансформ плюс голова 2.5D (z, level)
+    fn game_at_level(key: &str, rows: &[(u32, [f32; 3])], level: u8) -> InterpolatedGame {
         let mut blocks = IndexMap::new();
 
         blocks.insert(
             key.to_string(),
             rows.iter()
-                .map(|(id, values)| InterpolatedRow {
-                    id: *id,
-                    fields: values.iter().map(|v| FieldValue::F32(*v)).collect(),
+                .map(|(id, values)| {
+                    let mut fields: Vec<FieldValue> =
+                        values.iter().map(|v| FieldValue::F32(*v)).collect();
+
+                    fields.push(FieldValue::F32(level as f32));
+                    fields.push(FieldValue::U8(level));
+
+                    InterpolatedRow { id: *id, fields }
                 })
                 .collect(),
         );
@@ -608,10 +745,31 @@ mod tests {
     // сырой кадр блока динамики: строка полной ширины (кадр отдаёт
     // отсутствующий хвост скоростей нулями, см. client/unpack.rs)
     fn snapshot(key: &str, rows: &[(u8, [f32; 6])]) -> DecodedSnapshot {
+        snapshot_at_level(key, rows, 0.0, 0)
+    }
+
+    // тот же кадр с заданной головой 2.5D: реконсиляция ведёт уровень тела
+    // именно ею
+    fn snapshot_at_level(
+        key: &str,
+        rows: &[(u8, [f32; 6])],
+        z: f32,
+        level: u8,
+    ) -> DecodedSnapshot {
         let mut items = IndexMap::new();
 
         for (index, values) in rows {
-            items.insert(*index, values.iter().map(|v| FieldValue::F32(*v)).collect());
+            // [x, y, angle] + голова 2.5D (z, level) + хвост [vx, vy, angvel]
+            let mut fields: Vec<FieldValue> = values[..3]
+                .iter()
+                .map(|v| FieldValue::F32(*v))
+                .collect();
+
+            fields.push(FieldValue::F32(z));
+            fields.push(FieldValue::U8(level));
+            fields.extend(values[3..].iter().map(|v| FieldValue::F32(*v)));
+
+            items.insert(*index, fields);
         }
 
         DecodedSnapshot {
@@ -904,6 +1062,257 @@ mod tests {
         assert_eq!(body(&dynamics, "d0").mode, Mode::Follow);
         assert!((dynamics.render_box("d0").unwrap().x - 320.0).abs() < 1e-3);
         assert!(dynamics.render_data().is_empty());
+    }
+
+    // — правила уровня у тел карты —
+
+    /// Карта 8×8 с плитой уровня 1 в колонках 0..3 (тайл 2), шаг 32.
+    fn layered_levels() -> Rc<MapLevels> {
+        let grid0 = vec![vec![0; 8]; 8];
+        let mut grid1 = vec![vec![0; 8]; 8];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().take(4) {
+                *cell = 2;
+            }
+        }
+
+        let mut levels: IndexMap<String, vimp_engine_core::map::MapLevelConfig> = IndexMap::new();
+
+        levels.insert(
+            "1".to_string(),
+            vimp_engine_core::map::MapLevelConfig {
+                map: grid1,
+                floor: vec![2],
+                walls: Vec::new(),
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+
+        Rc::new(MapLevels::build(&grid0, &[], &levels, &[], 32.0))
+    }
+
+    #[test]
+    fn body_reads_the_level_from_the_row() {
+        let mut dynamics = setup(1.0);
+
+        dynamics.update(&game_at_level("c1", &[(0, [100.0, 0.0, 0.0])], 1));
+
+        assert_eq!(body(&dynamics, "d0").level, 1);
+        assert_eq!(body(&dynamics, "d0").z, 1.0);
+    }
+
+    #[test]
+    fn predicted_body_falls_off_the_slab() {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        // ящик уровня 1 стоит за кромкой плиты (колонка 5: x от 160)
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [176.0, 16.0], "angle": 0.0, "width": 16.0, "height": 16.0,
+                  "density": 1.0, "level": 1 }
+            ]),
+            1.0,
+        ));
+        dynamics.set_levels(layered_levels(), FallModel::default());
+        dynamics.capture(&tank_obb(176.0, 24.0), 1000.0);
+
+        assert_eq!(body(&dynamics, "d0").mode, Mode::Predicted);
+
+        for _ in 0..120 {
+            dynamics.integrate_predicted(1.0 / 120.0);
+        }
+
+        assert_eq!(body(&dynamics, "d0").level, 0, "ящик обязан упасть на землю");
+        assert_eq!(body(&dynamics, "d0").z, 0.0);
+        assert!(body(&dynamics, "d0").falling.is_none());
+    }
+
+    #[test]
+    fn predicted_body_keeps_its_level_on_the_slab() {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        // колонка 1 — плита уровня 1
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [40.0, 16.0], "angle": 0.0, "width": 16.0, "height": 16.0,
+                  "density": 1.0, "level": 1 }
+            ]),
+            1.0,
+        ));
+        dynamics.set_levels(layered_levels(), FallModel::default());
+        dynamics.capture(&tank_obb(40.0, 24.0), 1000.0);
+
+        for _ in 0..120 {
+            dynamics.integrate_predicted(1.0 / 120.0);
+        }
+
+        assert_eq!(body(&dynamics, "d0").level, 1);
+        assert_eq!(body(&dynamics, "d0").z, 1.0);
+    }
+
+    /// Та же карта с двумя надземными уровнями: плита уровня 1 в колонках
+    /// 0..5, плита уровня 2 — только в колонках 0..3. Под кромкой уровня 2
+    /// лежит не земля, а плита уровня 1.
+    fn tall_levels() -> Rc<MapLevels> {
+        let grid0 = vec![vec![0; 8]; 8];
+        let mut grid1 = vec![vec![0; 8]; 8];
+        let mut grid2 = vec![vec![0; 8]; 8];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().take(6) {
+                *cell = 2;
+            }
+        }
+
+        for row in grid2.iter_mut() {
+            for cell in row.iter_mut().take(4) {
+                *cell = 2;
+            }
+        }
+
+        let mut levels: IndexMap<String, vimp_engine_core::map::MapLevelConfig> = IndexMap::new();
+
+        for (key, map) in [("1", grid1), ("2", grid2)] {
+            levels.insert(
+                key.to_string(),
+                vimp_engine_core::map::MapLevelConfig {
+                    map,
+                    floor: vec![2],
+                    walls: Vec::new(),
+                    layers: IndexMap::new(),
+                    volumes: IndexMap::new(),
+                },
+            );
+        }
+
+        Rc::new(MapLevels::build(&grid0, &[], &levels, &[], 32.0))
+    }
+
+    // ящик уровня `level` с центром (144, 16) — колонка 4, за кромкой
+    // плиты уровня 2, но над плитой уровня 1
+    fn over_the_slab(level: u8) -> MapDynamics {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [136.0, 8.0], "angle": 0.0, "width": 16.0, "height": 16.0,
+                  "density": 1.0, "level": level }
+            ]),
+            1.0,
+        ));
+        dynamics.set_levels(tall_levels(), FallModel::default());
+
+        dynamics
+    }
+
+    #[test]
+    fn predicted_body_lands_on_the_intermediate_slab() {
+        let mut dynamics = over_the_slab(2);
+
+        dynamics.capture(&tank_obb(144.0, 24.0), 1000.0);
+        assert_eq!(body(&dynamics, "d0").mode, Mode::Predicted);
+
+        for _ in 0..120 {
+            dynamics.integrate_predicted(1.0 / 120.0);
+        }
+
+        // под кромкой уровня 2 лежит плита уровня 1 — та же геометрия, что
+        // у хоста (`landing_level`), а не земля
+        assert_eq!(body(&dynamics, "d0").level, 1);
+        assert_eq!(body(&dynamics, "d0").z, 1.0);
+        assert!(body(&dynamics, "d0").falling.is_none());
+    }
+
+    #[test]
+    fn reconcile_takes_the_body_level_from_the_frame() {
+        // конфиг карты знает только стартовый уровень ящика: он успел
+        // упасть, и кадр обязан перебить конфиг
+        let mut dynamics = over_the_slab(2);
+
+        dynamics.capture(&tank_obb(144.0, 24.0), 1000.0);
+        dynamics.begin_reconcile(&snapshot_at_level(
+            "c1",
+            &[(0, [136.0, 8.0, 0.0, 0.0, 0.0, 0.0])],
+            1.0,
+            1,
+        ));
+
+        assert_eq!(body(&dynamics, "d0").level, 1);
+        assert_eq!(body(&dynamics, "d0").z, 1.0);
+        assert!(body(&dynamics, "d0").falling.is_none());
+    }
+
+    #[test]
+    fn reconcile_restores_the_body_fall_phase() {
+        let mut dynamics = over_the_slab(2);
+        let fall = FallModel::default();
+
+        dynamics.capture(&tank_obb(144.0, 24.0), 1000.0);
+        // кадр застал падение на половине высоты между уровнями 2 и 1
+        dynamics.begin_reconcile(&snapshot_at_level(
+            "c1",
+            &[(0, [136.0, 8.0, 0.0, 0.0, 0.0, 0.0])],
+            1.5,
+            2,
+        ));
+
+        let expected = fall.elapsed_at(2.0, 1.0, 1.5);
+
+        assert!(
+            matches!(body(&dynamics, "d0").falling, Some((1, elapsed))
+                if (elapsed - expected).abs() < 1e-5),
+            "{:?}",
+            body(&dynamics, "d0").falling
+        );
+        assert_eq!(body(&dynamics, "d0").z, 1.5);
+
+        // фаза не обнулена: остатка падения хватает ровно на половину
+        // высоты, и ящик приземляется на плиту уровня 1
+        let steps = (fall.duration(1.0) / 2.0 / (1.0 / 120.0)).ceil() as usize + 1;
+
+        for _ in 0..steps {
+            dynamics.integrate_predicted(1.0 / 120.0);
+        }
+
+        assert_eq!(body(&dynamics, "d0").level, 1);
+        assert_eq!(body(&dynamics, "d0").z, 1.0);
+    }
+
+    #[test]
+    fn falling_body_is_masked_as_static_only() {
+        let mut dynamics = over_the_slab(2);
+
+        dynamics.capture(&tank_obb(144.0, 24.0), 1000.0);
+        dynamics.integrate_predicted(1.0 / 120.0);
+
+        assert!(body(&dynamics, "d0").falling.is_some());
+        assert_eq!(
+            body(&dynamics, "d0").collision_mask(),
+            vimp_engine_core::map::STATIC_LEVEL_GROUP
+        );
+    }
+
+    #[test]
+    fn render_data_carries_z_and_level() {
+        let mut dynamics = MapDynamics::new(&snapshot_config());
+
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [40.0, 16.0], "angle": 0.0, "width": 16.0, "height": 16.0,
+                  "density": 1.0, "level": 1 }
+            ]),
+            1.0,
+        ));
+        dynamics.capture(&tank_obb(40.0, 24.0), 1000.0);
+
+        let rows = dynamics.render_data();
+
+        assert_eq!(rows.len(), 1);
+        // без z и level движок дописал бы голову схемы нулями
+        assert_eq!(rows[0].fields[3], 1.0);
+        assert_eq!(rows[0].fields[4], 1.0);
     }
 
     #[test]

@@ -28,7 +28,7 @@ export default {
   // без слоёных карт движка (`levels`/`ramps` в MAP_DATA, маски уровней в
   // физике) карта overpass соберётся без второго уровня и без единой
   // ошибки — поэтому возможность объявлена жёстким требованием
-  requires: ['map.layers'],
+  requires: ['map.layers', 'map.levelsN'],
 
   // wasmUrl — из GameManifest.entries.wasm (мастер, Этап 6.2); init() грузит
   // по явному url, а не через import.meta.url-резолюцию глюe-модуля

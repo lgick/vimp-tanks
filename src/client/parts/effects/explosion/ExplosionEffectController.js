@@ -29,6 +29,14 @@ export default class ExplosionEffectController extends Container {
 
     this._assets = assets;
     this._soundManager = dependencies.soundManager;
+    this._levelView = dependencies.levelView || null;
+
+    // вспышка и воронка живут СИБЛИНГАМИ на сцене (у них свои zIndex),
+    // поэтому прозрачность ставится им, а не контроллеру.
+    // `onRender` — аксессор Container, назначается свойством
+    if (this._levelView) {
+      this.onRender = () => this._updateSeeThrough();
+    }
 
     this.x = this.originX;
     this.y = this.originY;
@@ -44,6 +52,25 @@ export default class ExplosionEffectController extends Container {
         y: this.originY,
       },
     });
+  }
+
+  _updateSeeThrough() {
+    const alpha = this._levelView.alphaFor(
+      this._level,
+      this.originX,
+      this.originY,
+    );
+    const tint = this._levelView.tintFor(this._level);
+
+    if (this.explosion) {
+      this.explosion.alpha = alpha;
+      this.explosion.tint = tint;
+    }
+
+    if (this.funnel) {
+      this.funnel.alpha = alpha;
+      this.funnel.tint = tint;
+    }
   }
 
   // вспышка и воронка с дымом поднимаются вместе: воронка живёт много дольше

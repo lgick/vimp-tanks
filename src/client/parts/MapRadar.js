@@ -1,14 +1,16 @@
 import { Container, Graphics } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
+import { levelColor } from '../levelColors.js';
 
 // базовый zIndex схемы карты внутри своего уровня
 const MAP_RADAR_BASE_Z = 2;
 
-// цвет стен по уровням: эстакада читается отдельно от земли
-const LEVEL_COLORS = [0xffffff, 0x8fb7ff];
+// прозрачность уровней, отличных от уровня игрока: на схеме важнее всего,
+// где он сам, а соседние этажи остаются подсказкой, а не мешаниной
+const OTHER_LEVEL_ALPHA = 0.35;
 
 export default class MapRadar extends Container {
-  constructor(data) {
+  constructor(data, _assets, dependencies = {}) {
     super();
 
     // сохраняем необходимые данные для схематичной карты
@@ -28,6 +30,18 @@ export default class MapRadar extends Container {
 
     this.radarGraphics = new Graphics();
     this.addChild(this.radarGraphics);
+
+    // уровень игрока: чужие этажи на схеме гаснут (задача 3 мастер-плана).
+    // `onRender` — аксессор Container, назначается свойством; слою, который
+    // ничего не рисует, колбэк не нужен
+    this._levelView = dependencies.levelView || null;
+
+    if (this._levelView && this._draws) {
+      this.onRender = () => {
+        this.alpha =
+          this._levelView.level === this._level ? 1 : OTHER_LEVEL_ALPHA;
+      };
+    }
 
     // создаем схематичную карту
     this.createRadarMap();
@@ -64,7 +78,7 @@ export default class MapRadar extends Container {
       }
     }
 
-    graphics.fill(LEVEL_COLORS[this._level] ?? LEVEL_COLORS[0]);
+    graphics.fill(levelColor(this._level));
   }
 
   update() {}

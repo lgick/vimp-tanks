@@ -456,38 +456,54 @@ compensate for it — hence the low value in
 
 On a layered map (the engine's `levels`/`ramps` fields, see
 [the engine docs][engine-map]) every tank carries a `LevelState`: the
-discrete `level` (`0` — ground, `1` — the overpass), the visual height
-`z` (`0.0..1.0`) and the `Transit` it is in.
+discrete `level` (`0` — ground, `1..7` — overhead floors), the visual
+height `z` (`0.0..N`), the previous step's cell `prev_cell`, the slope
+vector `slope_vec` and the `Transit` it is in.
 
 | `Transit` | When | Collision mask | Input |
 | --- | --- | --- | --- |
 | `Grounded` | standing on its own level | that level only | normal |
-| `Ramp { entered_at, from_level }` | the hull's centre is on a ramp tile | **both** levels | normal |
-| `Falling` | drove off a ledge | map walls only — no bodies | locked |
+| `Ramp { climbing, low, high }` | the hull's centre is on a ramp tile | **every** level of the run (`low..=high`) | normal |
+| `Falling { elapsed, from, to }` | drove off a ledge | map walls only — no bodies | locked |
 
 `step_level()` is the single source of these rules for both sides: the
 authoritative path (`TanksSim::update_levels`) and the client replica call
 exactly it, so a level predicted on the client cannot silently drift from
 the authoritative one.
 
-- **Ramps.** `z` follows the ramp's progress; `level` snaps at `z >= 0.5`.
-  The snap costs nothing physically — on a ramp the mask already contains
-  both levels — it only makes the state defined once the tank leaves the
-  ramp at either end. A run changes the level only for a tank that entered
-  it through the end matching its level, which is what `Ramp` remembers:
-  `entered_at` (the run's progress at the moment of entry) and `from_level`
-  (the level then). A tank that drove into a ramp cell from the side keeps
-  its level and treats the run as flat ground of that level — otherwise a
-  cell next to the top, reachable straight off the ground, would be a free
-  ride up past the ramp itself.
-- **Ledges.** A tank on level 1 over a tile with no slab enters `Falling`.
-  The fall lasts `coreParams.levels.fallTime`, during which input is
+- **Ramps.** `z` follows the ramp's progress; `level` is the nearest whole
+  one (`z.round()` clamped to the run's ends), so a 0 → 2 ramp only hands
+  out level 2 near its top instead of a third of the way up. The snap costs
+  nothing physically — on a ramp the mask already contains every level of
+  the run — it only makes the state defined once the tank leaves the ramp
+  at either end. The entry gate is decided ONCE, on entering the run, and
+  is kept in `Ramp { climbing }`: the entry is legal when the previous
+  step's cell (`prev_cell`, written every step) lies outside this run, is
+  its neighbour along the run's axis, and the end matches the tank's level
+  — up from the foot, down from the top. A tank that came in from the side,
+  diagonally, or ran into the top end from below (the passage under the
+  bridge) keeps its level and treats the run as flat ground. A spawn
+  directly on a run has nothing to judge by: there the old half-of-the-run
+  rule applies.
+- **Grade.** On a ramp `slope_vec` is the uphill vector in levels per world
+  unit; `LevelState::grade(heading)` gives the longitudinal grade under the
+  hull's heading, and `motion::drive_accel` subtracts `grade *
+  climbGravity` from the thrust and trims the speed ceiling by
+  `climbMaxSpeedFactor * grade`. Off a ramp the grade is exactly 0 and the
+  formula is bit-for-bit the old one.
+- **Ledges.** A tank on level `L >= 1` over a tile with no floor of its own
+  level enters `Falling`. The landing level is chosen at the moment of the
+  drop — `MapLevels::landing_level` (the nearest floor below with a surface
+  in that cell) — so a tank falling off level 2 over a level 1 slab lands on
+  that slab. The fall lasts `coreParams.levels.fallTime` per level of
+  height, during which input is
   ignored (held keys are picked up on landing) and the body carries the
   `STATIC_LEVEL_GROUP` mask alone while coasting on inertia: the walls of
   every level still stop it (at `maxForwardSpeed` a fall covers some seven
   tiles, and without them the tank would land inside a building), while
-  tanks, crates, rays and blasts do not reach it. On landing the tank is on level 0 and
-  takes `coreParams.levels.fallDamage`; a lethal landing emits
+  tanks, crates, rays and blasts do not reach it. On landing the tank is on
+  level `to` and takes `fallDamage` per level of height, capped by
+  `maxFallDamage`; a lethal landing emits
   `Death { victim, killer: victim }` — a suicide, so the engine's round
   meta awards no frag.
 - **Flat maps** are untouched: `step_level` resets the state to level 0 and
@@ -540,6 +556,14 @@ of the frame's height (`level::fall_elapsed()` inverts the fall lerp of
 length of the replay rather than the host's fall time — jerking on an RTT
 spike, and finishing the fall early on a long replay.
 
+A height below the level is not enough to call it a fall, though. On a run
+the level snaps to `z.round()`, so a frame taken on the upper half of any
+ramp carries exactly that pair — and a fall locks the input, so reading it
+as one would drop the throttle on half of every climb while the host held
+it. The frame is read as a fall only **off a run** and only where the
+geometry has no floor of that level under the tank: the same two questions
+the host asks in `step_level` before it starts one.
+
 The **first** frame is the exception: the engine sets the client's own
 `gameId` only after `begin_reconcile` (`client/game.rs`), so there is
 nothing yet to look the local tank's row up by. That one time, on the row's
@@ -548,10 +572,19 @@ a slab (`overpass` has such respawns) would be predicted on the ground for a
 whole frame. On that frame the sample lags by nothing: there is nothing to
 interpolate between yet.
 
+Map bodies are reconciled the same way. `MapDynamics::begin_reconcile()`
+reads `level`/`z` off the same raw frame and, when the height is below the
+level, rebuilds the fall phase with the host's own geometry
+(`MapLevels::landing_level()` plus `FallModel::elapsed_at()`) before the
+replay starts. The map config only seeds the level: a crate that fell while
+the frame was in flight is replayed on the level it actually reached, not on
+the one `physicsDynamic` declared.
+
 Levels gate the predicted contact pass too. Every body of the step carries
-its own mask — `LevelState::collision_mask()` for the tank (on a ramp,
-both levels), `level_group(PredictedBody::level)` for a subsystem body
-(`MapDynamics` reads it from `physicsDynamic`, `RemoteTanks` from the row).
+its own mask — `LevelState::collision_mask()` for the tank (on a ramp, every
+level of the run), `PredictedBody::collision_mask()` for a subsystem body
+(the engine's `map::body_collision_mask()`: its own level on a floor,
+`STATIC_LEVEL_GROUP` alone while falling).
 Wall tiles are collected per level from that mask, and a pair of bodies
 whose masks do not intersect never becomes a contact — a tank on the bridge
 does not push a box below it. A falling tank keeps only `STATIC_LEVEL_GROUP`, so it
@@ -577,13 +610,20 @@ Like `step_level`, this function must be the single one for both sides: the
 authoritative `TanksSim::process_hitscan` and the client shot predictor call
 exactly it.
 
-- A ray from level 1 stays up until the first cell without a slab, drops to
-  the ground there and lives on level 0 from then on — two segments.
-- A ray from level 0 runs along the ground for the full range, and in the
-  first slab cell it enters (unless that cell is a railing) it gets a short
-  level 1 **probe**, one cell diagonal long: a tank on an open ledge is
-  reachable from below. A shooter deep under the bridge gets no probe — it
-  is added only when the cell behind the ray has no slab.
+- A ray keeps its level while the cell under it carries a floor of that
+  level. In the first cell without one it drops to
+  `landing_level(level, cell centre)` — the nearest level below that still
+  has a floor — and carries on there. The drop repeats, so a shot from
+  level 2 over a hole in its slab runs 2 → 1 → 0 in three segments; level 0
+  is terminal (the ground is everywhere inside the map).
+- In the first cell that carries a floor of the **nearest level above** the
+  ray (unless that cell is a railing of that level) the ray gets a short
+  **probe** of that level, spanning exactly that one cell — from where the
+  ray enters it to where it leaves it, not a whole cell diagonal: a tank on
+  an open ledge is reachable from below, a tank on the second slab cell is
+  not. Only the nearest level above is probed, and only before the first
+  drop. A shooter deep under the slab gets no probe — it is added only when
+  the cell behind the ray has no floor of that level.
 - The level segments overlap on purpose: `process_hitscan` casts a ray per
   segment and takes the **nearest** hit, so a ground wall in front of the
   ledge still beats the probe. Each segment is filtered with
@@ -593,8 +633,10 @@ exactly it.
   (`collision_groups().memberships`) rather than from the game tag: that way
   a tank and dynamic map geometry (which carries no tag) read the same.
 - A bomb remembers its owner's level (`Bomb::level`, a sensor collider with
-  `level_interaction`); dropped over a cell without a slab of that level —
-  on a ramp, say — it lands on the ground.
+  `level_interaction`); dropped over a cell without a floor of that level —
+  on a ramp, say — or dropped while falling, it lands on
+  `landing_level()`: on a three-level map that is the slab below, not the
+  ground.
 
 The levels reach the client as `startLevel`/`endLevel` (`w1`) and `level`
 (`w2`, `w2e`).
@@ -622,6 +664,10 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   avoidance rays all run on the bot's own level
   (`has_obstacle_between_on`, `is_walkable_on`,
   `level_interaction(my_level)`); a flat map sets no group filter at all.
+
+Levels moved the dump the same way: `LevelState` gained `prev_cell` and
+`slope_vec`, and the `Transit` variants changed their fields
+(`Ramp { climbing, low, high }`, `Falling { elapsed, from, to }`).
 
 `BotBrain` is `Serialize`/`Deserialize` (the handoff dump), so the path
 type change moved the dump's shape — the dump is internal and unversioned,

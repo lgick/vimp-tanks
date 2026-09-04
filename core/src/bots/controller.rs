@@ -1116,6 +1116,7 @@ mod tests {
         fixture.tanks[&1].level_state.transit = Transit::Falling {
             elapsed: 0.0,
             from: 1,
+            to: 0,
         };
 
         let mut view = fixture.view();

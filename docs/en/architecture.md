@@ -99,8 +99,8 @@ services, the engine merges them into its own pool and hands them out by
 — `toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`, by
 which `ShotEffect` anchors its debris to the box the shot hit (see
 [core.md](core.md)) — and `levelView` (`src/client/levelView.js`), where the
-local player is and on which level: the local `Tank` writes it, the bridge
-slab reads it (see below).
+local player is, on which level and at which height: the local `Tank` writes
+it, and everything that has to yield visibility to him reads it (see below).
 
 The same two names are repeated in `ClientPlugin.serviceNames`. The hook
 needs a live core, so the contract checker cannot read what it returns; the
@@ -124,12 +124,41 @@ from `data.layer`), so a map without upper levels draws exactly as before.
 The stride is larger than any base value, hence every level-1 layer covers
 every level-0 one — the bridge slab hides what drives under it.
 
-Two consequences the parts implement themselves:
+The consequences the parts implement themselves:
 
-- **See-through bridge**: a `Map` layer of level >= 1 fades to
-  `UNDER_BRIDGE_ALPHA` while `levelView` reports the local player below it
-  and over a floor tile of that layer (`Map.onRender`); the fade is
-  time-smoothed so driving under an edge does not blink.
+- **See-through above the player.** One formula for every part —
+  `levelView.alphaFor(level, x, y)` (`src/client/seeThrough.js`), in two
+  modes switched by `parts.seeThrough.mode` (`src/config/render.js`):
+  `'hole'` opens a radial hole around the player, `'layer'` fades the whole
+  slab (the old behaviour, the fallback path). Only what is **above** the
+  player fades. A point entity (a box, another tank, smoke, a bomb, an
+  effect) sets its own `alpha`; a solid `Map` layer needs a field over
+  pixels rather than a single alpha, so it runs the hole as a filter
+  (`createHoleFilter`, both a WebGL and a WebGPU branch — the second one
+  would silently vanish otherwise). Either way the transition is
+  time-smoothed (`fadeRate`), or driving under an edge blinks.
+- **Boxes ride their level.** The dynamic row (`c1`/`c2`) carries `level`,
+  so `Map`'s dynamic branch re-sorts by `levelZ` and recomputes its alpha
+  every frame: a box that falls off the bridge is visibly falling off it.
+- **Darker means lower.** Anything below the player's level is tinted with
+  `seeThrough.lowerTint` — the only level cue that works at the edge of the
+  screen. On the radar the same idea: layers of other levels dim, the level
+  palette is shared (`src/client/levelColors.js`), and another tank's marker
+  gets a ring in its level's colour.
+- **Height reads as a shadow.** `Tank` keeps a shadow sprite as a **sibling
+  on the stage** (its `zIndex` is that of the level the tank hangs over, and
+  the stage is flat), offset away from the camera centre proportionally to
+  `z`. The badge with the level number is drawn for the local tank only, and
+  only on a layered map. The climb itself also compresses the hull along its
+  heading and kicks dust from under the tracks; the grade is recovered
+  client-side from `z` between frames (`src/client/grade.js`) — the `m1`
+  frame is not changed for a visual.
+- **Volumes shift with the camera.** A render layer with a height
+  (`volumes` in the map, `data.volume` in the part) is extruded by
+  `MapVolume`: `slices` copies of the layer's own baked picture, each
+  shifted further away from the camera centre, so walls open up as the
+  player moves. Slices rather than blocks: the effect costs `slices` draw
+  calls no matter how many walls the map has.
 - **Tracks keep their level**: track marks live in a per-level container
   that is a sibling of the `Tracks` part on the stage, so a mark left on the
   overpass stays on the overpass after the tank drives down.

@@ -1,5 +1,6 @@
-import { Container, Sprite } from 'pixi.js';
+import { Container, Graphics, Sprite } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
+import { levelColor } from '../levelColors.js';
 import {
   M1_X,
   M1_Y,
@@ -11,12 +12,17 @@ import {
 // базовый zIndex маркера на радаре внутри своего уровня
 const TANK_RADAR_BASE_Z = 2;
 
+// кольцо уровня вокруг маркера: радиус и толщина в тех же единицах,
+// что текстуры tankRadarTexture (см. bakedAssets в src/config/client.js)
+const LEVEL_RING_RADIUS = 9;
+const LEVEL_RING_WIDTH = 1.5;
+
 export default class TankRadar extends Container {
   constructor(data, assets) {
     super();
 
-    // 2.5D: маркер танка с эстакады лежит над маркерами земли. Отдельного
-    // знака уровня у чужого танка пока нет (отложено, plan/README.md)
+    // 2.5D: маркер танка с эстакады лежит над маркерами земли, а его уровень
+    // читается кольцом в цвете уровня (та же палитра, что у схемы карты)
     this._level = data[M1_LEVEL] || 0;
     this.zIndex = levelZ(TANK_RADAR_BASE_Z, this._level);
 
@@ -25,7 +31,10 @@ export default class TankRadar extends Container {
     this.body = new Sprite();
     this.body.anchor.set(0.5);
 
-    this.addChild(this.body);
+    this.levelRing = new Graphics();
+
+    this.addChild(this.levelRing, this.body);
+    this._drawLevelRing();
 
     // параметры с сервера:
     // [x, y, rotation, gunRotation, vX, vY,
@@ -39,6 +48,17 @@ export default class TankRadar extends Container {
     this.scale.set(5, 5);
 
     this.create();
+  }
+
+  // земля кольца не получает: значок нужен там, где уровень неочевиден
+  _drawLevelRing() {
+    this.levelRing.clear();
+
+    if (this._level > 0) {
+      this.levelRing
+        .circle(0, 0, LEVEL_RING_RADIUS)
+        .stroke({ width: LEVEL_RING_WIDTH, color: levelColor(this._level) });
+    }
   }
 
   create() {
@@ -64,6 +84,7 @@ export default class TankRadar extends Container {
     if (level !== this._level) {
       this._level = level;
       this.zIndex = levelZ(TANK_RADAR_BASE_Z, level);
+      this._drawLevelRing();
     }
 
     const newCondition = data[M1_CONDITION];
@@ -95,6 +116,7 @@ export default class TankRadar extends Container {
     });
 
     this.body = null;
+    this.levelRing = null;
     this._textures = null;
   }
 }

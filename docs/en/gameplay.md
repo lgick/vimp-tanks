@@ -113,14 +113,21 @@ Health is 100. The tank's `condition` visually degrades with damage (smoke), and
 
 ## Bridges and levels (2.5D)
 
-A map may carry a second level — an overpass over the ground. There is no
-jump key: the tank changes level only by driving.
+A map may carry up to eight levels: the ground (0) and overhead floors
+1..7. There is no jump key: the tank changes level only by driving.
 
 - **Up and down a ramp.** A ramp is a directional run of ground tiles.
-  Driving along it lifts the tank smoothly; halfway up it starts belonging
-  to the upper level. While on the ramp the tank collides with the geometry
-  of *both* levels, so it neither falls through the bridge nor clips into
-  the wall at the top.
+  Driving along it lifts the tank smoothly; the level snaps to the nearest
+  whole one (0.5 is the border between floors). A single ramp may span
+  several floors at once (0 → 2): while on it the tank collides with the
+  geometry of *every* level the run connects, so it neither falls through
+  the bridge nor clips into the wall at the top.
+- **Slopes are felt.** Uphill the tank is slower (the speed ceiling drops
+  with the grade) and on a steep climb with no throttle it rolls back
+  down; downhill it picks up speed. The grade follows the hull heading, so
+  climbing at an angle is easier than head-on. The numbers are
+  `climbGravity` and `climbMaxSpeedFactor` in
+  [configuration.md](configuration.md#gamejs).
 - **Ramps are entered from their ends.** A run lifts (or lowers) only the
   tank that drove in through the end matching its own level: from the foot
   going up, from the top going down. A tank that entered a ramp cell from
@@ -133,17 +140,22 @@ jump key: the tank changes level only by driving.
   completely: a tank driving under the overpass will not bump into the one
   above it, and vice versa.
 - **Off the ledge.** A bridge edge without railings is a ledge. Driving off
-  it starts a fall: controls are dead for 0.35 s, the tank coasts on
-  inertia and the landing costs 15 health. While airborne it collides with
+  it starts a fall. Tanks land on the nearest floor below that has a
+  surface: dropping off level 2 over a level 1 slab lands on that slab, not
+  on the ground. Time and damage scale with the height — 0.35 s and 15
+  health per level, capped by `maxFallDamage` (100) per landing; while
+  airborne the controls are dead and the tank coasts on inertia. While airborne it collides with
   the walls of every level and with nothing else — a tank, a crate, a ray
   or a blast does not reach it, but a building does, so a fall alongside
   one ends in front of the wall instead of inside it. A fatal landing
   counts as a suicide — the stats record a loss and nobody gets a frag.
-- **Crates on the bridge do not fall.** Level rules apply to tanks only:
-  a dynamic map object keeps the level the map gave it. Pushed over a ledge
-  it would hang on the slab layer over open ground, so a layered map must
-  not place level 1 crates next to a gap in the railings (see
-  `src/data/maps/overpass.js`).
+- **Crates fall like tanks.** A dynamic map object follows the same level
+  rules: pushed off a slab it falls along the same trajectory and lands on
+  the nearest floor below that has a surface, changing its level (and with
+  it whom it can push). Level 1 crates next to a gap in the railings are
+  fine now — that is the intended way to drop one. Ramps are off limits to
+  map bodies: they are pushed, not driven, so a crate keeps its level on a
+  ramp cell.
 
 ### Shooting across levels
 
@@ -152,14 +164,14 @@ rules:
 
 | Situation | Rule |
 | --- | --- |
-| **Bridge to bridge** | While the ray is over the slab it only hits level 1 targets; railings block it. |
-| **Bridge to ground** | At the first cell without a slab the ray drops to the ground and from there only hits level 0 targets. It never climbs back. |
+| **Slab to slab** | While the ray is over a floor of its level it only hits targets of that level; railings block it. |
+| **Downwards** | At the first cell without a floor of its level the ray drops to the nearest level below that still has one — over a hole in the level 2 slab it lands on level 1, not on the ground — and from there only hits targets of that level. The drop repeats level by level; the ray never climbs back. |
 | **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it. |
-| **Ground to bridge** | In the very first slab cell it enters, the ray can hit a level 1 tank — unless that cell is a railing. The window is exactly that one cell wide and closes where the ray leaves it, so a tank standing on the second slab cell is already out of reach. Past it the slab shields everything and the ray continues along the ground. |
-| **Tank on a ramp** | Visible to rays of both levels. |
+| **Upwards** | In the very first cell that carries a floor of the nearest level above the shooter, the ray can hit a tank standing there — unless that cell is a railing of that level. Only the nearest level above is reachable: from the ground a tank on level 2 is never hit through the level 1 slab. The window is exactly that one cell wide and closes where the ray leaves it, so a tank standing on the second slab cell is already out of reach. Past it the slab shields everything and the ray continues at its own level. |
+| **Tank on a ramp** | Visible to rays of every level the run connects. |
 | **Falling tank** | Invulnerable: while airborne (0.35 s) neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. |
 | **Explosion** | Only hits targets on its own level — the slab shields it both upwards and downwards. |
-| **Bomb** | Lands on its owner's level; if there is no slab of that level under the drop point (on a ramp, for instance), the bomb ends up on the ground. |
+| **Bomb** | Lands on its owner's level; if there is no floor of that level under the drop point (on a ramp, for instance), the bomb comes to rest on the nearest floor below it — on a three-level map that is the level 1 slab, not the ground. |
 
 On a miss the tracer is drawn at the level in force at the **end** of the
 ray, not at the last level it visited: a ground shot that grazes the bridge

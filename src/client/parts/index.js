@@ -1,4 +1,5 @@
 import Map from './Map.js';
+import MapVolume from './MapVolume.js';
 import MapRadar from './MapRadar.js';
 import TankRadar from './TankRadar.js';
 import Tank from './Tank.js';
@@ -10,6 +11,7 @@ import ShotEffect from './effects/shot/ShotEffectController.js';
 
 export default {
   Map,
+  MapVolume,
   MapRadar,
   TankRadar,
   Tank,

@@ -28,7 +28,7 @@ Imports maps, models, and weapons from `src/data/`.
 | `currentMap` | `'pool mini'` | The default map |
 | `mapsInVote` | `4` | How many maps show up in a vote |
 | `mapSetId` | `'c1'` | The default snapshot key for the map constructor |
-| `coreParams.levels` | `fallTime: 0.35, fallDamage: 15` | 2.5D level rules handed to the game's Rust core as-is (the engine neither reads nor validates `coreParams`): how long a fall from the overpass lasts, in seconds, and the damage a landing costs (`0` — falling is free). A flat map never touches them |
+| `coreParams.levels` | `fallTime: 0.35, fallDamage: 15, maxFallDamage: 100, climbGravity: 220, climbMaxSpeedFactor: 0.55` | 2.5D level rules handed to the game's Rust core as-is (the engine neither reads nor validates `coreParams`): the fall time and the landing damage are both per ONE level of height (`0` — falling is free), `maxFallDamage` caps a single landing, `climbGravity` is the roll-back acceleration per unit of longitudinal grade, and `climbMaxSpeedFactor` is how much a grade of 1.0 trims the speed ceiling (`[0, 1)`). A flat map never touches them |
 | `roomDefaults.maxPlayers` | `8` | The bounds for the lobby's room settings: caps the limit picked by the creator (also published in `GameManifest.roomDefaults`) |
 | `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v3): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`text`/`checkbox`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog. `scripts/build-game-manifest.js` adds `regExp` **and** `min`/`max` to `maxPlayers`/`roundTime`/`mapTime` from these same bounds — the engine renders `min`/`max` as a "(min–max)" hint next to the field's label and checks them client-side; the authoritative clamp stays in the engine's `applyRoomOverrides.js` |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Scripted-participant (bot) parameters: the `Bot<id>` name prefix and the default tank model |
@@ -108,8 +108,8 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
 
   ```js
   gameSets: {
-    c1: ['Map', 'MapRadar'],
-    c2: ['Map'],
+    c1: ['Map', 'MapVolume', 'MapRadar'],
+    c2: ['Map', 'MapVolume'],
     m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks'],
     w1: ['ShotEffect'],
     w2: ['Bomb'],
@@ -126,13 +126,21 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
 
 - **`bakedAssets`** — procedural textures "baked" once at startup
   (`BakingProvider`, engine-owned mechanism): explosions, particles, smoke,
-  the tank, the bomb, track marks, radar blips. Each entry: `name`
+  the tank, the tank shadow, the level badge, the bomb, track marks, radar
+  blips. Each entry: `name`
   (texture id), `component` (who owns it), `params` (generation
   parameters). `explosionTexture`, `smokeTexture` and
   `impactParticleTexture` are baked by a single `blurredCircleTexture`
   baker and differ only by `params` (`radius`, `blur`, `quality`,
   `color`); it returns `{ texture, contentSize }`, where `contentSize` is
   the diameter of the drawn circle without the blur allowance.
+  `tankShadowTexture` is that same baker once more — a dark, wide circle
+  under the tank, the cheapest and most readable sign of height (2.5D).
+
+  `levelBadgeTexture` bakes not one texture but an **array indexed by
+  level** (a coloured disc with the level number, the same palette as the
+  radar, `src/client/levelColors.js`): the level changes at runtime, and a
+  `Text` rebuilt every frame would rasterise the font again and again.
 
   `funnelTexture` bakes not one texture but a set of crater silhouettes
   (`variants`), from which `FunnelEffect` picks a random one so the mark
@@ -143,9 +151,10 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   blob across the whole canvas and the rim stops reading.
 
 - **`componentDependencies`** — which services get injected into which
-  components (`renderer` → Map; `assetsBase` → Map; `soundManager` →
-  ExplosionEffect, ShotEffect, Bomb, Tank; `mapDynamics` → ShotEffect;
-  `levelView` → Tank, Map; `localPlayer` → Tank).
+  components (`renderer` → Map, MapVolume, Tank; `assetsBase` → Map,
+  MapVolume; `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank;
+  `mapDynamics` → ShotEffect; `levelView` → Tank, Map, MapVolume, MapRadar,
+  Smoke, Bomb, ShotEffect, ExplosionEffect; `localPlayer` → Tank).
   `mapDynamics` is the map-dynamics geometry from the client core
   (`toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`),
   handed to the pool by the plugin itself (`hooks.services`, see
@@ -153,14 +162,41 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   body and asks where that body is drawn at the moment the impact spawns. The
   service exists only with client-side prediction on — an undeclared service
   silently arrives as `undefined`. `levelView` is the game's own service too
-(`src/client/levelView.js`): where the local player is and on which level —
-the local `Tank` writes it (`localPlayer`, an engine service, is what tells
-it that it is the local one), and `Map` layers of level >= 1 read it to fade
-out over the player (see [architecture.md](architecture.md)).
+(`src/client/levelView.js`): where the local player is, on which level and
+at which height — the local `Tank` writes it (`localPlayer`, an engine
+service, is what tells it that it is the local one), and everything that has
+to yield visibility to him reads it through the one shared formula
+`levelView.alphaFor(level, x, y)` — map layers and the boxes on them, other
+tanks, smoke, bombs and effects (see [architecture.md](architecture.md)).
 `assetsBase` is the engine's
   asset base for this package: `Map` turns it into
   `${assetsBase}img/<file>` for the tile sheets and dynamic-body sprites
   it loads (see [extending.md](extending.md#new-map-image)).
+
+### `parts.seeThrough`, `parts.volume` — the 2.5D render
+
+Both objects come from `src/config/render.js` and lie here as part of the
+game's client config. The module is the single source: the engine hands a
+part only services, never the config (`new Part(data, assets, dependencies,
+context)`), so `src/client/levelView.js` and `src/client/parts/MapVolume.js`
+import that module directly. Editing it changes both sides at once.
+
+| `seeThrough` | Meaning |
+| --- | --- |
+| `mode` | `'hole'` — a radial hole around the player (default, GTA 2 style); `'layer'` — the whole layer above fades, the fallback path |
+| `radius` | World units: the radius of the hole (`'hole'`) |
+| `softness` | The share of the radius spent on the fade-out of the hole's edge |
+| `minAlpha` | Opacity at the centre of the hole |
+| `layerAlpha` | `'layer'` mode: opacity of the whole slab |
+| `fadeRate` | Per second: how fast the transition is smoothed — an instant jump reads as blinking every time you drive under an edge |
+| `lowerTint` | Tint for levels **below** the player: "darker means lower" |
+
+| `volume` | Meaning |
+| --- | --- |
+| `enabled` | `false` switches `MapVolume` off entirely — the fallback path on a weak machine |
+| `slices` | Extrusion slices per layer: the whole effect costs `slices` draw calls regardless of how many walls there are |
+| `shear` | How far the top slice shifts per unit of height, as a share of the distance to the camera |
+| `sideTint` | Tint of the lower slices — the side faces of the block |
 
 ### `modules.controls.keySetList`
 
@@ -250,9 +286,13 @@ it ended at (they differ where the ray drops off a ledge) — while the bomb
 derive all four from its own copy of the layers, but then the picture would
 depend on one more repeated algorithm; four bytes are cheaper.
 
-`c1`/`c2` declare `optionalFrom: 3`: a dynamic map element ships `[vx, vy, angvel]`
-only while it moves, so a resting crate costs 12 bytes less per frame
-(decoding still yields the full six-field row, the missing tail as zeros). Full
+The dynamic map row (`c1`/`c2`) is `[x, y, angle, z, level, vx, vy,
+angvel]`: the height and the level sit in the HEAD rather than the tail,
+because a resting body ships no tail at all and the level would read as
+zero — a crate on the bridge would "fall" to the ground for the viewer.
+`optionalFrom: 5`: a dynamic map element ships `[vx, vy, angvel]` only
+while it moves, so a resting crate costs 12 bytes less per frame (decoding
+still yields the full eight-field row, the missing tail as zeros). Full
 mechanism — the engine's
 [network.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/network.md#binary-snapshot-frame-port-5).
 
@@ -293,8 +333,8 @@ Two architecturally different weapon types:
 
 ### maps/
 
-Four maps: `pool mini` (small), `canopy`, `garden` and `overpass` (the 2.5D
-demo). Each describes tile layers (`layers`, `tiles`), respawn points
+Five maps: `pool mini` (small), `canopy`, `garden`, `overpass` (the two-level
+2.5D demo) and `terraces` (the three-level one). Each describes tile layers (`layers`, `tiles`), respawn points
 (`respawns`), static (`physicsStatic`) and dynamic (`physicsDynamic`)
 physics. Registration — `src/data/maps/index.js`. How to add a map — see
 [extending.md](extending.md#new-map).
@@ -303,18 +343,23 @@ physics. Registration — `src/data/maps/index.js`. How to add a map — see
 
 The format is additive: `map` / `physicsStatic` / `layers` stay level 0, so
 a map without the fields below loads exactly as before. `overpass.js` is the
-reference: ground plus a through overpass with railings, two ramps and two
-gaps in the railings.
+two-level reference: ground plus a through overpass with railings, two ramps
+and two gaps in the railings. `terraces.js` is the three-level one: a terrace
+(level 1) with an upper platform (level 2) over it, a 0 → 2 ramp climbed in
+one run, a stepped 0 → 1 → 2 path, a ramp whose top end opens into the level 0
+passage under the slab, crates at the gaps in the railings of both levels and
+`volumes` on the buildings and the railings.
 
 | Field | Meaning |
 | --- | --- |
-| `levels` | Upper levels, key — the level number as a string (`1`). `MAX_LEVELS = 2`, so only `"1"` today; levels must run from 1 without gaps |
+| `levels` | Upper levels, key — the level number as a string (`1`). `MAX_LEVELS = 8`, so `"1"`..`"7"`; levels must run from 1 without gaps |
 | `levels[n].map` | The level's own grid, **the same dimensions** as `map`. `0` is emptiness — no level here, the one below shows through |
 | `levels[n].floor` | Tiles you can drive on at this level (the slab). A railing tile belongs here too |
 | `levels[n].walls` | Wall tiles of the level (railings): they block movement and the ray at this level and screen the slab edge from a shot from below. Every `walls` tile must also be in `floor` — the core rejects the map otherwise |
 | `levels[n].layers` | Render layers of that grid (`zIndex` → tiles), the same base values as level 0; the renderer shifts them by `LEVEL_Z_STRIDE = 100` itself |
 | `ramps[]` | Transitions: `{ tile, dir, from, to }` — the tile index in the `from` level's grid, and `dir` (`north`/`south`/`west`/`east`) is the direction you drive **to climb** |
 | `physicsDynamic[].level` | The level a box stands on (`0` by default). Bodies of different levels never touch |
+| `volumes` / `levels[n].volumes` | Optional, **visual only**: `zIndex of the render layer` → its height in levels. A layer with a height is extruded by `MapVolume` and shifts as the camera moves; the engine validates the value and passes it to the part in `data.volume` |
 | `respawns[team][i][3]` | Optional 4th element of a respawn point — the level. Without it the level is derived from the geometry (`GameMap::level_at`), i.e. a ground point that happens to sit under the slab would spawn the tank **on** the bridge |
 
 A ramp is a directed run of level-0 tiles: the core groups equal tiles into

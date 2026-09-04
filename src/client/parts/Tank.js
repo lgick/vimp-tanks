@@ -1,6 +1,8 @@
 import { Container, Sprite } from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
+import { cameraCenter } from '../camera.js';
+import { createGradeTracker } from '../grade.js';
 import {
   M1_X,
   M1_Y,
@@ -18,8 +20,27 @@ import {
 const TANK_BASE_Z = 3;
 
 // подъём спрайта при высоте z: масштаб корпуса даёт читаемую разницу
-// «внизу / наверху» без 3D. Отдельная тень спрайтом отложена
+// «внизу / наверху» без 3D
 const Z_SCALE_GAIN = 0.06;
+
+// тень — главный и самый дешёвый признак высоты: она же показывает, что
+// танк едет по рампе, а не по земле. Сдвиг тени — доля расстояния до центра
+// камеры на единицу z (параллакс: чем дальше от центра экрана, тем сильнее)
+const SHADOW_SHEAR = 0.07;
+
+// тень растёт и бледнеет с высотой
+const SHADOW_SCALE_GAIN = 0.1;
+const SHADOW_BASE_ALPHA = 0.4;
+const SHADOW_ALPHA_FALLOFF = 0.12;
+
+// тень чуть шире корпуса
+const SHADOW_SIZE_FACTOR = 1.3;
+
+// ракурс корпуса на подъёме: танк, едущий в горку, короче вдоль курса
+const GRADE_SQUASH_GAIN = 0.35;
+
+// бейдж уровня под корпусом своего танка
+const BADGE_OFFSET = 1.6;
 
 // скорость (высота тона) на холостом ходу
 const MIN_ENGINE_RATE = 1;
@@ -84,6 +105,18 @@ export default class Tank extends Container {
     this.addChild(this.body, this.gun, this.wreck);
 
     this._textures = assets.tankTexture;
+    this._shadowAsset = assets.tankShadowTexture || null;
+    this._badgeTextures = assets.levelBadgeTexture || null;
+    this._renderer = dependencies.renderer || null;
+
+    // тень живёт СИБЛИНГОМ на сцене, а не ребёнком танка: у неё свой
+    // zIndex — слоя, НАД которым танк висит, — а сцена плоская, порядок
+    // задаёт только zIndex (тот же приём, что в Tracks._markLayer).
+    // Движок про неё не знает, значит убирает её destroy() этого парта
+    this._shadow = null;
+
+    // уклон под танком: схема `m1` его не везёт, клиент считает сам
+    this._grade = createGradeTracker();
 
     // параметры с сервера:
     // [x, y, rotation, gunRotation, vX, vY,
@@ -113,6 +146,24 @@ export default class Tank extends Container {
     this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
     this._levelView = dependencies.levelView || null;
 
+    // бейдж уровня: только у своего танка и только на слоёной карте —
+    // иначе на `pool mini` появился бы значок с вечным «0»
+    this._badge = null;
+
+    if (this._badgeTextures) {
+      this._badge = new Sprite();
+      this._badge.anchor.set(0.5);
+      this._badge.visible = false;
+      this.addChild(this._badge);
+    }
+
+    // видимость уровня и признаки высоты считаются каждый кадр, а не по
+    // приходу строки: и камера, и локальный игрок двигаются между кадрами.
+    //
+    // `onRender` у Container — аксессор: назначаем СВОЙСТВОМ, метод с этим
+    // именем на прототипе затенил бы сеттер и колбэк не позвался бы ни разу
+    this.onRender = () => this._updateView();
+
     // правильный якорь для пушки в зависимости от команды
     const liveTextures =
       this._teamId === 1
@@ -134,6 +185,10 @@ export default class Tank extends Container {
     this.body.scale.set(this._scaleFactor);
     this.gun.scale.set(this._scaleFactor);
     this.wreck.scale.set(this._scaleFactor);
+
+    if (this._badge) {
+      this._badge.y = this._size * BADGE_OFFSET;
+    }
 
     this._soundManager = dependencies.soundManager;
     this._soundId = null;
@@ -226,11 +281,16 @@ export default class Tank extends Container {
     // высота читается масштабом корпуса: танк на эстакаде крупнее наземного
     const zScale = 1 + this._z * Z_SCALE_GAIN;
 
-    this.body.scale.set(this._scaleFactor * zScale);
-    this.gun.scale.set(this._scaleFactor * zScale);
+    // ракурс: корпус, едущий в горку, короче вдоль курса. Уклон восстановлен
+    // из z между кадрами и сглажен — сырая разностная производная дрожит
+    const grade = this._grade.update(this.x, this.y, this._z);
+    const squash = 1 - clamp(Math.abs(grade), 0, 1) * GRADE_SQUASH_GAIN;
+
+    this.body.scale.set(this._scaleFactor * zScale * squash, this._scaleFactor * zScale);
+    this.gun.scale.set(this._scaleFactor * zScale * squash, this._scaleFactor * zScale);
 
     if (this._levelView && this._isLocal()) {
-      this._levelView.set(level, this.x, this.y);
+      this._levelView.set(level, this.x, this.y, this._z);
     }
 
     // обновление звуковой логики; страховка: живой танк без регистрации
@@ -264,6 +324,82 @@ export default class Tank extends Container {
     }
   }
 
+  // признаки уровня и высоты: прозрачность над игроком, затемнение под ним,
+  // тень и бейдж своего уровня. Зовётся из `onRender` каждый кадр
+  _updateView() {
+    if (this._levelView) {
+      this.alpha = this._levelView.alphaFor(this._level, this.x, this.y);
+      this.tint = this._levelView.tintFor(this._level);
+    }
+
+    this._updateShadow();
+    this._updateBadge();
+  }
+
+  _updateShadow() {
+    if (!this._shadowAsset || !this.parent) {
+      return;
+    }
+
+    if (!this._shadow) {
+      const { texture, contentSize } = this._shadowAsset;
+
+      this._shadow = new Sprite(texture);
+      this._shadow.anchor.set(0.5);
+      this._shadowScale = (this._size * SHADOW_SIZE_FACTOR) / contentSize;
+      this.parent.addChild(this._shadow);
+    }
+
+    const shadow = this._shadow;
+    const visible = this._condition !== 0;
+
+    shadow.visible = visible;
+
+    if (!visible) {
+      return;
+    }
+
+    // параллакс: тень уезжает от корпуса тем сильнее, чем выше танк и чем
+    // дальше он от центра камеры — ровно так читается высота в GTA 2
+    const camera = cameraCenter(this.parent, this._renderer);
+    const shear = SHADOW_SHEAR * this._z;
+
+    shadow.x = camera ? this.x + (this.x - camera.x) * shear : this.x;
+    shadow.y = camera ? this.y + (this.y - camera.y) * shear : this.y;
+    shadow.rotation = this.rotation;
+    shadow.scale.set(this._shadowScale * (1 + this._z * SHADOW_SCALE_GAIN));
+    shadow.alpha =
+      Math.max(0, SHADOW_BASE_ALPHA - this._z * SHADOW_ALPHA_FALLOFF) *
+      this.alpha;
+
+    // тень лежит на слое, НАД которым висит танк: на рампе это ещё нижний
+    // уровень, и именно поэтому по ней видно, что танк уже поднялся
+    shadow.zIndex = levelZ(TANK_BASE_Z - 1, Math.floor(this._z));
+  }
+
+  _updateBadge() {
+    if (!this._badge) {
+      return;
+    }
+
+    const show = !!this._levelView?.layered && this._isLocal();
+
+    this._badge.visible = show;
+
+    if (!show) {
+      return;
+    }
+
+    const texture = this._badgeTextures[this._level];
+
+    if (texture && this._badge.texture !== texture) {
+      this._badge.texture = texture;
+    }
+
+    // бейдж — знак игрока, а не части корпуса: поворот танка он не разделяет
+    this._badge.rotation = -this.rotation;
+  }
+
   // останавливает и сбрасывает все звуки, связанные с танком
   destroySounds() {
     if (this._soundId) {
@@ -274,6 +410,12 @@ export default class Tank extends Container {
 
   destroy(options) {
     this.destroySounds();
+
+    // тень движок не создавал и не уберёт: она сиблинг на сцене
+    if (this._shadow) {
+      this._shadow.destroy({ texture: false, textureSource: false });
+      this._shadow = null;
+    }
 
     super.destroy({
       children: true,

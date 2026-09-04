@@ -27,6 +27,16 @@ fn ground_only(range: f32) -> Vec<RaySegment> {
 /// Сегменты луча от `origin` в направлении `dir` (единичном) длиной
 /// `range`, выпущенного с уровня `level`.
 ///
+/// Правила (дословно те же, что были на двух уровнях, но на любом N):
+///
+/// * **вниз** — луч держит свой уровень, пока в клетке есть плита; в
+///   первой клетке без неё падает на `landing_level` и продолжает уже
+///   там. Падений может быть несколько подряд, уровень 0 — терминальный
+///   (земля есть везде внутри карты);
+/// * **вверх** — в первой клетке, где есть плита ближайшего уровня выше,
+///   луч получает окно ровно на эту клетку (кромка); перила того уровня
+///   окно закрывают. Дальше плита экранирует, луч идёт своим уровнем.
+///
 /// Одноуровневая карта даёт ровно один сегмент `[0, range]` уровня 0 —
 /// путь стрельбы на таких картах обязан остаться прежним бит-в-бит.
 pub fn ray_segments(
@@ -40,7 +50,8 @@ pub fn ray_segments(
         return ground_only(range);
     }
 
-    let Some(grid) = levels.grid(1) else {
+    // сетка земли задаёт размеры: гриды всех уровней у карты одинаковы
+    let Some(grid) = levels.grid(0) else {
         return ground_only(range);
     };
 
@@ -52,121 +63,114 @@ pub fn ray_segments(
         return ground_only(range);
     }
 
-    let floor = levels.floor(1);
-    let solid = levels.solid(1);
+    let level_count = levels.level_count() as u8;
 
-    // плита/перила в клетке сетки уровня 1 (вне сетки — ни того, ни другого)
-    let tile_at = |cx: i64, cy: i64| -> Option<i32> {
+    // тайл уровня в клетке сетки (вне сетки — ничего)
+    let tile_at = |lvl: u8, cx: i64, cy: i64| -> Option<i32> {
         if cx < 0 || cy < 0 || cy as usize >= rows {
             return None;
         }
 
-        grid[cy as usize].get(cx as usize).copied()
+        levels
+            .grid(lvl)?
+            .get(cy as usize)
+            .and_then(|row| row.get(cx as usize))
+            .copied()
     };
-    let is_slab = |cx: i64, cy: i64| tile_at(cx, cy).is_some_and(|t| floor.contains(&t));
-    let is_railing = |cx: i64, cy: i64| tile_at(cx, cy).is_some_and(|t| solid.contains(&t));
-
-    if level >= 1 {
-        // первая клетка БЕЗ плиты (или выход за границы карты) — там луч
-        // «падает» на землю и обратно уже не поднимается
-        let mut t_drop = range;
-
-        walk_ray_cells(origin, dir, range, rows, cols, tile, |cx, cy, t| {
-            if is_slab(cx, cy) {
-                return true;
-            }
-
-            t_drop = t;
-
-            false
-        });
-
-        if t_drop >= range {
-            return vec![RaySegment {
-                t0: 0.0,
-                t1: range,
-                level: 1,
-            }];
+    let is_slab = |lvl: u8, cx: i64, cy: i64| {
+        tile_at(lvl, cx, cy).is_some_and(|t| levels.floor(lvl).contains(&t))
+    };
+    let is_railing = |lvl: u8, cx: i64, cy: i64| {
+        tile_at(lvl, cx, cy).is_some_and(|t| levels.solid(lvl).contains(&t))
+    };
+    // знак нуля обязателен: для осевого луча иначе проверялся бы
+    // диагональный сосед вместо клетки строго позади
+    let step = |d: f32| -> i64 {
+        if d > 0.0 {
+            1
+        } else if d < 0.0 {
+            -1
+        } else {
+            0
         }
+    };
 
-        return vec![
-            RaySegment {
-                t0: 0.0,
-                t1: t_drop,
-                level: 1,
-            },
-            RaySegment {
-                t0: t_drop,
-                t1: range,
-                level: 0,
-            },
-        ];
-    }
-
-    // первая клетка С плитой: в ней (и только в ней) луч уровня 0 может
-    // достать танк уровня 1, стоящий на открытой кромке
-    let mut t_slab = range;
-    // вход в СЛЕДУЮЩУЮ клетку = выход из клетки плиты: точная верхняя
+    let mut out: Vec<RaySegment> = Vec::new();
+    // окно у кромки: выдаётся не более одного раза и только до первого
+    // падения — сорвавшийся вниз луч наверх уже не смотрит
+    let mut probe: Option<RaySegment> = None;
+    let mut probe_done = false;
+    // вход в СЛЕДУЮЩУЮ клетку = выход из клетки окна: точная верхняя
     // граница пробы. Оценка «диагональ клетки» была бы завышенной для
     // любого угла входа, кроме углового, и проба накрывала бы вторую
     // клетку плиты — танк на ней поражался бы с земли
-    let mut t_exit = range;
-    let mut slab_cell: Option<(i64, i64)> = None;
+    let mut probe_open = false;
+    let mut current = level;
+    let mut t0 = 0.0f32;
 
     walk_ray_cells(origin, dir, range, rows, cols, tile, |cx, cy, t| {
-        if slab_cell.is_some() {
-            t_exit = t;
-
-            return false;
-        }
-
-        if !is_slab(cx, cy) {
-            return true;
-        }
-
-        t_slab = t;
-        slab_cell = Some((cx, cy));
-
-        true
-    });
-
-    let mut out = ground_only(range);
-
-    let Some((cx, cy)) = slab_cell else {
-        return out;
-    };
-
-    if t_slab >= range || is_railing(cx, cy) {
-        return out;
-    }
-
-    // стартовая клетка посещается с t = 0: стрелок ПОД мостом бьёт вверх
-    // только стоя под самой кромкой (у соседней клетки против направления
-    // луча плиты нет), иначе он «простреливал» бы плиту из глубины
-    if t_slab <= 0.0 {
-        // знак нуля обязателен: для осевого луча иначе проверялся бы
-        // диагональный сосед вместо клетки строго позади
-        let step = |d: f32| -> i64 {
-            if d > 0.0 {
-                1
-            } else if d < 0.0 {
-                -1
-            } else {
-                0
+        if probe_open {
+            if let Some(seg) = probe.as_mut() {
+                seg.t1 = t;
             }
-        };
 
-        if is_slab(cx - step(dir[0]), cy - step(dir[1])) {
-            return out;
+            probe_open = false;
         }
-    }
 
-    // проба уровня 1 внутри ОДНОЙ клетки кромки
-    out.push(RaySegment {
-        t0: t_slab,
-        t1: t_exit.min(range),
-        level: 1,
+        // падение: в клетке нет плиты своего уровня
+        if current >= 1 && !is_slab(current, cx, cy) {
+            let center = [(cx as f32 + 0.5) * tile, (cy as f32 + 0.5) * tile];
+
+            out.push(RaySegment {
+                t0,
+                t1: t,
+                level: current,
+            });
+
+            current = levels.landing_level(current, center[0], center[1]);
+            t0 = t;
+            probe_done = true;
+        }
+
+        // окно у кромки уровня выше
+        if !probe_done && t < range {
+            let above = (current + 1..level_count).find(|&lvl| is_slab(lvl, cx, cy));
+
+            if let Some(above) = above {
+                probe_done = true;
+
+                // стартовая клетка посещается с t = 0: стрелок ПОД плитой
+                // бьёт вверх только стоя под самой кромкой (у соседней
+                // клетки против направления луча плиты нет), иначе он
+                // «простреливал» бы плиту из глубины
+                let deep = t <= 0.0 && is_slab(above, cx - step(dir[0]), cy - step(dir[1]));
+
+                // перила закрывают кромку от выстрела снизу
+                if !deep && !is_railing(above, cx, cy) {
+                    probe = Some(RaySegment {
+                        t0: t,
+                        t1: range,
+                        level: above,
+                    });
+                    probe_open = true;
+                }
+            }
+        }
+
+        // ниже уровня 0 луч не падает, а окно уже решено — смотреть больше не на что
+        current > 0 || !probe_done || probe_open
     });
+
+    out.push(RaySegment {
+        t0,
+        t1: range,
+        level: current,
+    });
+
+    if let Some(mut seg) = probe {
+        seg.t1 = seg.t1.min(range);
+        out.push(seg);
+    }
 
     out
 }
@@ -230,6 +234,54 @@ mod tests {
                 floor: vec![2, 4],
                 walls: vec![4],
                 layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+
+        MapLevels::build(&grid0, &[], &levels, &[], TILE)
+    }
+
+    /// Карта 8×8 на три уровня: плита уровня 1 — колонки 3..6, плита
+    /// уровня 2 — колонки 3..5. Клетка (3, 4) уровня 1 — перила (тайл 4).
+    fn terraced() -> MapLevels {
+        let grid0 = vec![vec![0; 8]; 8];
+        let mut grid1 = vec![vec![0; 8]; 8];
+        let mut grid2 = vec![vec![0; 8]; 8];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().take(7).skip(3) {
+                *cell = 2;
+            }
+        }
+
+        for row in grid2.iter_mut() {
+            for cell in row.iter_mut().take(6).skip(3) {
+                *cell = 2;
+            }
+        }
+
+        grid1[4][3] = 4;
+
+        let mut levels: IndexMap<String, MapLevelConfig> = IndexMap::new();
+
+        levels.insert(
+            "1".to_string(),
+            MapLevelConfig {
+                map: grid1,
+                floor: vec![2, 4],
+                walls: vec![4],
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+        levels.insert(
+            "2".to_string(),
+            MapLevelConfig {
+                map: grid2,
+                floor: vec![2],
+                walls: vec![],
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
             },
         );
 
@@ -410,5 +462,97 @@ mod tests {
         assert_eq!(segments.len(), 2, "{segments:?}");
         assert_eq!(segments[1].level, 1);
         assert_eq!(segments[1].t0, 0.0);
+    }
+
+    #[test]
+    fn terraced_ray_stays_over_the_upper_slab() {
+        // луч уровня 2 вдоль плиты 2 (на юг по колонке 4) её не покидает
+        let segments = ray_segments(&terraced(), [45.0, 5.0], [0.0, 1.0], 70.0, 2);
+
+        assert_eq!(
+            segments,
+            vec![RaySegment {
+                t0: 0.0,
+                t1: 70.0,
+                level: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn terraced_ray_drops_level_by_level() {
+        // старт в колонке 3 на уровне 2, луч на восток: колонка 6 несёт
+        // только плиту 1, колонка 7 — уже земля
+        let segments = ray_segments(&terraced(), [35.0, 5.0], [1.0, 0.0], RANGE, 2);
+
+        assert_eq!(segments.len(), 3, "{segments:?}");
+        assert_eq!(
+            segments,
+            vec![
+                RaySegment {
+                    t0: 0.0,
+                    t1: 25.0,
+                    level: 2,
+                },
+                RaySegment {
+                    t0: 25.0,
+                    t1: 35.0,
+                    level: 1,
+                },
+                RaySegment {
+                    t0: 35.0,
+                    t1: RANGE,
+                    level: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_gives_the_nearest_level_above() {
+        // стрелок на земле в колонке 0, луч на восток: в первой клетке
+        // плиты (колонка 3) есть и уровень 1, и уровень 2 — окно даёт
+        // ровно ближайший сверху
+        let segments = ray_segments(&terraced(), [5.0, 5.0], [1.0, 0.0], RANGE, 0);
+
+        assert_eq!(segments.len(), 2, "{segments:?}");
+
+        let probe = segments[1];
+
+        assert_eq!(probe.level, 1, "{segments:?}");
+        assert!((probe.t0 - 25.0).abs() < 1e-3, "{segments:?}");
+        assert!((probe.t1 - 35.0).abs() < 1e-3, "{segments:?}");
+
+        let inside = (probe.t0 + probe.t1) / 2.0;
+
+        assert!(covers_level(&segments, inside, 1));
+        assert!(
+            !covers_level(&segments, inside, 2),
+            "второй этаж с земли недосягаем: {segments:?}"
+        );
+    }
+
+    #[test]
+    fn probe_reaches_the_edge_of_the_level_above() {
+        // стрелок уровня 1 в колонке 6, луч на запад: кромка плиты 2 —
+        // колонка 5, окно накрывает ровно её
+        let segments = ray_segments(&terraced(), [65.0, 5.0], [-1.0, 0.0], RANGE, 1);
+        let probe = *segments.last().unwrap();
+
+        assert_eq!(probe.level, 2, "{segments:?}");
+        assert!((probe.t0 - 5.0).abs() < 1e-3, "{segments:?}");
+        assert!((probe.t1 - 15.0).abs() < 1e-3, "{segments:?}");
+        // за плитой 1 (колонка 2) луч уходит на землю
+        assert_eq!(segments[0].level, 1);
+        assert_eq!(segments[1].level, 0);
+        assert!((segments[0].t1 - 35.0).abs() < 1e-3, "{segments:?}");
+    }
+
+    #[test]
+    fn railing_closes_the_probe_on_a_terraced_map() {
+        // строка 4: первая клетка плиты уровня 1 (колонка 3) — перила
+        let segments = ray_segments(&terraced(), [5.0, 45.0], [1.0, 0.0], RANGE, 0);
+
+        assert_eq!(segments, ground_only(RANGE), "{segments:?}");
     }
 }

@@ -4,15 +4,18 @@ import tankTexture from './tankTexture.js';
 import tankRadarTexture from './tankRadarTexture.js';
 import bombTexture from './bombTexture.js';
 import trackMarkTexture from './trackMarkTexture.js';
+import levelBadgeTexture from './levelBadgeTexture.js';
 
 export default {
-  // три ассета - один и тот же размытый круг, различаются только параметрами
+  // четыре ассета - один и тот же размытый круг, различаются параметрами
   explosionTexture: blurredCircleTexture,
   smokeTexture: blurredCircleTexture,
   impactParticleTexture: blurredCircleTexture,
+  tankShadowTexture: blurredCircleTexture,
   funnelTexture,
   tankTexture,
   tankRadarTexture,
   bombTexture,
   trackMarkTexture,
+  levelBadgeTexture,
 };

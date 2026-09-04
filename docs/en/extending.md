@@ -42,6 +42,12 @@ holds the transitions). Each level brings its own `layers`, over its own
   (`src/client/levelZ.js`). So keep base layers below 100 — everything from
   100 up belongs to level 1 and would draw over the bridge. Nothing else
   has to be done to make an upper layer cover the ground.
+- **Height for a layer (`volumes`, optional).** `volumes` maps a render
+  layer's `zIndex` to its height in levels; `MapVolume` extrudes such a
+  layer and shifts it as the camera moves, while the flat `Map` layer stays
+  underneath as the block's base. Visual only: the core knows nothing about
+  the height, and `parts.volume.enabled = false` switches the effect off
+  entirely.
 - **Railings must be part of the slab** — a `walls` tile also belongs in
   `floor`, otherwise the railing hangs in the air and a shot from below
   does not see it.
@@ -69,16 +75,25 @@ holds the transitions). Each level brings its own `layers`, over its own
   point out.
 - **A box on the slab needs `level: 1`** — without it the box stands on the
   ground under the bridge and the tank on the bridge drives right through
-  it. `position` is the top-left corner of the body, not its centre.
+  it. `position` is the top-left corner of the body, not its centre. Such a
+  box may sit next to a gap in the railing: map bodies fall by the same
+  rules as tanks, so a pushed crate rides down and changes its level.
 
-Step by step, the way `overpass.js` was built:
+- **More than two levels.** `levels` is keyed by the level number, up to
+  seven overhead floors (`MAX_LEVELS = 8`). A ramp's `from`/`to` need not be
+  adjacent: one run may climb 0 → 2, and while a tank is on it, its hull
+  collides with every level the run connects. `terraces.js` is the
+  three-level reference — a 0 → 2 run next to a stepped 0 → 1 → 2 path.
 
-1. Build both grids with one constructor function (80 × 60 by hand is not
-   maintainable) — level 0 in `map`, the overpass in `levels[1].map`, the
-   same dimensions.
-2. Lay the ramp tiles into the level-0 grid and declare them in `ramps`
-   with the direction you drive to climb. Open a gap in the railing where
-   the ramp meets the slab.
+Step by step, the way `overpass.js` and `terraces.js` were built:
+
+1. Build every grid with one constructor function (80 × 60 by hand is not
+   maintainable) — level 0 in `map`, each overhead floor in
+   `levels[n].map`, all of the same dimensions.
+2. Lay the ramp tiles into the grid of the level the run starts on and
+   declare them in `ramps` with the direction you drive to climb, plus the
+   `from`/`to` levels. Open a gap in the railing where the ramp meets the
+   slab.
 3. Leave a gap or two in the railing away from the ramps — those are the
    ledges people fall from and shoot through from below.
 4. Give the level its `floor`/`walls`/`layers` and give each `physicsDynamic`
@@ -89,7 +104,7 @@ Step by step, the way `overpass.js` was built:
 npm test -- --silent          # tests/config/game.test.js checks tiles and respawns
 npm run build                 # export + manifest (a missing image stops it)
 npx vimp-contract             # rules E4/E5 — layered fields, walls on the radar
-npm run sim:scenarios         # bridge/fall/crosslevel/bots_bridge on overpass
+npm run sim:scenarios         # overpass and terraces scenarios
 npm run dev                   # by eye: set room.map in src/standalone.js
 ```
 

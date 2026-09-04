@@ -127,3 +127,110 @@ describe('карта overpass (src/data/maps/overpass.js)', () => {
     }
   });
 });
+
+// Демо-карта на три уровня. Правила движка (E4/E5) знают о ней структуру;
+// здесь — то, чего они не знают: тайл-лист, раскладка респаунов по уровням и
+// разная крутизна прогонов, ради которой карта и заведена.
+describe('карта terraces (src/data/maps/terraces.js)', () => {
+  const terraces = gameConfig.maps.terraces;
+
+  const levelGrid = level =>
+    level === 0 ? terraces.map : terraces.levels[level].map;
+
+  // клетки прогона рампы в гриде её нижнего уровня
+  const rampCells = ramp => {
+    const cells = [];
+
+    levelGrid(ramp.from).forEach((row, y) => {
+      row.forEach((tile, x) => {
+        if (tile === ramp.tile) {
+          cells.push([x, y]);
+        }
+      });
+    });
+
+    return cells;
+  };
+
+  it('зарегистрирована в maps и объявляет три уровня', () => {
+    expect(terraces).toBeDefined();
+    expect(Object.keys(terraces.levels)).toEqual(['1', '2']);
+  });
+
+  it('каждый тайл есть в spriteSheet.frames', () => {
+    const frames = terraces.spriteSheet.frames.length;
+    const used = new Set();
+
+    for (const row of terraces.map) {
+      for (const tile of row) {
+        used.add(tile);
+      }
+    }
+
+    // на уровнях выше нулевого 0 — не тайл, а пустота (уровня здесь нет)
+    for (const level of Object.values(terraces.levels)) {
+      for (const row of level.map) {
+        for (const tile of row) {
+          if (tile !== 0) {
+            used.add(tile);
+          }
+        }
+      }
+    }
+
+    for (const tile of used) {
+      expect(tile).toBeLessThan(frames);
+    }
+  });
+
+  it('есть прогон 0 → 2 и ступенчатый путь 0 → 1 → 2', () => {
+    const pairs = terraces.ramps.map(ramp => `${ramp.from}->${ramp.to}`);
+
+    expect(pairs).toContain('0->2');
+    expect(pairs).toContain('0->1');
+    expect(pairs).toContain('1->2');
+  });
+
+  it('прогоны разной крутизны: перепад на клетку отличается втрое', () => {
+    const grades = terraces.ramps.map(
+      ramp => Math.abs(ramp.to - ramp.from) / rampCells(ramp).length,
+    );
+
+    expect(Math.max(...grades)).toBeGreaterThan(Math.min(...grades) * 3);
+  });
+
+  it('каждая команда имеет одинаковое число респаунов', () => {
+    const counts = Object.values(terraces.respawns).map(list => list.length);
+
+    expect(new Set(counts).size).toBe(1);
+  });
+
+  it('у каждой команды есть точки на всех трёх уровнях', () => {
+    const size = terraces.step;
+
+    for (const list of Object.values(terraces.respawns)) {
+      const levels = new Set();
+
+      for (const [x, y, , level] of list) {
+        if (level !== undefined) {
+          levels.add(level);
+          continue;
+        }
+
+        // без явного уровня его даёт геометрия: наземная точка не имеет
+        // права стоять под плитой — иначе танк уедет наверх
+        for (const [key, config] of Object.entries(terraces.levels)) {
+          const tile = config.map[Math.floor(y / size)][Math.floor(x / size)];
+
+          expect(config.floor, `точка под плитой уровня ${key}`).not.toContain(
+            tile,
+          );
+        }
+
+        levels.add(0);
+      }
+
+      expect(levels).toEqual(new Set([0, 1, 2]));
+    }
+  });
+});

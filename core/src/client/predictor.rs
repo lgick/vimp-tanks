@@ -331,8 +331,11 @@ impl Predictor {
     pub(crate) fn set_map(&mut self, cfg: &super::ClientMapConfig, levels: Rc<MapLevels>) {
         // геометрия динамики — целиком из этой карты (см. map_dynamics.rs:
         // сброса по CLEAR у неё намеренно нет)
+        let fall = level::fall_model(&self.level_rules);
+
         if let Some(dynamics) = self.map_dynamics_mut() {
             dynamics.set_map(cfg);
+            dynamics.set_levels(Rc::clone(&levels), fall);
         }
 
         self.levels = Some(levels);
@@ -524,18 +527,47 @@ impl Predictor {
         // берётся из того же кадра (`z` ниже своего уровня = танк в
         // воздухе), а не из прошлой ветки предсказания: иначе высота своего
         // танка определялась бы длиной реплея — при скачке RTT она дёргалась
-        // бы, а на длинном реплее падение доигрывалось бы раньше времени
-        if let Some((z, level)) = self.authoritative_level
-            && level >= 1
-            && z < level as f32
-        {
+        // бы, а на длинном реплее падение доигрывалось бы раньше времени.
+        //
+        // Но на прогоне рампы `z` тоже ниже своего уровня (level = z.round()),
+        // поэтому «z ниже уровня» читается как падение только ВНЕ прогона:
+        // иначе на половине каждой рампы реплика принимала бы подъём за
+        // падение, а падение глушит ввод — тяга уезжала бы от хоста
+        let on_ramp = self
+            .levels
+            .as_ref()
+            .is_some_and(|levels| levels.ramp_at(self.state.x, self.state.y).is_some());
+        // и ровно так же, как у хоста, падение начинается только там, где
+        // под телом нет плиты своего уровня: кадр, снятый на прогоне, может
+        // приехать к реплике, уже съехавшей с него, и «z ниже уровня» тогда
+        // говорит лишь о запаздывании кадра
+        let has_floor = |z_level: u8| {
+            self.levels
+                .as_ref()
+                .is_some_and(|levels| levels.has_floor(z_level, self.state.x, self.state.y))
+        };
+        let airborne = self.authoritative_level.filter(|&(z, level)| {
+            !on_ramp && level >= 1 && z < level as f32 && !has_floor(level)
+        });
+
+        if let Some((z, level)) = airborne {
+            // куда падаем, решает та же геометрия, что у хоста: под обрывом
+            // может лежать не земля, а плита нижнего уровня
+            let to = self
+                .levels
+                .as_ref()
+                .map_or(0, |levels| levels.landing_level(level, self.state.x, self.state.y));
+
             self.level_state.level = level;
             self.level_state.z = z;
             self.level_state.transit = Transit::Falling {
-                elapsed: level::fall_elapsed(z, level, &self.level_rules),
+                elapsed: level::fall_elapsed(z, level, to, &self.level_rules),
                 from: level,
+                to,
             };
-        } else if let Transit::Falling { .. } = self.level_state.transit {
+        } else if !on_ramp
+            && let Transit::Falling { .. } = self.level_state.transit
+        {
             self.level_state.transit = Transit::Grounded;
         }
 
@@ -680,7 +712,16 @@ impl Predictor {
         let lateral_vel = -self.state.vx * sin + self.state.vy * cos;
 
         let lateral_dv = motion::lateral_dv(lateral_vel, model, dt);
-        let accel = motion::drive_accel(self.state.throttle, forward, back, forward_speed, model);
+        let grade = self.level_state.grade(cos, sin);
+        let accel = motion::drive_accel(
+            self.state.throttle,
+            forward,
+            back,
+            forward_speed,
+            grade,
+            model,
+            &self.level_rules,
+        );
         let forward_dv = accel * dt;
 
         self.state.vx += cos * forward_dv - sin * lateral_dv;
@@ -793,13 +834,15 @@ impl Predictor {
         let movable = sim.len();
         let mut contacts: Vec<(usize, usize, Contact, Surface)> = Vec::new();
 
-        // маска тела шага: индекс 0 — свой танк (переход по рампе даёт обе),
-        // остальные — уровень своей сущности. Тела разных уровней друг
-        // друга не касаются: танк на мосту не толкает ящик под мостом
+        // маска тела шага: индекс 0 — свой танк (переход по рампе даёт все
+        // уровни прогона), остальные — правило движка
+        // (`body_collision_mask`): на опоре свой уровень, в падении только
+        // статика. Тела разных уровней друг друга не касаются: танк на
+        // мосту не толкает ящик под мостом
         let mut masks = Vec::with_capacity(movable);
 
         masks.push(tank_mask);
-        masks.extend(bodies.iter().map(|body| level_group(body.level)));
+        masks.extend(bodies.iter().map(|body| body.collision_mask()));
 
         // контакты со стенами (партнёр — статика в точке задетого тайла):
         // стены собираются по КАЖДОМУ уровню из маски тела
@@ -1554,10 +1597,15 @@ mod tests {
         let mut p = make_predictor();
 
         apply_map(&mut p, &layered_map());
-        p.state.x = 90.0; // клетка рампы: x от 80 до 120
+        // подъезд к подножию: гейт входа судит вход по прошлой клетке, и
+        // без шага перед рампой прогон работал бы как плоскость
+        p.state.x = 60.0;
         p.state.y = 100.0;
+        p.step(0);
 
-        let expected = reference_level(&p, LevelState::default(), 90.0, 100.0);
+        p.state.x = 90.0; // клетка рампы: x от 80 до 120
+
+        let expected = reference_level(&p, p.level_state(), 90.0, 100.0);
 
         p.step(0);
 
@@ -1594,6 +1642,7 @@ mod tests {
             level: 1,
             z: 1.0,
             transit: Transit::Grounded,
+            ..LevelState::default()
         };
         p.state.x = 20.0; // колонка 0: плиты нет
         p.state.y = 100.0;
@@ -1633,7 +1682,9 @@ mod tests {
             transit: Transit::Falling {
                 elapsed: 0.0,
                 from: 1,
+                to: 0,
             },
+            ..LevelState::default()
         };
         // корпус заходит в стену уровня 0 (колонка 5: x от 200 до 240)
         // (корпус 8×6: левая грань 199, правая — внутри стены)
@@ -1663,7 +1714,9 @@ mod tests {
             transit: Transit::Falling {
                 elapsed: 0.0,
                 from: 1,
+                to: 0,
             },
+            ..LevelState::default()
         };
         p.state.x = 26.0; // правый край танка 30, левая грань ящика 30
         p.state.y = 20.0;
@@ -1744,6 +1797,61 @@ mod tests {
     }
 
     #[test]
+    fn ramp_frame_is_not_read_as_a_fall() {
+        // на прогоне уровень щёлкает по `z.round()`, поэтому кадр сплошь и
+        // рядом приходит с `z` НИЖЕ своего уровня. Принять это за падение —
+        // значит заглушить ввод на половине каждой рампы: тяга реплики
+        // уезжает от хоста, и детектор расхождения рвёт порог по throttle
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // клетка прогона (колонка 2: x от 80 до 120), первая половина
+        p.state.x = 90.0;
+        p.state.y = 100.0;
+        p.step(0);
+
+        assert!(
+            matches!(p.level_state().transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            p.level_state().transit
+        );
+
+        p.correct_level(0.6, 1);
+        p.on_server_state([90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert!(
+            !p.level_state().input_locked(),
+            "подъём по рампе принят за падение: {:?}",
+            p.level_state().transit
+        );
+    }
+
+    #[test]
+    fn late_frame_over_a_floor_is_not_read_as_a_fall() {
+        // кадр, снятый на прогоне, приезжает к реплике, уже съехавшей с него
+        // на плиту: `z` в нём ниже уровня, но под танком пол — падать некуда
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // плита уровня 1 (колонки 3 и 4: x от 120 до 200)
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.level_state.level = 1;
+        p.level_state.z = 1.0;
+
+        p.correct_level(0.9, 1);
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert!(
+            !p.level_state().input_locked(),
+            "запоздавший кадр принят за падение: {:?}",
+            p.level_state().transit
+        );
+    }
+
+    #[test]
     fn reconcile_restores_the_fall_phase_from_the_frame() {
         let mut p = make_predictor();
 
@@ -1754,17 +1862,19 @@ mod tests {
             transit: Transit::Falling {
                 elapsed: 0.25 * p.level_rules.fall_time,
                 from: 1,
+                to: 0,
             },
+            ..LevelState::default()
         };
 
         // кадр застал падение на половине высоты
         p.correct_level(0.5, 1);
         p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
 
-        let expected = level::fall_elapsed(0.5, 1, &p.level_rules);
+        let expected = level::fall_elapsed(0.5, 1, 0, &p.level_rules);
 
         assert!(
-            matches!(p.level_state().transit, Transit::Falling { elapsed, from: 1 }
+            matches!(p.level_state().transit, Transit::Falling { elapsed, from: 1, to: 0 }
                 if (elapsed - expected).abs() < 1e-5),
             "{:?}",
             p.level_state().transit
@@ -1784,13 +1894,152 @@ mod tests {
             transit: Transit::Falling {
                 elapsed: 0.5 * p.level_rules.fall_time,
                 from: 1,
+                to: 0,
             },
+            ..LevelState::default()
         };
 
         p.correct_level(0.0, 0);
         p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().transit, Transit::Grounded);
+    }
+
+    // слоёная карта 6×6 с двумя надземными уровнями: колонки 1–2 — плита
+    // уровня 3 (и уровней 1–2 под ней), колонка 3 — плита только уровня 1.
+    // С кромки уровня 3 в колонке 3 падают не на землю, а на плиту 1
+    fn tall_map() -> String {
+        let level = |cols: &[usize]| -> Vec<Vec<i32>> {
+            (0..6)
+                .map(|_| {
+                    (0..6)
+                        .map(|x| if cols.contains(&x) { 2 } else { 0 })
+                        .collect()
+                })
+                .collect()
+        };
+
+        serde_json::json!({
+            "step": 40,
+            "scale": 1,
+            "map": vec![vec![0; 6]; 6],
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "levels": {
+                "1": { "map": level(&[1, 2, 3]), "floor": [2], "walls": [] },
+                "2": { "map": level(&[1, 2]), "floor": [2], "walls": [] },
+                "3": { "map": level(&[1, 2]), "floor": [2], "walls": [] },
+            },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn reconcile_restores_the_fall_onto_an_intermediate_slab() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &tall_map());
+
+        // танк сорвался с уровня 3 над колонкой 3 (x от 120 до 160)
+        p.level_state = LevelState {
+            level: 3,
+            z: 2.9,
+            transit: Transit::Falling {
+                elapsed: 0.1 * p.level_rules.fall_time,
+                from: 3,
+                to: 1,
+            },
+            ..LevelState::default()
+        };
+
+        // кадр застал падение на половине высоты (3 → 1)
+        p.correct_level(2.0, 3);
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        let expected = level::fall_elapsed(2.0, 3, 1, &p.level_rules);
+
+        // цель падения — плита уровня 1, а не земля, и фаза не обнулена
+        assert!(
+            matches!(p.level_state().transit, Transit::Falling { elapsed, from: 3, to: 1 }
+                if (elapsed - expected).abs() < 1e-5),
+            "{:?}",
+            p.level_state().transit
+        );
+        assert!(expected > 0.0);
+        assert_eq!(p.level_state().z, 2.0);
+    }
+
+    #[test]
+    fn replica_lands_from_level_three_where_the_host_does() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &tall_map());
+        p.level_state = LevelState {
+            level: 3,
+            z: 3.0,
+            transit: Transit::Falling {
+                elapsed: 0.0,
+                from: 3,
+                to: 1,
+            },
+            ..LevelState::default()
+        };
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+
+        // падение на два уровня длится вдвое дольше падения на один
+        let steps =
+            (2.0 * p.level_rules.fall_time as f64 / (STEP_MS / 1000.0)).ceil() as usize + 1;
+
+        for _ in 0..steps {
+            p.step(0);
+        }
+
+        assert_eq!(p.level_state().transit, Transit::Grounded);
+        assert_eq!(p.level_state().level, 1);
+        assert_eq!(p.level_state().z, 1.0);
+    }
+
+    #[test]
+    fn ramp_climb_survives_the_replay() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // заход на прогон с торца: подножие (колонка 1), затем клетка рампы
+        p.state.x = 60.0;
+        p.state.y = 100.0;
+        p.step(0);
+        p.state.x = 90.0;
+        p.step(0);
+
+        assert!(matches!(
+            p.level_state().transit,
+            Transit::Ramp { climbing: true, .. }
+        ));
+
+        // реконсиляция с реплеем трёх шагов: кадр везёт уровень 0 — на
+        // рампе он отстаёт, и подъём обязан пережить и его, и реплей
+        p.correct_level(0.0, 0);
+        p.on_server_state(
+            [90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            false,
+            0.0,
+            0.0,
+            3.0 * STEP_MS,
+        );
+
+        assert_ne!(p.level_state().prev_cell, (-1, -1), "клетка потеряна реплеем");
+        assert!(matches!(
+            p.level_state().transit,
+            Transit::Ramp { climbing: true, .. }
+        ));
+
+        // подъём продолжается: вторая половина прогона щёлкает уровень
+        p.state.x = 110.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().level, 1);
     }
 
     #[test]

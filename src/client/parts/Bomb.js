@@ -17,7 +17,21 @@ export default class Bomb extends Container {
     super();
 
     // 2.5D: уровень, на котором лежит бомба (строка w2)
-    this.zIndex = levelZ(BOMB_BASE_Z, params[W2_LEVEL]);
+    this._level = params[W2_LEVEL] || 0;
+    this.zIndex = levelZ(BOMB_BASE_Z, this._level);
+
+    // бомба на мосту гаснет вместе с плитой, бомба под мостом темнеет:
+    // единая формула прозрачности живёт в сервисе levelView
+    this._levelView = dependencies.levelView || null;
+
+    // `onRender` — аксессор Container: назначаем свойством, иначе сеттер
+    // не отработает и колбэк не позовётся ни разу
+    if (this._levelView) {
+      this.onRender = () => {
+        this.alpha = this._levelView.alphaFor(this._level, this.x, this.y);
+        this.tint = this._levelView.tintFor(this._level);
+      };
+    }
 
     this.body = new Sprite(assets.bombTexture);
     this.body.anchor.set(0.5);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { Texture } from 'pixi.js';
+import { Container, Texture } from 'pixi.js';
 import Tank from '../../../src/client/parts/Tank.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
@@ -127,11 +127,15 @@ describe('Tank: уровни 2.5D', () => {
     level: 0,
     x: 0,
     y: 0,
-    set: vi.fn(function set(level, x, y) {
+    set: vi.fn(function set(level, x, y, z) {
       this.level = level;
       this.x = x;
       this.y = y;
+      this.z = z;
     }),
+    alphaFor: () => 1,
+    tintFor: () => 0xffffff,
+    layered: false,
   });
 
   // localPlayer — движковый сервис: сравнивает id сущности со своим gameId
@@ -168,7 +172,7 @@ describe('Tank: уровни 2.5D', () => {
 
     tank.update(row(1, 1, 320, 640));
 
-    expect(levelView.set).toHaveBeenCalledWith(1, 320, 640);
+    expect(levelView.set).toHaveBeenCalledWith(1, 320, 640, 1);
   });
 
   // свой танк строится из FIRST_SHOT_DATA, то есть до первого бинарного
@@ -189,7 +193,7 @@ describe('Tank: уровни 2.5D', () => {
     myId = '1';
     tank.update(row(1, 1, 320, 640));
 
-    expect(levelView.set).toHaveBeenCalledWith(1, 320, 640);
+    expect(levelView.set).toHaveBeenCalledWith(1, 320, 640, 1);
   });
 
   it('чужой танк в levelView не пишет', () => {
@@ -202,5 +206,168 @@ describe('Tank: уровни 2.5D', () => {
     tank.update(row(1, 1, 320, 640));
 
     expect(levelView.set).not.toHaveBeenCalled();
+  });
+});
+
+// Признаки высоты и уровня (задачи 3 и 4 мастер-плана): тень — самый дешёвый
+// и самый читаемый из них, бейдж — знак СВОЕГО уровня, и только на слоёной
+// карте.
+describe('Tank: признаки уровня и высоты', () => {
+  const badges = [Texture.EMPTY, Texture.EMPTY, Texture.EMPTY];
+
+  const viewAssets = {
+    ...assets,
+    tankShadowTexture: { texture: Texture.EMPTY, contentSize: 24 },
+    levelBadgeTexture: badges,
+  };
+
+  // строка m1 целиком: [..., angvel, z, level]
+  const row = (level, z = 0, x = 0, y = 0) => [
+    x,
+    y,
+    0,
+    0,
+    0,
+    0,
+    0,
+    100,
+    10,
+    1,
+    0,
+    z,
+    level,
+  ];
+
+  // камера — трансформ сцены плюс размер полотна (src/client/camera.js):
+  // при пустом трансформе её центр — середина полотна
+  const renderer = { screen: { width: 800, height: 600 } };
+
+  const makeView = (layered = true) => ({
+    level: 0,
+    x: 0,
+    y: 0,
+    layered,
+    set() {},
+    alphaFor: () => 1,
+    tintFor: () => 0xffffff,
+  });
+
+  const onStage = (dependencies, id = '1') => {
+    const tank = new Tank(
+      row(0),
+      viewAssets,
+      { soundManager: makeSoundManager(), renderer, ...dependencies },
+      { id },
+    );
+    const stage = new Container();
+
+    stage.scale.set(1);
+    stage.addChild(tank);
+
+    return { tank, stage };
+  };
+
+  it('тень уезжает от корпуса тем сильнее, чем выше танк', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow.x).toBeCloseTo(100);
+
+    tank.update(row(0, 2, 100, 100));
+    tank.onRender();
+
+    const low = Math.abs(tank._shadow.x - tank.x);
+
+    tank.update(row(0, 4, 100, 100));
+    tank.onRender();
+
+    expect(Math.abs(tank._shadow.x - tank.x)).toBeGreaterThan(low);
+  });
+
+  it('тень уезжает сильнее у края экрана, чем в центре камеры', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    // центр камеры — (400, 300): в нём сдвига нет вовсе
+    tank.update(row(0, 3, 400, 300));
+    tank.onRender();
+
+    expect(Math.abs(tank._shadow.x - tank.x)).toBeCloseTo(0);
+
+    tank.update(row(0, 3, 100, 300));
+    tank.onRender();
+
+    expect(Math.abs(tank._shadow.x - tank.x)).toBeGreaterThan(0);
+  });
+
+  // тень лежит на слое, НАД которым висит танк: по ней и видно, что танк
+  // поднялся по рампе, а не едет по земле
+  it('тень остаётся на уровне под танком', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(1, 0.5, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow.zIndex).toBe(2);
+
+    tank.update(row(1, 1.2, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow.zIndex).toBe(102);
+  });
+
+  it('тень уходит вместе с танком: движок про неё не знает', () => {
+    const { tank, stage } = onStage({ levelView: makeView() });
+
+    tank.onRender();
+
+    expect(stage.children).toHaveLength(2);
+
+    tank.destroy();
+
+    expect(stage.children).toHaveLength(0);
+  });
+
+  // парты строятся из FIRST_SHOT_DATA, когда свой id ещё неизвестен: бейдж
+  // обязан появиться позже, а не остаться скрытым навсегда
+  it('бейдж уровня показывается только своему танку', () => {
+    let myId = null;
+    const localPlayer = {
+      is: id => myId !== null && String(id) === String(myId),
+    };
+    const { tank } = onStage({ levelView: makeView(), localPlayer });
+
+    tank.onRender();
+
+    expect(tank._badge.visible).toBe(false);
+
+    myId = '1';
+    tank.onRender();
+
+    expect(tank._badge.visible).toBe(true);
+  });
+
+  it('на плоской карте бейджа нет вовсе', () => {
+    const { tank } = onStage({
+      levelView: makeView(false),
+      localPlayer: { is: () => true },
+    });
+
+    tank.onRender();
+
+    expect(tank._badge.visible).toBe(false);
+  });
+
+  it('бейдж берёт текстуру своего уровня', () => {
+    const { tank } = onStage({
+      levelView: makeView(),
+      localPlayer: { is: () => true },
+    });
+
+    tank.update(row(2));
+    tank.onRender();
+
+    expect(tank._badge.texture).toBe(badges[2]);
   });
 });
