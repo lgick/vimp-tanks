@@ -5,7 +5,7 @@
 //! Все функции mass-free: возвращают Δv/Δω/ускорение на единицу массы —
 //! авторитетный путь домножает результат на массу/инерцию тела.
 
-use crate::config::ModelConfig;
+use crate::config::{LevelRules, ModelConfig};
 use vimp_engine_core::physics::{clamp, lerp};
 
 /// Клавиши башни на тике.
@@ -68,18 +68,28 @@ pub fn lateral_dv(lateral_vel: f32, model: &ModelConfig, dt: f32) -> f32 {
 }
 
 /// Ускорение вдоль корпуса: тяга от дросселя либо активное торможение
-/// при отпущенном газе.
+/// при отпущенном газе, плюс скатывающая составляющая уклона.
+///
+/// `grade` — продольный уклон под курсом корпуса (`LevelState::grade`):
+/// положительный в горку, отрицательный под горку, 0 вне рампы. На нуле
+/// формула бит-в-бит совпадает с прежней — одноуровневые карты не замечают
+/// появления рамп.
 pub fn drive_accel(
     throttle: f32,
     forward: bool,
     back: bool,
     forward_speed: f32,
+    grade: f32,
     model: &ModelConfig,
+    rules: &LevelRules,
 ) -> f32 {
+    // в горку потолок скорости ниже: двигатель не тянет полный газ вверх
+    let limit = model.max_forward_speed
+        * (1.0 - rules.climb_max_speed_factor * grade.max(0.0)).max(0.25);
     let mut accel = 0.0;
 
     if throttle > 0.0 {
-        if forward && forward_speed < model.max_forward_speed {
+        if forward && forward_speed < limit {
             accel = throttle * model.acceleration_factor;
         } else if back && forward_speed > model.max_reverse_speed {
             accel = -throttle * model.acceleration_factor;
@@ -90,7 +100,9 @@ pub fn drive_accel(
         accel = -forward_speed * model.braking_factor;
     }
 
-    accel
+    // скатывание: на крутом подъёме при нулевом газе результат отрицателен,
+    // и танк сползает вниз — ровно то, чего ждёт игрок от горки
+    accel - grade * rules.climb_gravity
 }
 
 /// Нагрузка двигателя (для звука): намерение + «напряжение».
@@ -143,4 +155,103 @@ fn speed_ratio(forward_speed: f32, model: &ModelConfig) -> f32 {
     };
 
     ((ratio as f64 * 10000.0).round() / 10000.0) as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::LevelRules;
+
+    fn rules() -> LevelRules {
+        LevelRules {
+            fall_time: 0.35,
+            fall_damage: 15.0,
+            max_fall_damage: 100.0,
+            climb_gravity: 220.0,
+            climb_max_speed_factor: 0.55,
+        }
+    }
+
+    fn model() -> ModelConfig {
+        serde_json::from_value(serde_json::json!({
+            "currentWeapon": "w1",
+            "size": 2,
+            "accelerationFactor": 1000,
+            "brakingFactor": 0.3,
+            "maxForwardSpeed": 260,
+            "maxReverseSpeed": -130,
+            "baseTurnTorqueFactor": 215,
+            "damping": { "linear": 3, "angular": 100.0 },
+            "fixture": { "density": 200, "friction": 0.5, "restitution": 0.1 },
+            "lateralGrip": 20,
+            "turnSpeedThreshold": 10,
+            "baseTurnFactorRatio": 0.8,
+            "reverseTurnMultiplier": 0.7,
+            "throttleIncreaseRate": 2.0,
+            "throttleDecreaseRate": 2.5,
+            "strainFactor": 1.5,
+            "maxGunAngle": 1.4,
+            "gunRotationSpeed": 3.0,
+            "gunCenterSpeed": 10.0
+        }))
+        .expect("тестовая модель")
+    }
+
+    #[test]
+    fn flat_ground_is_bit_for_bit_the_old_formula() {
+        let model = model();
+        let rules = rules();
+
+        // тяга
+        assert_eq!(
+            drive_accel(1.0, true, false, 0.0, 0.0, &model, &rules),
+            model.acceleration_factor
+        );
+        // торможение без газа
+        assert_eq!(
+            drive_accel(0.0, false, false, 50.0, 0.0, &model, &rules),
+            -50.0 * model.braking_factor
+        );
+        // потолок скорости не тронут
+        assert_eq!(
+            drive_accel(1.0, true, false, model.max_forward_speed, 0.0, &model, &rules),
+            0.0
+        );
+    }
+
+    #[test]
+    fn uphill_is_slower_than_flat_and_downhill_is_faster() {
+        let model = model();
+        let rules = rules();
+
+        let flat = drive_accel(1.0, true, false, 100.0, 0.0, &model, &rules);
+        let up = drive_accel(1.0, true, false, 100.0, 0.5, &model, &rules);
+        let down = drive_accel(1.0, true, false, 100.0, -0.5, &model, &rules);
+
+        assert!(up < flat, "в горку тяга обязана быть меньше: {up} vs {flat}");
+        assert!(
+            down > flat,
+            "под горку тяга обязана быть больше: {down} vs {flat}"
+        );
+    }
+
+    #[test]
+    fn uphill_lowers_the_speed_limit() {
+        let model = model();
+        let rules = rules();
+        // на уклоне 1.0 потолок — 45% от максимума
+        let speed = model.max_forward_speed * 0.5;
+
+        assert!(drive_accel(1.0, true, false, speed, 1.0, &model, &rules) < 0.0);
+        assert!(drive_accel(1.0, true, false, speed, 0.0, &model, &rules) > 0.0);
+    }
+
+    #[test]
+    fn zero_throttle_uphill_rolls_the_tank_back() {
+        let model = model();
+        let rules = rules();
+
+        assert!(drive_accel(0.0, false, false, 0.0, 0.5, &model, &rules) < 0.0);
+    }
 }

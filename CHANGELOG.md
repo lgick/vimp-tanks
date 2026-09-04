@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-04
+
+### ⚠️ Breaking
+
+- Requires `vimp-engine-core` 0.12.0 and `vimp-engine` 0.31.0, and declares
+  the `map.levelsN` capability: the plugin refuses to load on an engine
+  without N-level maps instead of silently dropping the upper levels.
+- The `c1`/`c2` snapshot rows carry `z` and `level` right after `angle`
+  (`optionalFrom` moved from 3 to 5). Anything reading those rows by index
+  moves with them — `C_VX`/`C_VY`/`C_ANGVEL` are now 5/6/7.
+- The state dump changed shape: `LevelState` gained `prev_cell` and
+  `slope_vec`, `Transit::Ramp` now carries `climbing`/`low`/`high` and
+  `Transit::Falling` carries `to` (the landing level). A dump taken by an
+  older build no longer loads.
+
+### Migration
+
+- Rebuild the core against the published crate: `vimp-engine-core = "0.12.0"`
+  in `core/Cargo.toml`, then `npm run core:build`.
+- A game reading `c1`/`c2` rows by index must use the constants from
+  `src/client/snapshotFields.js` rather than literals.
+- New `coreParams.levels` keys (`maxFallDamage`, `climbGravity`,
+  `climbMaxSpeedFactor`) have defaults, but `TanksConfig::validate` now
+  rejects `maxFallDamage < fallDamage` and `climbMaxSpeedFactor` outside
+  `[0, 1)`.
+
+### Added
+
+- Crates fall. A dynamic map body pushed off a slab now falls by the same
+  engine primitive as a tank (`step_body_level`), lands on the nearest floor
+  below that has a surface and changes its collision level on the way. The
+  client replica predicts the same fall, so a crate that a player pushes
+  over the edge does not hang in the air until the next frame. Maps may now
+  place level 1 crates next to a gap in the railings.
+- Ramps climb through several levels at once (0 → 2 in one run): the level
+  snaps to `z.round()` instead of a single half-way threshold, and the hull
+  on a ramp collides with every level the run connects.
+- Shots and explosions work on any number of levels. A ray now drops level
+  by level (`landing_level`) instead of falling straight to the ground at
+  the first missing slab, and the edge window over a ledge probes the
+  nearest level above the shooter — so on a three-level map a shot fired
+  from level 2 can hit a tank on the terrace of level 1 before reaching the
+  ground. A single-level map still gets one ground segment, bit for bit.
+- A bomb dropped over a gap lands on the nearest floor below instead of the
+  ground: over a hole in the level 2 slab it comes to rest on the level 1
+  slab, and the explosion is shielded per level as before.
+- See-through has two modes, switched by `parts.seeThrough.mode`
+  (`src/config/render.js`): `'hole'` (default) opens a radial hole around
+  the player in the slab above him, `'layer'` keeps the old behaviour of
+  fading the whole layer. One formula serves every part
+  (`levelView.alphaFor`); the slab runs it as a filter with a WebGL and a
+  WebGPU branch.
+- Crates on a bridge fade with it. The dynamic branch of `Map` had neither
+  an `onRender` callback nor an alpha at all, so a crate stayed opaque over
+  the player; it now also re-sorts by the `level` in its own frame row, so a
+  crate falling off the bridge is visibly falling off it.
+- Level cues: everything below the player's level is tinted
+  (`seeThrough.lowerTint`), the radar dims the other levels and marks
+  another tank's level with a ring in that level's colour, and the local
+  tank carries a level badge — on layered maps only.
+- Height cues on a ramp: a shadow sprite offset away from the camera centre
+  in proportion to `z` (a sibling on the stage, drawn on the level the tank
+  hangs over), a hull compressed along its heading on a climb, and dust from
+  under the tracks. The grade is recovered on the client from `z` between
+  frames — the `m1` frame is unchanged.
+- Volumetric map elements: a render layer with a height (`volumes` in the
+  map) is extruded by the new `MapVolume` part and shifts as the camera
+  moves. It draws `parts.volume.slices` slices per layer regardless of how
+  many walls the map has, and `parts.volume.enabled = false` switches it off.
+- A three-level demo map, `terraces`: a 0 → 2 ramp climbed in one run next
+  to a stepped 0 → 1 → 2 path, a ramp whose top end opens into the level 0
+  passage under the slab (drive up to it, but not up it), crates at the gaps
+  in the railings of both upper levels, `volumes` on the buildings and the
+  railings, respawns on all three levels and two runs of very different
+  steepness. `overpass` gains the same `volumes` and its bridge crates move
+  back next to the gaps in the railings.
+
+### Changed
+
+- Slopes are felt. `motion::drive_accel` takes the longitudinal grade:
+  uphill the speed ceiling drops by `climbMaxSpeedFactor * grade` and the
+  thrust loses `grade * climbGravity`, so a steep climb with no throttle
+  rolls the tank back; downhill it accelerates. Off a ramp the grade is 0
+  and the formula is bit-for-bit the old one.
+- Falls scale with the height: `fallTime` and `fallDamage` are now counted
+  per level of height instead of per fall, and `maxFallDamage` caps the
+  damage of a single landing — a drop from level 2 hurts twice as much as
+  one from level 1 and takes twice as long.
+
+### Fixed
+
+- The replica no longer reads a climb as a fall. On a ramp the level snaps
+  to `z.round()`, so a frame routinely carries a `z` below the tank's own
+  level — the reconciliation took that for the fall phase, and a fall locks
+  the input: on the second half of every ramp the replica quietly dropped
+  the throttle while the host kept it. The frame is now read as a fall only
+  off a ramp run and only where the geometry has no floor of that level
+  under the tank, the way the host decides it. On the demo maps this pulls
+  the throttle drift from 0.083 (over the 0.06 threshold of the debug
+  scenarios) down to 0.021, and the longitudinal speed drift from 33 to 7.
+
+- Reconciliation no longer loses the level of a predicted crate. The level,
+  height and fall phase of a map body now come from the raw frame the replay
+  starts from (as they already did for the player's own tank) instead of the
+  map config, so a crate that fell while the frame was in flight is replayed
+  on the level it actually reached — and a falling one carries the engine's
+  static-only mask, so it no longer bumps into tanks the host does not touch.
+- A ramp can no longer be entered from the wrong side. The old gate only
+  closed the top half of a run, so driving into the lower half from the
+  side — or into the top end from the passage under the bridge — was a free
+  ride up. The gate now judges the actual cell the tank came from
+  (`prev_cell`): the entry must be a neighbour along the run's axis, through
+  the end matching the tank's level. A side, diagonal or wrong-end entry
+  leaves the run flat for that tank until it comes back through an end.
+
+## [0.17.1] - 2026-09-04
+
 ### ⚠️ Breaking
 
 - Requires `vimp-engine-core` 0.11.0 (`STATIC_LEVEL_GROUP`).

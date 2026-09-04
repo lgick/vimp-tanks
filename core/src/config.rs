@@ -121,12 +121,23 @@ pub struct WeaponConfig {
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LevelRules {
-    /// Длительность падения с моста до земли (секунды).
+    /// Длительность падения на ОДИН уровень высоты (секунды): падение с
+    /// уровня 2 на землю вдвое дольше падения с уровня 1.
     #[serde(default = "default_fall_time")]
     pub fall_time: f32,
-    /// Урон при приземлении (0 — падение бесплатно).
+    /// Урон при приземлении за ОДИН уровень высоты (0 — падение бесплатно).
     #[serde(default)]
     pub fall_damage: f64,
+    /// Потолок урона падения: с высокой башни танк не обязан умирать всегда.
+    #[serde(default = "default_max_fall_damage")]
+    pub max_fall_damage: f64,
+    /// Мировых единиц/с² на единицу продольного уклона: постоянное
+    /// торможение в горку и разгон под горку.
+    #[serde(default)]
+    pub climb_gravity: f32,
+    /// На сколько уклон 1.0 срезает потолок скорости (доля, `[0, 1)`).
+    #[serde(default)]
+    pub climb_max_speed_factor: f32,
 }
 
 impl Default for LevelRules {
@@ -134,12 +145,21 @@ impl Default for LevelRules {
         Self {
             fall_time: default_fall_time(),
             fall_damage: 0.0,
+            max_fall_damage: default_max_fall_damage(),
+            // умолчание 0: игра, не объявившая уклон, ездит прежними
+            // формулами бит-в-бит
+            climb_gravity: 0.0,
+            climb_max_speed_factor: 0.0,
         }
     }
 }
 
 fn default_fall_time() -> f32 {
     0.35
+}
+
+fn default_max_fall_damage() -> f64 {
+    100.0
 }
 
 /// Игровая половина init-JSON хостового ядра (`GameCore::new`) — см.
@@ -184,6 +204,27 @@ impl TanksConfig {
             return Err(format!(
                 "levels.fallDamage must be >= 0, got {}",
                 self.levels.fall_damage
+            ));
+        }
+
+        if self.levels.max_fall_damage < self.levels.fall_damage {
+            return Err(format!(
+                "levels.maxFallDamage must be >= levels.fallDamage ({}), got {}",
+                self.levels.fall_damage, self.levels.max_fall_damage
+            ));
+        }
+
+        if self.levels.climb_gravity < 0.0 {
+            return Err(format!(
+                "levels.climbGravity must be >= 0, got {}",
+                self.levels.climb_gravity
+            ));
+        }
+
+        if !(0.0..1.0).contains(&self.levels.climb_max_speed_factor) {
+            return Err(format!(
+                "levels.climbMaxSpeedFactor must be in [0, 1), got {}",
+                self.levels.climb_max_speed_factor
             ));
         }
 
@@ -297,6 +338,9 @@ mod validate_tests {
 
         assert_eq!(cfg.levels.fall_time, 0.35);
         assert_eq!(cfg.levels.fall_damage, 0.0);
+        assert_eq!(cfg.levels.max_fall_damage, 100.0);
+        assert_eq!(cfg.levels.climb_gravity, 0.0);
+        assert_eq!(cfg.levels.climb_max_speed_factor, 0.0);
         assert!(cfg.validate().is_ok());
     }
 
@@ -316,6 +360,34 @@ mod validate_tests {
         cfg.levels.fall_damage = -1.0;
 
         assert!(cfg.validate().unwrap_err().contains("fallDamage"));
+    }
+
+    #[test]
+    fn validate_rejects_cap_below_fall_damage() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.fall_damage = 40.0;
+        cfg.levels.max_fall_damage = 20.0;
+
+        assert!(cfg.validate().unwrap_err().contains("maxFallDamage"));
+    }
+
+    #[test]
+    fn validate_rejects_negative_climb_gravity() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.climb_gravity = -1.0;
+
+        assert!(cfg.validate().unwrap_err().contains("climbGravity"));
+    }
+
+    #[test]
+    fn validate_rejects_climb_factor_out_of_range() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.climb_max_speed_factor = 1.0;
+
+        assert!(cfg.validate().unwrap_err().contains("climbMaxSpeedFactor"));
     }
 
     #[test]

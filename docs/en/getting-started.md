@@ -31,7 +31,20 @@ for its age, so a published build keeps playing across engine releases. Follow
 a newer `vimp-engine` / `vimp-engine-core` when you want something it added.
 A capability the game cannot do without is then named in `manifest.requires`
 (`scripts/build-game-manifest.js`), and only an engine too old to
-provide that name refuses the package.
+provide that name refuses the package. This release follows
+`vimp-engine-core` 0.12.0 / `vimp-engine` 0.31.0 (N-level maps) and names
+`map.levelsN` in `manifest.requires`.
+
+Bumping the crate version in `core/Cargo.toml` is not enough on its own —
+the WASM artifacts under `core/pkg-web/` and `core/pkg-node/` are built
+files, and everything downstream reads them:
+
+```bash
+npm run core:build   # rebuild both targets against the new crate
+npm run core:test    # cargo tests of the game core
+npm test -- --silent # JS tests run against core/pkg-node/
+npm run build        # dist/ bundles the freshly built core
+```
 
 `pixi.js` is a **peer dependency**, not bundled: the client build
 externalizes it (`vite.config.js`), and at runtime it must resolve to the
@@ -92,7 +105,8 @@ bots — `index.html` and `src/standalone.js` hold every option
 default; pick another one without editing the file:
 
 ```bash
-VITE_MAP='overpass' npm run dev   # the 2.5D demo map
+VITE_MAP='overpass' npm run dev    # the two-level 2.5D demo map
+VITE_MAP='terraces' npm run dev    # the three-level one
 ```
 
 `assetsBase` is `/build/` here, and both kinds of asset live under it:
@@ -206,11 +220,14 @@ the snapshot schema or the panel. The scenarios:
 | `fall.json` | `overpass`: off a gap in the railings — `Falling`, `z` down to 0, landing at level 0 |
 | `crosslevel.json` | `overpass`: two players on different levels, hitscan across the levels and a bomb on the slab that does not touch the tank underneath |
 | `bots_bridge.json` | `overpass`: a player plus `/bot 2` over a long run — bots use the ramp and do not get stuck (invariants 10/11) |
+| `terraces_climb.json` | `terraces`: up the steep 0 → 2 run in one drive and back down in reverse — `z` runs 0 → 2 in the dumps |
+| `terraces_backside.json` | `terraces`: two players enter the same run through the wrong side — from the passage under the slab and from the flank; neither is lifted |
+| `terraces_crate.json` | `terraces`: a crate pushed through a gap in the railings of level 2 lands on the slab of level 1, while the second player climbs the steep run |
 
 A scenario asserts **nothing about the game rules**: the runner checks the
 engine's invariants and the prediction drift, and the four 2.5D scenarios
 above prove only that the loop survives a bridge, a fall and a cross-level
-shot. That the level really went 0 → 1 → 0, that a bot drove onto the
+shot, and the three `terraces_*` ones only that it survives three levels. That the level really went 0 → 1 → 0, that a bot drove onto the
 bridge, that the slab screened an explosion — those are asserted in
 `core/tests/sim.rs` (`npm run core:test`); the scenarios stay a debugging
 tool with dumps to read by eye.

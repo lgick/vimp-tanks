@@ -1,4 +1,5 @@
 import sounds from './sounds.js';
+import { seeThrough, volume } from './render.js';
 
 // Игровая половина клиентского CONFIG_DATA: сущности рендера, канвасы,
 // keyset игрока, схемы panel/stat, тексты chat/vote/gameInform. Движковые
@@ -9,8 +10,8 @@ export default {
   parts: {
     // распределение данных в заданные классы
     gameSets: {
-      c1: ['Map', 'MapRadar'],
-      c2: ['Map'],
+      c1: ['Map', 'MapVolume', 'MapRadar'],
+      c2: ['Map', 'MapVolume'],
       m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks'],
       w1: ['ShotEffect'],
       w2: ['Bomb'],
@@ -19,6 +20,7 @@ export default {
     // отображение классов на полотнах
     entitiesOnCanvas: {
       Map: 'vimp',
+      MapVolume: 'vimp',
       MapRadar: 'radar',
       TankRadar: 'radar',
       Tank: 'vimp',
@@ -98,6 +100,29 @@ export default {
           },
         },
         {
+          name: 'tankShadowTexture',
+          component: 'Tank',
+          params: {
+            // тень заметно крупнее корпуса: нормировка по contentSize
+            // оставляет её видимый размер независимым от запаса под размытие
+            radius: 12,
+            blur: 4,
+            quality: 20,
+            color: 0x000000,
+          },
+        },
+        {
+          name: 'levelBadgeTexture',
+          component: 'Tank',
+          params: {
+            radius: 7,
+            fontSize: 10,
+            borderWidth: 1.5,
+            borderColor: 0x101010,
+            textColor: 0x101010,
+          },
+        },
+        {
           name: 'trackMarkTexture',
           component: 'Tracks',
           params: {
@@ -127,11 +152,12 @@ export default {
 
     // карта зависимостей компонентов
     componentDependencies: {
-      // Map требует сервис renderer
-      renderer: ['Map'],
+      // Map и MapVolume пекут свои слои в текстуру, Tank по рендереру
+      // восстанавливает центр камеры (тень и параллакс объёма)
+      renderer: ['Map', 'MapVolume', 'Tank'],
       // база ассетов игры: Map строит из неё URL тайл-листов и спрайтов
       // динамических тел (`${assetsBase}img/<file>`), см. assets/img/
-      assetsBase: ['Map'],
+      assetsBase: ['Map', 'MapVolume'],
       // компоненты использующие звук
       soundManager: ['ExplosionEffect', 'ShotEffect', 'Bomb', 'Tank'],
       // геометрия динамики карты (рендерные боксы ящиков): эффект попадания
@@ -139,13 +165,30 @@ export default {
       // запуска эффекта.
       // Сервис есть только при включённом client-side prediction
       mapDynamics: ['ShotEffect'],
-      // 2.5D: где локальный игрок и на каком он уровне. Пишет Tank, читает
-      // Map (плита моста над игроком становится полупрозрачной)
-      levelView: ['Tank', 'Map'],
+      // 2.5D: где локальный игрок и на каком он уровне. Пишет Tank, читают
+      // все, кто уступает ему видимость: плита моста и ящики на ней, чужие
+      // танки, дым, бомбы и эффекты — по одной формуле (levelView.alphaFor)
+      levelView: [
+        'Tank',
+        'Map',
+        'MapVolume',
+        'MapRadar',
+        'Smoke',
+        'Bomb',
+        'ShotEffect',
+        'ExplosionEffect',
+      ],
       // «свой ли это танк» — движковый сервис; локальный танк единственный,
       // кто вправе писать в levelView
       localPlayer: ['Tank'],
     },
+
+    // 2.5D-рендер: прозрачность уровней над игроком и объёмные элементы.
+    // Источник этих чисел — src/config/render.js: партам движок конфиг не
+    // отдаёт (фабрика даёт только сервисы), поэтому они импортируют модуль
+    // напрямую, а здесь он лежит как часть клиентского конфига игры
+    seeThrough,
+    volume,
 
     // звуковые ассеты
     sounds,

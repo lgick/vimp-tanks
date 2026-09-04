@@ -460,7 +460,16 @@ impl GameSim<TanksGame> for TanksSim {
                     continue;
                 };
 
-                shot = tank.update(dt, body, model, &self.weapons, &self.key_bits, ctx.rng, ctx.events);
+                shot = tank.update(
+                    dt,
+                    body,
+                    model,
+                    &self.weapons,
+                    &self.key_bits,
+                    &self.level_rules,
+                    ctx.rng,
+                    ctx.events,
+                );
             }
 
             if let Some(shot) = shot {
@@ -838,7 +847,7 @@ impl TanksSim {
         // урон приземления правит `self` целиком, поэтому он откладывается
         // до конца обхода; порядок событий тот же — внутри обхода их никто
         // больше не пишет
-        let mut landed: Vec<u32> = Vec::new();
+        let mut landed: Vec<(u32, u8)> = Vec::new();
 
         for (id, tank) in tanks.iter_mut() {
             let Some(body) = ctx.world.bodies.get(tank.body) else {
@@ -858,23 +867,26 @@ impl TanksSim {
                 tank.sync_collision_groups(ctx.world);
             }
 
-            if event == LevelEvent::Landed {
-                landed.push(*id);
+            if let LevelEvent::Landed { height } = event {
+                landed.push((*id, height));
             }
         }
 
         self.levels_dirty = false;
 
-        for id in landed {
-            self.apply_fall_damage(ctx, id);
+        for (id, height) in landed {
+            self.apply_fall_damage(ctx, id, height);
         }
     }
 
     /// Урон при приземлении после падения с моста. Стрелка нет — урон
     /// приходит от самой карты, поэтому дружественный огонь и тряска
     /// оружия не при чём, а смерть засчитывается как самоубийство.
-    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32) {
-        let damage = self.level_rules.fall_damage;
+    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32, height: u8) {
+        // урон пропорционален высоте падения и зажат потолком: падение с
+        // уровня 1 стоит ровно `fallDamage`, как в первой итерации
+        let damage = (self.level_rules.fall_damage * height as f64)
+            .min(self.level_rules.max_fall_damage);
 
         if damage <= 0.0 {
             return;
@@ -1056,15 +1068,23 @@ impl TanksSim {
         let owner = &self.tanks[&owner_id];
         let mut level = owner.level_state.level;
 
-        // бомба, сброшенная в воздухе или над пустотой, оказывается внизу:
-        // держать её на уровне 1 там, где плиты нет, значило бы взрывать
-        // «в воздухе» над открытой землёй
-        if owner.level_state.input_locked() {
-            level = 0;
-        } else if let Some(levels) = self.levels.as_ref() {
-            if level >= 1 && !levels.has_floor(level, shot.body_position.x, shot.body_position.y) {
-                level = 0;
-            }
+        // бомба, сброшенная в воздухе или над пустотой, оказывается на
+        // ближайшей опоре СНИЗУ, а не сразу на земле: над разрывом плиты
+        // уровня 2 она обязана лечь на плиту уровня 1. Держать её на своём
+        // уровне там, где плиты нет, значило бы взрывать «в воздухе»
+        if level >= 1 {
+            let (x, y) = (shot.body_position.x, shot.body_position.y);
+
+            level = match self.levels.as_ref() {
+                Some(levels)
+                    if owner.level_state.input_locked() || !levels.has_floor(level, x, y) =>
+                {
+                    levels.landing_level(level, x, y)
+                }
+                Some(_) => level,
+                // уровень без геометрии судить не по чему — бомба идёт на землю
+                None => 0,
+            };
         }
 
         let bomb = Bomb::new(

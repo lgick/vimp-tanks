@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "seed": 5502,
+  "map": "terraces",
+  "participants": [
+    { "id": "p1", "name": "P1", "model": "m1" },
+    { "id": "p2", "name": "P2", "model": "m1" }
+  ],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team2" },
+    { "tick": 0, "op": "join", "who": "p2", "team": "team2" },
+    { "tick": 20, "op": "key", "who": "p1", "action": "down", "name": "forward" },
+    { "tick": 260, "op": "key", "who": "p1", "action": "up", "name": "forward" },
+    { "tick": 320, "op": "key", "who": "p2", "action": "down", "name": "forward" },
+    { "tick": 520, "op": "key", "who": "p2", "action": "up", "name": "forward" }
+  ],
+  "unusedSnapshotKeys": ["w1", "w2", "w2e", "c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "ticks": 700,
+  "dumpTicks": [200, 340, 560, 700]
+}

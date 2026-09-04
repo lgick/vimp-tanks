@@ -96,11 +96,15 @@ export default {
     id: 5,
     kind: 'indexedNoNull8',
     class: 'hot',
-    optionalFrom: 3,
+    optionalFrom: 5,
     fields: [
       { name: 'x', ty: 'f32', interp: 'lerp' },
       { name: 'y', ty: 'f32', interp: 'lerp' },
       { name: 'angle', ty: 'f32', interp: 'lerpAngle' },
+      // 2.5D: высота и уровень тела карты. Обязательная голова, а не хвост:
+      // покоящееся тело хвост не шлёт, и уровень читался бы нулём
+      { name: 'z', ty: 'f32', interp: 'lerp' },
+      { name: 'level', ty: 'u8' },
       { name: 'vx', ty: 'f32', interp: 'lerp' },
       { name: 'vy', ty: 'f32', interp: 'lerp' },
       { name: 'angvel', ty: 'f32', interp: 'lerp' },
@@ -110,11 +114,15 @@ export default {
     id: 6,
     kind: 'indexedNoNull8',
     class: 'hot',
-    optionalFrom: 3,
+    optionalFrom: 5,
     fields: [
       { name: 'x', ty: 'f32', interp: 'lerp' },
       { name: 'y', ty: 'f32', interp: 'lerp' },
       { name: 'angle', ty: 'f32', interp: 'lerpAngle' },
+      // 2.5D: высота и уровень тела карты. Обязательная голова, а не хвост:
+      // покоящееся тело хвост не шлёт, и уровень читался бы нулём
+      { name: 'z', ty: 'f32', interp: 'lerp' },
+      { name: 'level', ty: 'u8' },
       { name: 'vx', ty: 'f32', interp: 'lerp' },
       { name: 'vy', ty: 'f32', interp: 'lerp' },
       { name: 'angvel', ty: 'f32', interp: 'lerp' },

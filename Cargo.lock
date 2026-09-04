@@ -577,9 +577,9 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "vimp-engine-core"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cd92cfb5c1d14926cbc9854e0a83ac6b38fde45858b98ff9356daec369c624"
+checksum = "654d020686e84702c50623fa9cf43407a17663566a353e1cff676cf11c7861cd"
 dependencies = [
  "indexmap",
  "rapier2d",

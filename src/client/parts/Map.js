@@ -1,25 +1,18 @@
-import {
-  Container,
-  Sprite,
-  Assets,
-  Spritesheet,
-  Rectangle,
-  Ticker,
-} from 'pixi.js';
+import { Container, Sprite, Assets, Ticker } from 'pixi.js';
 import { degToRad } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
+import { createHoleFilter, setHoleUniforms } from '../seeThrough.js';
+import { bakeTileLayer } from './bakeTileLayer.js';
 import {
   C_X,
   C_Y,
   C_ANGLE,
+  C_LEVEL,
 } from '../snapshotFields.js';
 
-// доля непрозрачности плиты, когда локальный игрок под ней
-const UNDER_BRIDGE_ALPHA = 0.4;
-
-// скорость перехода прозрачности (доля в секунду): мгновенный скачок
-// читается как мигание при каждом въезде под край моста
-const ALPHA_FADE_RATE = 6;
+// ниже этой силы дыра неотличима от её отсутствия: фильтр снимается совсем,
+// чтобы слой не платил за проход, которого не видно
+const HOLE_EPSILON = 0.01;
 
 export default class Map extends Container {
   constructor(data, _assets, dependencies) {
@@ -37,6 +30,18 @@ export default class Map extends Container {
     this._levelView = dependencies.levelView || null;
     this._level = 0;
     this._targetAlpha = 1;
+
+    // режим 'hole': фильтр «дыры» и её сила (0 — игрок не под слоем).
+    // Фильтр создаётся лениво: слоёв уровня >= 1 на карте может не быть
+    // вовсе, а программу шейдера тогда компилировать не за что
+    this._holeFilter = null;
+    this._holeStrength = 0;
+    this._holeAttached = false;
+
+    // мировая позиция динамического тела: alpha ящика считается по ней,
+    // а sprite.x живёт в НЕмасштабированных координатах контейнера
+    this._worldX = 0;
+    this._worldY = 0;
 
     this.scale = data.scale;
 
@@ -95,6 +100,9 @@ export default class Map extends Container {
       // RenderGroup.addChild сам подхватит `_onRender` при добавлении на
       // сцену)
       if (this._level >= 1) {
+        // на слоёной карте локальный танк показывает бейдж уровня; кроме
+        // самих слоёв про «слоистость» карты никто на клиенте не знает
+        this._levelView?.markLayered();
         this.onRender = () => this._updateSeeThrough();
       }
 
@@ -106,12 +114,25 @@ export default class Map extends Container {
       this._baseTexturePromise = Assets.load(this._assetUrl);
 
       this._level = data.level || 0;
-      this.zIndex = levelZ(Number(data.layer) || 2, this._level);
+      this._layer = Number(data.layer) || 2;
+      this.zIndex = levelZ(this._layer, this._level);
       this._rotation = degToRad(data.angle);
       this._width = data.width;
       this._height = data.height;
       this._x = data.position[0];
       this._y = data.position[1];
+      this._worldX = this._x * this.scale.x;
+      this._worldY = this._y * this.scale.y;
+
+      // ящик на мосту обязан гаснуть вместе с плитой и падать с неё видимо:
+      // уровень тела теперь меняется на лету (строка `c1`/`c2` везёт
+      // `level` с этапа 3), поэтому колбэк нужен ЛЮБОМУ динамическому телу,
+      // а не только тому, что родилось наверху.
+      //
+      // `onRender` — аксессор Container, назначается свойством (см. ниже)
+      if (this._levelView) {
+        this.onRender = () => this._updateDynamicSeeThrough();
+      }
 
       this.createDynamic();
     }
@@ -139,67 +160,14 @@ export default class Map extends Container {
 
   async createStatic() {
     try {
-      const framesData = {};
-
-      this._spriteSheetData.frames.forEach((frameDef, index) => {
-        const [x, y, width, height] = frameDef;
-
-        framesData[`frame${index}`] = {
-          frame: { x, y, w: width, h: height },
-        };
+      const bakedTexture = await bakeTileLayer({
+        baseTexture: await this._baseTexturePromise,
+        spriteSheetData: this._spriteSheetData,
+        map: this._map,
+        tiles: this._tiles,
+        step: this._step,
+        renderer: this._renderer,
       });
-
-      // полная структура JSON для спрайт-листа
-      const sheetDataForPixi = {
-        frames: framesData,
-        meta: {
-          scale: '1', // масштаб спрайтшита
-        },
-      };
-
-      const baseTexture = await this._baseTexturePromise;
-      const spriteSheet = new Spritesheet(baseTexture, sheetDataForPixi);
-      await spriteSheet.parse();
-
-      const mapWidth = this._map[0].length * this._step;
-      const mapHeight = this._map.length * this._step;
-
-      // временный контейнер для размещения всех тайлов
-      const tempContainer = new Container();
-
-      for (let y = 0, lenY = this._map.length; y < lenY; y += 1) {
-        for (let x = 0, lenX = this._map[y].length; x < lenX; x += 1) {
-          const tileIndex = this._map[y][x];
-
-          if (this._tiles.includes(tileIndex)) {
-            // предполагается, что spriteSheet имеет свойство textures,
-            // где ключ соответствует названию тайла
-            const textureName = `frame${tileIndex}`;
-            const texture = spriteSheet.textures[textureName];
-
-            if (texture) {
-              const sprite = new Sprite(texture);
-
-              sprite.x = x * this._step;
-              sprite.y = y * this._step;
-
-              tempContainer.addChild(sprite);
-            } else {
-              console.warn(
-                `Texture not found. Tile: ${tileIndex}, sprite: ${textureName}`,
-              );
-            }
-          }
-        }
-      }
-
-      const bakedTexture = this._renderer.generateTexture({
-        target: tempContainer,
-        frame: new Rectangle(0, 0, mapWidth, mapHeight),
-      });
-
-      // очищаем временный контейнер
-      tempContainer.destroy({ children: true });
 
       // один большой спрайт из "запеченной" текстуры
       this.mapSprite = new Sprite(bakedTexture);
@@ -225,17 +193,79 @@ export default class Map extends Container {
       return;
     }
 
-    const under =
-      this._levelView.level < this._level &&
-      this._hasFloorAt(this._levelView.x, this._levelView.y);
-
-    this._targetAlpha = under ? UNDER_BRIDGE_ALPHA : 1;
-
+    const cfg = this._levelView.cfg;
     // сглаживание по времени тикера общего приложения
     const dt = Ticker.shared.deltaMS / 1000;
+    const rate = Math.min(1, cfg.fadeRate * dt);
 
-    this.alpha +=
-      (this._targetAlpha - this.alpha) * Math.min(1, ALPHA_FADE_RATE * dt);
+    // путь отхода: гаснет весь слой целиком (прежнее поведение)
+    if (this._levelView.mode === 'layer') {
+      const under =
+        this._levelView.level < this._level &&
+        this._hasFloorAt(this._levelView.x, this._levelView.y);
+
+      this._targetAlpha = under ? cfg.layerAlpha : 1;
+      this.alpha += (this._targetAlpha - this.alpha) * rate;
+
+      return;
+    }
+
+    // режим 'hole': проверки пола нет — дыра ездит за игроком, и её край
+    // сам показывает, где кончается плита
+    const above = this._levelView.level < this._level;
+
+    this._holeStrength += ((above ? 1 : 0) - this._holeStrength) * rate;
+    this._updateHole(cfg);
+  }
+
+  // дыра вокруг игрока: внутри слоя нужна не одна alpha, а поле по пикселям,
+  // поэтому единственный способ — фильтр. Центр приходит в пикселях кадра
+  // фильтра, то есть в экранных: мировая точка умножается на трансформ сцены
+  // (камера — он и есть, см. src/client/camera.js)
+  _updateHole(cfg) {
+    const stage = this.parent;
+
+    if (this._holeStrength < HOLE_EPSILON || !stage) {
+      if (this._holeAttached) {
+        this.filters = [];
+        this._holeAttached = false;
+      }
+
+      return;
+    }
+
+    if (!this._holeFilter) {
+      this._holeFilter = createHoleFilter(cfg);
+    }
+
+    if (!this._holeAttached) {
+      this.filters = [this._holeFilter];
+      this._holeAttached = true;
+    }
+
+    setHoleUniforms(this._holeFilter, {
+      centerX: this._levelView.x * stage.scale.x + stage.position.x,
+      centerY: this._levelView.y * stage.scale.y + stage.position.y,
+      radius: cfg.radius * stage.scale.x,
+      softness: cfg.softness,
+      // дыра открывается не рывком: сила перехода живёт в минимальной alpha
+      minAlpha: 1 + (cfg.minAlpha - 1) * this._holeStrength,
+    });
+  }
+
+  // ящик: точечная сущность, ей хватает одной alpha на всё тело. Заодно
+  // затемняется, если игрок над ним (единый признак «ниже — темнее»)
+  _updateDynamicSeeThrough() {
+    if (!this._levelView || !this.sprite) {
+      return;
+    }
+
+    this.alpha = this._levelView.alphaFor(
+      this._level,
+      this._worldX,
+      this._worldY,
+    );
+    this.tint = this._levelView.tintFor(this._level);
   }
 
   // позиция приходит в мировых единицах, а грид слоя не масштабирован:
@@ -255,9 +285,28 @@ export default class Map extends Container {
       this.sprite.y = data[C_Y] / this.scale.y;
       this.sprite.rotation = data[C_ANGLE];
     }
+
+    this._worldX = data[C_X];
+    this._worldY = data[C_Y];
+
+    // ящик может уехать на мост и упасть с него: уровень едет строкой
+    // кадра, и порядок отрисовки обязан ехать за ним
+    const level = data[C_LEVEL] || 0;
+
+    if (level !== this._level) {
+      this._level = level;
+      this.zIndex = levelZ(this._layer, level);
+    }
   }
 
   destroy(options) {
+    if (this._holeFilter) {
+      this.filters = [];
+      this._holeAttached = false;
+      this._holeFilter.destroy();
+      this._holeFilter = null;
+    }
+
     if (this.mapSprite) {
       this.mapSprite.destroy({
         children: true,

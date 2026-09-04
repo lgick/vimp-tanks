@@ -44,6 +44,13 @@ pub(crate) struct ClientMapConfig {
     pub(crate) physics_static: Vec<i32>,
     #[serde(default)]
     pub(crate) physics_dynamic: Vec<ClientDynamicObject>,
+    /// Рендер-слои уровня 0 и их высоты: физике они не нужны, но валидатор
+    /// уровней проверяет `volumes` по составу слоёв, и без них карта с
+    /// объёмами прошла бы у клиента проверку, которую хост завалил
+    #[serde(default)]
+    pub(crate) layers: IndexMap<String, Vec<i32>>,
+    #[serde(default)]
+    pub(crate) volumes: IndexMap<String, f32>,
     /// Надземные уровни карты (MAP_DATA). Ключ — номер уровня строкой.
     #[serde(default)]
     pub(crate) levels: IndexMap<String, vimp_engine_core::map::MapLevelConfig>,
@@ -421,6 +428,8 @@ impl GameClientDef for TanksClient {
         vimp_engine_core::map::validate_levels(
             &cfg.map,
             &cfg.physics_static,
+            &cfg.layers,
+            &cfg.volumes,
             &cfg.levels,
             &cfg.ramps,
         )?;

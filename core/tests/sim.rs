@@ -234,6 +234,63 @@ fn layered_map_json() -> String {
     .to_string()
 }
 
+/// Карта на три уровня: плита уровня 1 — колонки 7..12, плита уровня 2 —
+/// колонки 10..11 (колонки 7..9 — терраса уровня 1 под открытым небом).
+/// Рампа 1 → 2 идёт по строке 9 через колонки 7..9.
+fn terraced_map_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for x in 0..20 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[19] = 1;
+    }
+
+    let mut slab1: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+    let mut slab2: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for row in slab1.iter_mut().take(15).skip(5) {
+        for cell in row.iter_mut().take(13).skip(7) {
+            *cell = 2;
+        }
+    }
+
+    for row in slab2.iter_mut().take(15).skip(5) {
+        for cell in row.iter_mut().take(12).skip(10) {
+            *cell = 2;
+        }
+    }
+
+    // рампа 1 → 2 в строке 9, колонки 7..9 (тайл прогона живёт в гриде
+    // своего нижнего уровня)
+    for x in 7..10 {
+        slab1[9][x] = 3;
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[100, 100, 0]],
+            "team2": [[500, 100, 180]]
+        },
+        "levels": {
+            "1": { "map": slab1, "floor": [2, 3], "walls": [] },
+            "2": { "map": slab2, "floor": [2], "walls": [] }
+        },
+        "ramps": [{ "tile": 3, "dir": "east", "from": 1, "to": 2 }]
+    })
+    .to_string()
+}
+
 /// Точка на плите моста (колонка 11, строка 8).
 const SLAB: (f32, f32) = (368.0, 272.0);
 /// Точка на земле вне плиты и вне рампы.
@@ -621,10 +678,10 @@ fn map_with_box_json(x: f32, y: f32) -> String {
 /// Строка снапшота единственного динамического тела карты
 /// (Map.getDynamicMapData); `with_velocities` — как у схемы `c1`/`c2`
 /// с опциональным хвостом (см. src/config/snapshot.js).
-fn dynamic_box_row(core: &GameCore, with_velocities: bool) -> Vec<FieldValue> {
+fn dynamic_box_row(core: &GameCore, with_levels: bool, with_velocities: bool) -> Vec<FieldValue> {
     let state = core.state();
     let map = state.map.as_ref().expect("карта загружена");
-    let rows = map.dynamic_map_data(&state.world, with_velocities);
+    let rows = map.dynamic_map_data(&state.world, with_levels, with_velocities);
     let (_, fields) = rows.first().expect("на карте один динамический ящик");
 
     fields.clone()
@@ -632,7 +689,7 @@ fn dynamic_box_row(core: &GameCore, with_velocities: bool) -> Vec<FieldValue> {
 
 /// X единственного динамического тела карты (Map.getDynamicMapData).
 fn dynamic_box_x(core: &GameCore) -> f32 {
-    match dynamic_box_row(core, false)[0] {
+    match dynamic_box_row(core, false, false)[0] {
         FieldValue::F32(x) => x,
         _ => panic!("поле x строки динамики должно быть f32"),
     }
@@ -730,22 +787,25 @@ fn dynamic_box_ships_velocity_tail_only_while_moving() {
     core.step(DT);
 
     // до выстрела ящик стоит: хвоста нет даже при запросе скоростей
-    assert_eq!(dynamic_box_row(&core, true).len(), 3);
+    assert_eq!(dynamic_box_row(&core, false, true).len(), 3);
+    // голова со схемой 2.5D — [x, y, angle, z, level], хвоста по-прежнему нет
+    assert_eq!(dynamic_box_row(&core, true, true).len(), 5);
 
     core.apply_input(1, 1, "down", "fire");
     steps(&mut core, 10);
 
-    let moving = dynamic_box_row(&core, true);
+    let moving = dynamic_box_row(&core, true, true);
 
-    assert_eq!(moving.len(), 6, "ящик едет — строка обязана нести скорости");
+    assert_eq!(moving.len(), 8, "ящик едет — строка обязана нести скорости");
 
-    match moving[3] {
+    // индекс скоростей съехал с 3 на 5: перед ними идут z и level
+    match moving[5] {
         FieldValue::F32(vx) => assert!(vx > 0.0, "vx должен быть положительным: {vx}"),
         _ => panic!("поле vx строки динамики должно быть f32"),
     }
 
     // схема без хвоста ширину строки не меняет
-    assert_eq!(dynamic_box_row(&core, false).len(), 3);
+    assert_eq!(dynamic_box_row(&core, true, false).len(), 5);
 }
 
 // Примечание: конструктор GameCore::new теперь отклоняет невалидную
@@ -1223,7 +1283,8 @@ fn bomb_dropped_over_the_void_lands_on_the_ground() {
 
     assert!(
         health_of(&all, 2).is_some_and(|h| h < 100.0),
-        "бомба над пустотой ложится на землю: {all:?}"
+        "бомба над пустотой ложится на ближайшую опору снизу — здесь это \
+         земля: {all:?}"
     );
 }
 
@@ -1294,6 +1355,59 @@ fn tank_climbs_the_ramp_and_falls_back_to_the_ground() {
 }
 
 #[test]
+fn box_pushed_off_the_slab_falls_to_the_ground() {
+    // задача 1 итерации 2: тело карты живёт по тем же правилам уровня, что
+    // танк — за кромкой плиты оно падает и меняет группу коллизий
+    let mut core = GameCore::new(&config_json_with_bullet(1500.0, 7_500_000.0)).unwrap();
+    let mut map: serde_json::Value = serde_json::from_str(&layered_map_json()).unwrap();
+
+    // ящик на плите у её восточной кромки (плита — колонки 10..12)
+    map["physicsDynamic"] = serde_json::json!([{
+        "density": 100,
+        "position": [384.0, 272.0],
+        "angle": 0,
+        "width": 32,
+        "height": 32,
+        "linearDamping": 0,
+        "angularDamping": 0,
+        "level": 1
+    }]);
+
+    core.load_map(&map.to_string()).unwrap();
+    core.spawn_actor(1, "m1", 1, 336.0, 288.0, 0.0).unwrap();
+    core.set_actor_level(1, 1);
+    steps(&mut core, 2);
+
+    let level_of_box = |row: &[FieldValue]| match row[4] {
+        FieldValue::U8(level) => level,
+        _ => panic!("поле level строки динамики должно быть u8"),
+    };
+    let z_of_box = |row: &[FieldValue]| match row[3] {
+        FieldValue::F32(z) => z,
+        _ => panic!("поле z строки динамики должно быть f32"),
+    };
+
+    assert_eq!(
+        level_of_box(&dynamic_box_row(&core, true, false)),
+        1,
+        "ящик стоит на плите"
+    );
+
+    core.apply_input(1, 1, "down", "fire");
+    steps(&mut core, 400);
+
+    let after = dynamic_box_row(&core, true, false);
+
+    assert_eq!(level_of_box(&after), 0, "вытолкнутый ящик — на земле");
+    assert_eq!(z_of_box(&after), 0.0, "и его высота обнулилась");
+
+    let state = core.state();
+    let map = state.map.as_ref().expect("карта загружена");
+
+    assert_eq!(map.dynamic_levels(), vec![0], "группа тела сменилась на земную");
+}
+
+#[test]
 fn scripted_bot_drives_onto_the_bridge() {
     // сценарий tests/scenarios/bots_bridge.json: нав-граф слоёной карты
     // действительно приводит бота наверх, а не только строит путь
@@ -1301,11 +1415,15 @@ fn scripted_bot_drives_onto_the_bridge() {
 
     core.load_map(&layered_map_json()).unwrap();
     core.spawn_scripted_actor(1, "m1", 1, 112.0, 304.0, 0.0).unwrap();
+    // цель на плите: гейт входа (level.rs) пускает на прогон только с
+    // торца, поэтому бот обязан ИДТИ на мост нав-графом, а не задеть рампу
+    // боком по дороге к случайной точке патруля
+    core.spawn_actor(2, "m1", 2, SLAB.0, SLAB.1, 180.0).unwrap();
+    core.set_actor_level(2, 1);
 
     let mut reached = false;
 
-    // до 60 секунд патрулирования: цель патруля случайна, мост выпадает не
-    // с первой попытки
+    // до 60 секунд: путь наверх один — через подножие рампы
     for _ in 0..7200 {
         core.step(DT);
 
@@ -1323,6 +1441,40 @@ fn scripted_bot_drives_onto_the_bridge() {
 /// tests/config/game.test.js.
 fn overpass_map_json() -> &'static str {
     include_str!("../../tests/core/fixtures/overpass.json")
+}
+
+/// Критерий приёмки уклона: дефолтные `climbGravity`/`climbMaxSpeedFactor`
+/// обязаны оставлять рампы демо-карты проезжаемыми на полном газе.
+#[test]
+fn overpass_ramp_is_climbed_at_full_throttle() {
+    let mut core = make_core();
+
+    core.load_map(overpass_map_json()).unwrap();
+
+    // северная рампа — тайл 4, клетки x 3..5, y 32..34 (подъём на север);
+    // клетка карты — 32 × scale 0.4 = 12.8 мировых единиц
+    let cell = |x: f32, y: f32| ((x + 0.5) * 12.8, (y + 0.5) * 12.8);
+    // старт — клетка ПЕРЕД подножием: на прогон заходят с торца
+    let (x, y) = cell(4.0, 35.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 270.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 0, "старт на земле");
+
+    let mut climbed = false;
+
+    for _ in 0..600 {
+        core.step(DT);
+
+        if level_of(&core, 1) == 1 {
+            climbed = true;
+            break;
+        }
+    }
+
+    assert!(climbed, "рампа overpass обязана проезжаться на полном газе");
 }
 
 #[test]
@@ -1347,4 +1499,242 @@ fn overpass_loads_and_places_respawns_on_their_levels() {
 
     assert_eq!(level_of(&core, 1), 1, "мостовой респаун — уровень 1");
     assert_eq!(level_of(&core, 2), 0, "наземный респаун — уровень 0");
+}
+
+#[test]
+fn upper_slab_shields_the_explosion_from_the_terrace() {
+    // бомба на уровне 2 не достаёт цель, стоящую уровнем ниже
+    let mut core = make_core();
+
+    core.load_map(&terraced_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 368.0, 300.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 368.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.set_actor_level(2, 1);
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 2, "стрелок на верхней плите");
+    assert_eq!(level_of(&core, 2), 1, "цель уровнем ниже");
+    core.take_events();
+
+    core.apply_input(1, 1, "down", "nextWeapon");
+    steps(&mut core, 1);
+    fire(&mut core, 2, 50);
+
+    let all = events(&mut core);
+
+    assert_eq!(
+        health_of(&all, 2),
+        None,
+        "взрыв уровня 2 не идёт вниз: {all:?}"
+    );
+}
+
+#[test]
+fn bomb_dropped_over_the_void_lands_on_the_slab_below() {
+    // над разрывом плиты уровня 2 бомба ложится на плиту уровня 1, а не
+    // улетает на землю
+    let mut core = make_core();
+
+    core.load_map(&terraced_map_json()).unwrap();
+    // верхняя половина рампы 1 → 2: уровень 2, но плиты уровня 2 нет,
+    // а плита уровня 1 под ней есть
+    core.spawn_actor(1, "m1", 1, 304.0, 304.0, 0.0).unwrap();
+    // цель на террасе уровня 1 рядом с рампой
+    core.spawn_actor(2, "m1", 2, 304.0, 336.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    // уровень назван явно: спавн на рампе геометрия считает заездом сбоку
+    core.set_actor_level(1, 2);
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 2, "стрелок на верхней половине рампы");
+    assert_eq!(level_of(&core, 2), 1, "цель на террасе уровня 1");
+    core.take_events();
+
+    core.apply_input(1, 1, "down", "nextWeapon");
+    steps(&mut core, 1);
+    fire(&mut core, 2, 50);
+
+    let all = events(&mut core);
+
+    assert!(
+        health_of(&all, 2).is_some_and(|h| h < 100.0),
+        "бомба легла на плиту уровня 1: {all:?}"
+    );
+}
+
+/// Демо-карта на три уровня (src/data/maps/terraces.js), сериализованная
+/// скриптом экспорта; синхронность фикстуры с модулем стережёт
+/// tests/core/fixtures.test.js.
+fn terraces_map_json() -> &'static str {
+    include_str!("../../tests/core/fixtures/terraces.json")
+}
+
+/// Центр клетки карты `terraces` в мировых единицах: 32 * scale 0.4 = 12.8.
+fn terraces_cell(x: f32, y: f32) -> (f32, f32) {
+    ((x + 0.5) * 12.8, (y + 0.5) * 12.8)
+}
+
+/// Координата y танка из players_data (индекс 1 строки схемы m1).
+fn tank_y(core: &GameCore, game_id: u32) -> f32 {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()][1].as_f64().unwrap() as f32
+}
+
+#[test]
+fn terraces_loads_with_three_levels() {
+    let mut core = make_core();
+
+    core.load_map(terraces_map_json())
+        .expect("terraces обязан проходить валидацию карты");
+
+    // ни одного set_actor_level: уровень точки даёт геометрия
+    let (x, y) = terraces_cell(58.0, 21.0);
+    core.spawn_actor(1, "m1", 1, x, y, 180.0).unwrap();
+
+    let (x, y) = terraces_cell(20.0, 20.0);
+    core.spawn_actor(2, "m1", 2, x, y, 0.0).unwrap();
+
+    let (x, y) = terraces_cell(45.0, 18.0);
+    core.spawn_actor(3, "m1", 1, x, y, 180.0).unwrap();
+
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 0, "точка на земле — уровень 0");
+    assert_eq!(level_of(&core, 2), 1, "точка на террасе — уровень 1");
+    assert_eq!(level_of(&core, 3), 2, "точка на верхней площадке — уровень 2");
+}
+
+#[test]
+fn tank_climbs_two_levels_in_one_ramp() {
+    // задача 6 итерации 2: крутой прогон 0 → 2 проезжается одним заездом
+    let mut core = make_core();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    // подножие крутой рампы (клетки x 53..56 строки 21, подъём на запад);
+    // старт — клетка ПЕРЕД торцом: на прогон заходят с торца
+    let (x, y) = terraces_cell(58.0, 21.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 180.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 0, "старт на земле");
+
+    let mut seen_middle = false;
+    let mut climbed = false;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        match level_of(&core, 1) {
+            1 => seen_middle = true,
+            2 => {
+                climbed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(climbed, "танк не поднялся на уровень 2 одним прогоном");
+    assert!(seen_middle, "подъём обязан пройти через промежуточный уровень 1");
+}
+
+#[test]
+fn tank_cannot_enter_the_ramp_from_under_the_slab() {
+    // задача 5 итерации 2: у верхнего торца рампы — проезд уровня 0 под
+    // плитой. Оттуда на прогон заезжают, но не поднимаются: гейт входа
+    // требует торца, отвечающего уровню танка
+    let mut core = make_core();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    // под плитой террасы, носом на юг; уровень объявлен явно (геометрия под
+    // плитой отдала бы 1) — так же поступает хост с respawns[i][3]
+    let (x, y) = terraces_cell(24.0, 28.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 90.0).unwrap();
+
+    steps(&mut core, 2);
+    core.set_actor_level(1, 0);
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 0, "старт на земле под плитой");
+    core.apply_input(1, 1, "down", "forward");
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        assert_eq!(
+            level_of(&core, 1),
+            0,
+            "заезд на прогон сверху обязан оставить танк на земле, y = {}",
+            tank_y(&core, 1)
+        );
+    }
+
+    // прогон занимает строки 31..34: танк обязан ПРОЕХАТЬ его насквозь,
+    // а не упереться в него
+    assert!(
+        tank_y(&core, 1) > 35.0 * 12.8,
+        "танк не доехал до конца прогона, y = {}",
+        tank_y(&core, 1)
+    );
+}
+
+#[test]
+fn crate_pushed_off_the_upper_slab_lands_on_the_lower_one() {
+    // задача 1 итерации 2: ящик у разрыва перил верхней площадки падает не
+    // на землю, а на плиту террасы этажом ниже
+    let mut core = GameCore::new(&config_json_with_bullet(1500.0, 7_500_000.0)).unwrap();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    // первый ящик карты стоит на клетке (41, 25) уровня 2; разрыв перил —
+    // строка 26, под ней плита уровня 1
+    let (x, y) = terraces_cell(41.0, 22.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 90.0).unwrap();
+    core.set_actor_level(1, 2);
+    steps(&mut core, 2);
+
+    let crate_row = |core: &GameCore| {
+        let state = core.state();
+        let map = state.map.as_ref().expect("карта загружена");
+        let rows = map.dynamic_map_data(&state.world, true, false);
+        let (_, fields) = rows.first().expect("ящик площадки — первый в списке");
+
+        fields.clone()
+    };
+    let level_of_crate = |row: &[FieldValue]| match row[4] {
+        FieldValue::U8(level) => level,
+        _ => panic!("поле level строки динамики должно быть u8"),
+    };
+    let z_of_crate = |row: &[FieldValue]| match row[3] {
+        FieldValue::F32(z) => z,
+        _ => panic!("поле z строки динамики должно быть f32"),
+    };
+
+    assert_eq!(
+        level_of_crate(&crate_row(&core)),
+        2,
+        "ящик стоит на верхней площадке"
+    );
+
+    core.apply_input(1, 1, "down", "fire");
+    steps(&mut core, 400);
+
+    let after = crate_row(&core);
+
+    assert_eq!(
+        level_of_crate(&after),
+        1,
+        "вытолкнутый ящик приземлился на плиту террасы, а не на землю"
+    );
+    assert_eq!(z_of_crate(&after), 1.0, "и его высота — ровно уровень 1");
 }

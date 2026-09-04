@@ -26,12 +26,14 @@
 use std::any::Any;
 
 use indexmap::IndexMap;
+use rapier2d::prelude::Group;
 
 use vimp_engine_core::client::game::PredictedRow;
 use vimp_engine_core::client::interpolator::InterpolatedGame;
 use vimp_engine_core::client::raycast::Box2;
 use vimp_engine_core::client::rigid_body::{Body, MAP_SURFACE, Surface, integrate};
 use vimp_engine_core::client::unpack::DecodedSnapshot;
+use vimp_engine_core::map::{BodyLevelState, body_collision_mask};
 use vimp_engine_core::physics::normalize_angle;
 
 /// Насколько раздувается OBB своего танка при проверке захвата: контакт
@@ -100,8 +102,15 @@ pub struct PredictedBody {
     pub last_server: ServerState,
     /// Уровень тела на 2.5D-карте: контакты считаются только между телами,
     /// чьи маски уровней пересекаются. Заполняют подсистемы (`MapDynamics`
-    /// — из карты, `RemoteTanks` — из строки кадра); по умолчанию земля.
+    /// — из карты и строки кадра, `RemoteTanks` — из строки кадра); по
+    /// умолчанию земля.
     pub level: u8,
+    /// Высота тела и фаза его падения — вместе с `level` это
+    /// `BodyLevelState` движка. Ведёт их `MapDynamics`: тело карты, у
+    /// которого кончилась плита, обязано падать у зрителя по той же
+    /// траектории, что на хосте.
+    pub z: f32,
+    pub falling: Option<(u8, f32)>,
 }
 
 impl PredictedBody {
@@ -130,6 +139,8 @@ impl PredictedBody {
                 ..ServerState::default()
             },
             level: 0,
+            z: 0.0,
+            falling: None,
         }
     }
 
@@ -155,6 +166,30 @@ impl PredictedBody {
             y: self.body.y + self.error.y,
             angle: self.body.angle + self.error.angle,
         }
+    }
+
+    /// Состояние уровня тела в виде движковой структуры: правила уровня у
+    /// реплики и у хоста обязаны быть ОДНОЙ функцией (`step_body_level`).
+    pub fn level_state(&self) -> BodyLevelState {
+        BodyLevelState {
+            level: self.level,
+            z: self.z,
+            falling: self.falling,
+        }
+    }
+
+    /// Обратная запись после шага правил уровня.
+    pub fn set_level_state(&mut self, state: BodyLevelState) {
+        self.level = state.level;
+        self.z = state.z;
+        self.falling = state.falling;
+    }
+
+    /// Маска уровней тела: то же правило, что у хоста
+    /// (`map::body_collision_mask`) — падающее тело видит только статику,
+    /// иначе оно цеплялось бы за танки, которых на хосте не касается.
+    pub fn collision_mask(&self) -> Group {
+        body_collision_mask(&self.level_state())
     }
 
     /// Отмечает контакт — продлевает удержание тела в предсказании

@@ -52,6 +52,21 @@ export default class ShotEffectController extends Container {
     this._assets = assets;
     this._soundManager = dependencies.soundManager;
     this._mapDynamics = dependencies.mapDynamics || null;
+    this._levelView = dependencies.levelView || null;
+
+    // трассер и осколки уступают видимость игроку под плитой ровно так же,
+    // как всё остальное на верхнем уровне (единая формула — в levelView).
+    // `onRender` — аксессор Container, назначается свойством
+    if (this._levelView) {
+      this.onRender = () => {
+        this.alpha = this._levelView.alphaFor(
+          this.endLevel,
+          this.endPositionX,
+          this.endPositionY,
+        );
+        this.tint = this._levelView.tintFor(this.endLevel);
+      };
+    }
 
     this.tracer = null;
     this.impact = null;

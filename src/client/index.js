@@ -21,7 +21,7 @@ export default {
 
   // см. комментарий в src/host/index.js: обе половины плагина обязаны
   // объявлять одинаковый список возможностей
-  requires: ['map.layers'],
+  requires: ['map.layers', 'map.levelsN'],
 
   // wasmUrl — из GameManifest.entries.wasm (общий с host-плагином ассет)
   async createClientCore(clientConfigJson, { wasmUrl }) {

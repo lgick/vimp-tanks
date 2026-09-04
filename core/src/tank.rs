@@ -2,7 +2,7 @@ use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
-use crate::config::{KeyConfig, ModelConfig, PanelValue, WeaponConfig};
+use crate::config::{KeyConfig, LevelRules, ModelConfig, PanelValue, WeaponConfig};
 use crate::level::LevelState;
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
@@ -403,6 +403,7 @@ impl Tank {
         model: &ModelConfig,
         weapons: &indexmap::IndexMap<String, WeaponConfig>,
         bits: &PlayerKeyBits,
+        rules: &LevelRules,
         rng: &mut Rng,
         events: &mut Vec<CoreEvent>,
     ) -> Option<ShotCommand> {
@@ -468,13 +469,19 @@ impl Tank {
 
         body.apply_impulse(sideways_vec, true);
 
-        // импульс тяги/торможения: ускорение · масса · dt
+        // импульс тяги/торможения: ускорение · масса · dt. Уклон берётся
+        // из состояния уровня — на рампе он тормозит подъём и разгоняет спуск
+        let grade = self
+            .level_state
+            .grade(forward_vec.x, forward_vec.y);
         let accel = motion::drive_accel(
             self.engine_throttle,
             forward,
             back,
             current_forward_speed,
+            grade,
             model,
+            rules,
         );
 
         if accel != 0.0 {
@@ -540,6 +547,9 @@ impl Tank {
             level,
             z: level as f32,
             transit: crate::level::Transit::Grounded,
+            // клетка входа неизвестна: снап уровня — не проезд, и гейт рампы
+            // обязан судить вход по первому НАСТОЯЩЕМУ шагу
+            ..LevelState::default()
         };
     }
 
@@ -630,9 +640,13 @@ impl Tank {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PanelValue;
+    use crate::config::{LevelRules, PanelValue};
     use crate::level::Transit;
     use indexmap::IndexMap;
+
+    fn rules() -> LevelRules {
+        LevelRules::default()
+    }
 
     fn model() -> ModelConfig {
         serde_json::from_value(serde_json::json!({
@@ -718,6 +732,7 @@ mod tests {
         tank.level_state.transit = Transit::Falling {
             elapsed: 0.0,
             from: 1,
+            to: 0,
         };
 
         let body = &mut world.bodies[tank.body];
@@ -727,6 +742,7 @@ mod tests {
             &model(),
             &weapons(),
             &bits,
+            &rules(),
             &mut rng,
             &mut events,
         );
@@ -745,6 +761,7 @@ mod tests {
             &model(),
             &weapons(),
             &bits,
+            &rules(),
             &mut rng,
             &mut events,
         );
@@ -761,9 +778,11 @@ mod tests {
             level: 1,
             z: 0.456,
             transit: Transit::Ramp {
-                entered_at: 0.0,
-                from_level: 0,
+                climbing: true,
+                low: 0,
+                high: 1,
             },
+            ..LevelState::default()
         };
 
         let row = tank.snapshot_row(&world.bodies[tank.body], 2.0);

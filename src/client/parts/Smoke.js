@@ -2,6 +2,7 @@ import { Container, ParticleContainer, Rectangle, Ticker } from 'pixi.js';
 import ParticlePool from './ParticlePool.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
+import { createGradeTracker } from '../grade.js';
 import {
   M1_X,
   M1_Y,
@@ -11,6 +12,7 @@ import {
   M1_ENGINE_LOAD,
   M1_CONDITION,
   M1_SIZE,
+  M1_Z,
   M1_LEVEL,
 } from '../snapshotFields.js';
 
@@ -72,8 +74,28 @@ const SMOKE_CONFIG = {
   burstParticleCount: 3,
 };
 
+// Пыль из-под гусениц на подъёме: подсказка «танк едет в горку», видная и
+// на чужой машине. Частицы те же, что у дыма (общий пул и ParticleContainer),
+// отличаются светлым цветом, короткой жизнью и точкой рождения — под корпусом
+const DUST_CONFIG = {
+  // ниже этого уклона пыли нет: на ровной земле она была бы только шумом
+  minGrade: 0.05,
+
+  // частиц в секунду на полном уклоне
+  spawnRate: 45,
+
+  lifetime: { min: 300, max: 700 },
+  startAlpha: 0.22,
+  startSizeFactor: 0.5,
+  endSizeFactor: 1.6,
+  color: 0xbfae94,
+
+  // разлёт в стороны от точки под корпусом
+  sideSpeed: 40,
+};
+
 export default class Smoke extends Container {
-  constructor(data, assets) {
+  constructor(data, assets, dependencies = {}) {
     super();
 
     this._level = data[M1_LEVEL] || 0;
@@ -102,6 +124,27 @@ export default class Smoke extends Container {
     );
 
     this._particles = [];
+
+    // уклон под танком: схема `m1` его не везёт, клиент считает из z
+    this._grade = createGradeTracker();
+    this._gradeValue = 0;
+    this._dustTimeSinceSpawn = 0;
+    this._grade.update(this._emitterX, this._emitterY, data[M1_Z] || 0);
+
+    // прозрачность над игроком и затемнение под ним — общая формула
+    // levelView. `onRender` — аксессор Container, назначается свойством
+    this._levelView = dependencies.levelView || null;
+
+    if (this._levelView) {
+      this.onRender = () => {
+        this.alpha = this._levelView.alphaFor(
+          this._level,
+          this._emitterX,
+          this._emitterY,
+        );
+        this.tint = this._levelView.tintFor(this._level);
+      };
+    }
 
     this._particleContainer = new ParticleContainer({
       texture: this._smokeTexture,
@@ -143,6 +186,12 @@ export default class Smoke extends Container {
     this._emitterVY = data[M1_VY];
     this._engineLoad = data[M1_ENGINE_LOAD];
     this._condition = data[M1_CONDITION];
+
+    this._gradeValue = this._grade.update(
+      this._emitterX,
+      this._emitterY,
+      data[M1_Z] || 0,
+    );
 
     this._particleContainer.boundsArea.x = this._emitterX - BOUNDS_PADDING;
     this._particleContainer.boundsArea.y = this._emitterY - BOUNDS_PADDING;
@@ -224,6 +273,8 @@ export default class Smoke extends Container {
       this._timeSinceLastSpawn = 0;
     }
 
+    this._updateDust(deltaMs);
+
     // предварительный расчет трения
     const frictionFactor = Math.pow(SMOKE_CONFIG.airResistance, deltaMs / 16.0);
     const oneMinusFriction = 1 - frictionFactor;
@@ -277,6 +328,65 @@ export default class Smoke extends Container {
       view.alpha = currentAlpha;
       view.rotation += particle.rotSpeed * deltaTime;
     }
+  }
+
+  // пыль рождается, только пока танк ПОДНИМАЕТСЯ: на спуске гусеницы её не
+  // выбивают, а знак уклона — единственное, что отличает горку от склона
+  _updateDust(deltaMs) {
+    if (this._condition === 0 || this._gradeValue <= DUST_CONFIG.minGrade) {
+      this._dustTimeSinceSpawn = 0;
+
+      return;
+    }
+
+    this._dustTimeSinceSpawn += deltaMs;
+
+    const interval = 1000 / DUST_CONFIG.spawnRate;
+
+    while (this._dustTimeSinceSpawn >= interval) {
+      this._spawnDust();
+      this._dustTimeSinceSpawn -= interval;
+    }
+  }
+
+  _spawnDust() {
+    const angle = this._emitterRotation;
+    const cosBack = Math.cos(angle + Math.PI);
+    const sinBack = Math.sin(angle + Math.PI);
+    const spawnX = this._emitterX + cosBack * this._height * 0.3;
+    const spawnY = this._emitterY + sinBack * this._height * 0.3;
+    const side = DUST_CONFIG.sideSpeed;
+
+    const view = ParticlePool.get(this._smokeTexture);
+    const startScale =
+      DUST_CONFIG.startSizeFactor *
+      this._particleScaleMultiplier *
+      this._textureScale;
+
+    view.tint = DUST_CONFIG.color;
+    view.x = spawnX;
+    view.y = spawnY;
+    view.alpha = DUST_CONFIG.startAlpha;
+    view.scaleX = startScale;
+    view.scaleY = startScale;
+    view.rotation = randomRange(0, Math.PI * 2);
+
+    this._particles.push({
+      view,
+      x: spawnX,
+      y: spawnY,
+      vx: cosBack * side + randomRange(-side, side),
+      vy: sinBack * side + randomRange(-side, side),
+      age: 0,
+      lifetime: randomRange(DUST_CONFIG.lifetime.min, DUST_CONFIG.lifetime.max),
+      startSizeFactor: DUST_CONFIG.startSizeFactor,
+      endSizeFactor: DUST_CONFIG.endSizeFactor,
+      startAlpha: DUST_CONFIG.startAlpha,
+      endAlpha: SMOKE_CONFIG.particleEndAlpha,
+      rotSpeed: randomRange(-1, 1),
+    });
+
+    this._particleContainer.addParticle(view);
   }
 
   spawnParticle(streamIndex, numStreams, isBurst = false) {
