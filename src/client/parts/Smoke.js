@@ -2,6 +2,17 @@ import { Container, ParticleContainer, Rectangle, Ticker } from 'pixi.js';
 import ParticlePool from './ParticlePool.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
+import {
+  M1_X,
+  M1_Y,
+  M1_ANGLE,
+  M1_VX,
+  M1_VY,
+  M1_ENGINE_LOAD,
+  M1_CONDITION,
+  M1_SIZE,
+  M1_LEVEL,
+} from '../snapshotFields.js';
 
 // базовый zIndex дыма внутри своего уровня
 const SMOKE_BASE_Z = 4;
@@ -65,7 +76,7 @@ export default class Smoke extends Container {
   constructor(data, assets) {
     super();
 
-    this._level = data[12] || 0;
+    this._level = data[M1_LEVEL] || 0;
     this.zIndex = levelZ(SMOKE_BASE_Z, this._level);
 
     const { texture, contentSize } = assets.smokeTexture;
@@ -73,15 +84,15 @@ export default class Smoke extends Container {
     this._smokeTexture = texture;
     this._textureScale = SMOKE_PARTICLE_BASE_SIZE / contentSize;
 
-    this._emitterX = data[0];
-    this._emitterY = data[1];
-    this._emitterRotation = data[2];
-    this._emitterVX = data[4];
-    this._emitterVY = data[5];
-    this._engineLoad = data[6];
-    this._condition = data[7];
+    this._emitterX = data[M1_X];
+    this._emitterY = data[M1_Y];
+    this._emitterRotation = data[M1_ANGLE];
+    this._emitterVX = data[M1_VX];
+    this._emitterVY = data[M1_VY];
+    this._engineLoad = data[M1_ENGINE_LOAD];
+    this._condition = data[M1_CONDITION];
 
-    this._size = data[8];
+    this._size = data[M1_SIZE];
     this._width = this._size * 4;
     this._height = this._size * 3;
 
@@ -117,7 +128,7 @@ export default class Smoke extends Container {
 
   update(data) {
     const prevCondition = this._condition;
-    const level = data[12] || 0;
+    const level = data[M1_LEVEL] || 0;
 
     // танк переехал на эстакаду — дым едет за ним на её слой
     if (level !== this._level) {
@@ -125,13 +136,13 @@ export default class Smoke extends Container {
       this.zIndex = levelZ(SMOKE_BASE_Z, level);
     }
 
-    this._emitterX = data[0];
-    this._emitterY = data[1];
-    this._emitterRotation = data[2];
-    this._emitterVX = data[4];
-    this._emitterVY = data[5];
-    this._engineLoad = data[6];
-    this._condition = data[7];
+    this._emitterX = data[M1_X];
+    this._emitterY = data[M1_Y];
+    this._emitterRotation = data[M1_ANGLE];
+    this._emitterVX = data[M1_VX];
+    this._emitterVY = data[M1_VY];
+    this._engineLoad = data[M1_ENGINE_LOAD];
+    this._condition = data[M1_CONDITION];
 
     this._particleContainer.boundsArea.x = this._emitterX - BOUNDS_PADDING;
     this._particleContainer.boundsArea.y = this._emitterY - BOUNDS_PADDING;

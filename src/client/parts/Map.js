@@ -8,6 +8,11 @@ import {
 } from 'pixi.js';
 import { degToRad } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
+import {
+  C_X,
+  C_Y,
+  C_ANGLE,
+} from '../snapshotFields.js';
 
 // доля непрозрачности плиты, когда локальный игрок под ней
 const UNDER_BRIDGE_ALPHA = 0.4;
@@ -76,11 +81,22 @@ export default class Map extends Container {
       this._map = data.map;
       this._tiles = data.tiles;
       this._level = data.level || 0;
-      this._solid = data.solid || data.physicsStatic || [];
       this._floor = data.floor || [];
       this._spriteSheetData = data.spriteSheet;
       this._step = data.step;
       this.zIndex = levelZ(Number(data.layer) || 1, this._level);
+
+      // прозрачность считает только плита моста: вешать колбэк на слои
+      // уровня 0 значило бы звать его каждый кадр на каждый статический
+      // слой ради выхода по первой же строке.
+      //
+      // `onRender` у Container — аксессор, а не метод: присваивание здесь
+      // проходит через его сеттер (в конструкторе renderGroup ещё null, но
+      // RenderGroup.addChild сам подхватит `_onRender` при добавлении на
+      // сцену)
+      if (this._level >= 1) {
+        this.onRender = () => this._updateSeeThrough();
+      }
 
       this.createStatic();
     }
@@ -198,9 +214,14 @@ export default class Map extends Container {
 
   // прозрачность плиты моста над локальным игроком: в GTA 2 игрок под
   // эстакадой продолжает видеть свою машину. Считается по НАШЕМУ гриду
-  // уровня: парт уже знает и карту слоя, и список тайлов пола
-  onRender() {
-    if (this._level < 1 || !this._levelView || !this.mapSprite) {
+  // уровня: парт уже знает и карту слоя, и список тайлов пола.
+  //
+  // Зовётся из колбэка `onRender`, который конструктор кладёт СВОЙСТВОМ
+  // (см. там же): метод с этим именем на прототипе подкласса затенил бы
+  // аксессор Container.prototype.onRender, сеттер не отработал бы и PixiJS
+  // не позвал бы ничего — фича молча мертва
+  _updateSeeThrough() {
+    if (!this._levelView || !this.mapSprite) {
       return;
     }
 
@@ -230,9 +251,9 @@ export default class Map extends Container {
 
   update(data) {
     if (this.sprite) {
-      this.sprite.x = data[0] / this.scale.x;
-      this.sprite.y = data[1] / this.scale.y;
-      this.sprite.rotation = data[2];
+      this.sprite.x = data[C_X] / this.scale.x;
+      this.sprite.y = data[C_Y] / this.scale.y;
+      this.sprite.rotation = data[C_ANGLE];
     }
   }
 
@@ -273,7 +294,6 @@ export default class Map extends Container {
     this._assetUrl = null;
     this._map = null;
     this._tiles = null;
-    this._solid = null;
     this._floor = null;
     this._spriteSheetData = null;
     this._renderer = null;

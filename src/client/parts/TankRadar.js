@@ -1,5 +1,12 @@
 import { Container, Sprite } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
+import {
+  M1_X,
+  M1_Y,
+  M1_CONDITION,
+  M1_TEAM,
+  M1_LEVEL,
+} from '../snapshotFields.js';
 
 // базовый zIndex маркера на радаре внутри своего уровня
 const TANK_RADAR_BASE_Z = 2;
@@ -10,7 +17,7 @@ export default class TankRadar extends Container {
 
     // 2.5D: маркер танка с эстакады лежит над маркерами земли. Отдельного
     // знака уровня у чужого танка пока нет (отложено, plan/README.md)
-    this._level = data[12] || 0;
+    this._level = data[M1_LEVEL] || 0;
     this.zIndex = levelZ(TANK_RADAR_BASE_Z, this._level);
 
     this._textures = assets.tankRadarTexture;
@@ -23,10 +30,10 @@ export default class TankRadar extends Container {
     // параметры с сервера:
     // [x, y, rotation, gunRotation, vX, vY,
     // engineLoad, condition, size, teamId]
-    this.x = data[0] || 0;
-    this.y = data[1] || 0;
-    this._condition = data[7];
-    this._teamId = data[9];
+    this.x = data[M1_X] || 0;
+    this.y = data[M1_Y] || 0;
+    this._condition = data[M1_CONDITION];
+    this._teamId = data[M1_TEAM];
 
     // масштаб контейнера
     this.scale.set(5, 5);
@@ -49,18 +56,18 @@ export default class TankRadar extends Container {
   }
 
   update(data) {
-    this.x = data[0];
-    this.y = data[1];
+    this.x = data[M1_X];
+    this.y = data[M1_Y];
 
-    const level = data[12] || 0;
+    const level = data[M1_LEVEL] || 0;
 
     if (level !== this._level) {
       this._level = level;
       this.zIndex = levelZ(TANK_RADAR_BASE_Z, level);
     }
 
-    const newCondition = data[7];
-    const teamId = data[9];
+    const newCondition = data[M1_CONDITION];
+    const teamId = data[M1_TEAM];
     let needsVisualChange = false;
 
     if (newCondition !== undefined && newCondition !== this._condition) {

@@ -417,10 +417,7 @@ impl BotBrain {
         if let Some(my) = self.my_position {
             let distance_sq = dist_sq(my, next.pos);
 
-            if distance_sq < reach * reach
-                || (self.my_level == next.level
-                    && distance_sq < MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE)
-            {
+            if distance_sq < reach * reach {
                 self.path_index += 1;
             }
         }
@@ -598,9 +595,7 @@ impl BotBrain {
                 self.my_level,
             );
 
-            if crate::shot_levels::level_at_distance(&segments, direction.length())
-                != Some(target_level)
-            {
+            if !crate::shot_levels::covers_level(&segments, direction.length(), target_level) {
                 return;
             }
         }
@@ -819,7 +814,7 @@ mod tests {
     use super::*;
 
     use indexmap::IndexMap;
-    use vimp_engine_core::map::{MapLevelConfig, MapLevels, RampConfig, RampDir};
+    use vimp_engine_core::map::{MapConfig, MapLevels};
     use vimp_engine_core::nav::navigation::NavigationSystem;
     use vimp_engine_core::nav::spatial::{SpatialEntity, SpatialGrid};
     use vimp_engine_core::rng::Rng;
@@ -831,54 +826,16 @@ mod tests {
 
     const TILE: f32 = 32.0;
 
-    /// Копия tests/core/fixtures/layered.json: 20×20, стены по периметру,
-    /// рампа на восток (строка 9, колонки 6..9) и мост (тайл 2) в
-    /// колонках 10..12, строках 5..14.
+    /// Фикстура tests/core/fixtures/layered.json (та же карта, что у
+    /// JS-тестов ядра): 20×20, стены по периметру, рампа на восток
+    /// (строка 9, колонки 6..9) и мост (тайл 2) в колонках 10..12,
+    /// строках 5..14.
     fn levels() -> MapLevels {
-        let mut grid0 = vec![vec![0; 20]; 20];
+        let cfg: MapConfig =
+            serde_json::from_str(include_str!("../../../tests/core/fixtures/layered.json"))
+                .unwrap();
 
-        for col in 0..20 {
-            grid0[0][col] = 1;
-            grid0[19][col] = 1;
-        }
-
-        for row in grid0.iter_mut() {
-            row[0] = 1;
-            row[19] = 1;
-        }
-
-        for col in 6..10 {
-            grid0[9][col] = 3;
-        }
-
-        let mut grid1 = vec![vec![0; 20]; 20];
-
-        for row in grid1.iter_mut().take(15).skip(5) {
-            for cell in row.iter_mut().take(13).skip(10) {
-                *cell = 2;
-            }
-        }
-
-        let mut configs: IndexMap<String, MapLevelConfig> = IndexMap::new();
-
-        configs.insert(
-            "1".to_string(),
-            MapLevelConfig {
-                map: grid1,
-                floor: vec![2],
-                walls: Vec::new(),
-                layers: IndexMap::new(),
-            },
-        );
-
-        let ramps = [RampConfig {
-            tile: 3,
-            dir: RampDir::East,
-            from: 0,
-            to: 1,
-        }];
-
-        MapLevels::build(&grid0, &[1], &configs, &ramps, TILE)
+        MapLevels::build(&cfg.map, &cfg.physics_static, &cfg.levels, &cfg.ramps, TILE)
     }
 
     fn model() -> ModelConfig {
@@ -1122,6 +1079,27 @@ mod tests {
         assert!(
             fires_within(&mut fixture, &mut brain, 100),
             "цель на открытой кромке достижима с земли"
+        );
+    }
+
+    #[test]
+    fn bot_fires_at_a_ground_enemy_inside_the_probe_window() {
+        let mut fixture = Fixture::new();
+
+        // оба на земле, но враг стоит ПОД кромкой плиты: на этой
+        // дистанции луч везёт и сегмент уровня 1 (проба), и свой
+        // наземный — «максимум уровня» запрещал бы выстрел
+        fixture.add_tank(1, 1, 200.0, 208.0, 0);
+        fixture.add_tank(2, 2, 336.0, 208.0, 0);
+
+        let mut brain = brain_at(1, [200.0, 208.0], 0);
+
+        brain.state = BotState::Attacking;
+        brain.target = Some(2);
+
+        assert!(
+            fires_within(&mut fixture, &mut brain, 100),
+            "наземная цель в окне пробы должна обстреливаться"
         );
     }
 

@@ -2,6 +2,17 @@ import { Container } from 'pixi.js';
 import TracerEffect from './TracerEffect.js';
 import ImpactEffect from './ImpactEffect.js';
 import { levelZ } from '../../../levelZ.js';
+import {
+  W1_START_X,
+  W1_START_Y,
+  W1_END_X,
+  W1_END_Y,
+  W1_BODY_X,
+  W1_BODY_Y,
+  W1_WAS_HIT,
+  W1_END_LEVEL,
+  W1_ANCHOR,
+} from '../../../snapshotFields.js';
 
 // базовый zIndex трассера и осколков внутри своего уровня
 const SHOT_BASE_Z = 2;
@@ -10,32 +21,32 @@ export default class ShotEffectController extends Container {
   constructor(data, assets, dependencies) {
     super();
 
-    this.startPositionX = data[0];
-    this.startPositionY = data[1];
-    this.endPositionX = data[2];
-    this.endPositionY = data[3];
-    this.soundPositionX = data[4];
-    this.soundPositionY = data[5];
-    this.hit = data[6];
+    this.startPositionX = data[W1_START_X];
+    this.startPositionY = data[W1_START_Y];
+    this.endPositionX = data[W1_END_X];
+    this.endPositionY = data[W1_END_Y];
+    this.soundPositionX = data[W1_BODY_X];
+    this.soundPositionY = data[W1_BODY_Y];
+    this.hit = data[W1_WAS_HIT];
 
-    // 2.5D: уровни начала (data[8]) и конца (data[9]) луча. Трассер
-    // рисуется целиком на уровне КОНЦА — ломать линию на кромке плиты
-    // отложено (plan/README.md), а осколки обязаны лежать там же, где
-    // луч закончился, иначе они провалятся под мост
-    this.startLevel = data[8] || 0;
-    this.endLevel = data[9] || 0;
+    // 2.5D: трассер рисуется целиком на уровне КОНЦА луча — ломать линию
+    // на кромке плиты отложено (plan/README.md), а осколки обязаны лежать
+    // там же, где луч закончился, иначе они провалятся под мост. Уровень
+    // начала (`W1_START_LEVEL`) кадром приходит, но до разлома линии он
+    // здесь не нужен — читать его нечем
+    this.endLevel = data[W1_END_LEVEL] || 0;
     this.zIndex = levelZ(SHOT_BASE_Z, this.endLevel);
 
     // якорь попадания в динамику карты — одиннадцатый элемент строки, только
     // у своего локально предсказанного трассера (см. build_tracer в
     // core/src/client/shot.rs); авторитетные трассеры (длина 10) его не
-    // несут — data[10] === undefined
+    // несут — data[W1_ANCHOR] === undefined
     this.anchorKey = null;
     this.anchorLocalX = 0;
     this.anchorLocalY = 0;
 
-    if (Array.isArray(data[10])) {
-      [this.anchorKey, this.anchorLocalX, this.anchorLocalY] = data[10];
+    if (Array.isArray(data[W1_ANCHOR])) {
+      [this.anchorKey, this.anchorLocalX, this.anchorLocalY] = data[W1_ANCHOR];
     }
 
     this._assets = assets;

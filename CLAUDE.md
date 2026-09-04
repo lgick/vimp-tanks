@@ -88,6 +88,11 @@ Vitest (`tanks` + `integration` projects, see `vitest.config.js`) +
 cargo suite — run `npm run core:test` after any change to `core/`'s motion
 or `src/data/models.js`.
 
+Two rules: a part relying on a PixiJS callback (`onRender` — an accessor on
+`Container.prototype`) must be tested for *registration* (`part._onRender`),
+not only by calling the body; and debug scenarios (`tests/scenarios/*.json`)
+assert no game rules — such claims belong in `core/tests/sim.rs`.
+
 ## Deployment
 
 This repo has no deployment of its own — it publishes `@vimp-games/tanks` (npm,

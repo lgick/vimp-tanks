@@ -171,6 +171,27 @@ describe('Tank: уровни 2.5D', () => {
     expect(levelView.set).toHaveBeenCalledWith(1, 320, 640);
   });
 
+  // свой танк строится из FIRST_SHOT_DATA, то есть до первого бинарного
+  // кадра: в конструкторе `localPlayer.id` ещё null, и флаг, посчитанный
+  // один раз, был бы навсегда false
+  it('свой танк узнаётся, даже если localPlayer заполнился после создания', () => {
+    const levelView = makeLevelView();
+    let myId = null;
+    const tank = makeTankAt(0, {
+      levelView,
+      localPlayer: { is: id => myId !== null && String(id) === String(myId) },
+    });
+
+    tank.update(row(1, 1, 320, 640));
+
+    expect(levelView.set).not.toHaveBeenCalled();
+
+    myId = '1';
+    tank.update(row(1, 1, 320, 640));
+
+    expect(levelView.set).toHaveBeenCalledWith(1, 320, 640);
+  });
+
   it('чужой танк в levelView не пишет', () => {
     const levelView = makeLevelView();
     const tank = makeTankAt(0, {

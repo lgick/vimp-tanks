@@ -31,6 +31,7 @@ const TANK_FIELD_X: usize = 0;
 const TANK_FIELD_Y: usize = 1;
 const TANK_FIELD_ANGLE: usize = 2;
 const TANK_FIELD_SIZE: usize = 8;
+const TANK_FIELD_Z: usize = 11;
 const TANK_FIELD_LEVEL: usize = 12;
 
 fn field_f32(fields: &[FieldValue], i: usize) -> f32 {
@@ -67,6 +68,9 @@ struct TankTarget {
     size: f32,
     /// уровень корпуса: сегмент луча поражает только цели своего уровня
     level: u8,
+    /// высота корпуса: `z != level` означает переход между уровнями
+    /// (рампа), и такой танк на хосте держит коллизии обоих уровней
+    z: f32,
 }
 
 /// Геометрия предсказанного мира для raycast трассера: подсистемы живут
@@ -200,6 +204,7 @@ impl ShotPredictor {
                                         angle: field_f32(row, TANK_FIELD_ANGLE),
                                         size: field_u8(row, TANK_FIELD_SIZE) as f32,
                                         level: field_u8(row, TANK_FIELD_LEVEL),
+                                        z: field_f32(row, TANK_FIELD_Z),
                                     },
                                 );
                             }
@@ -230,6 +235,7 @@ impl ShotPredictor {
                         angle: field_f32(&row.fields, TANK_FIELD_ANGLE),
                         size: field_u8(&row.fields, TANK_FIELD_SIZE) as f32,
                         level: field_u8(&row.fields, TANK_FIELD_LEVEL),
+                        z: field_f32(&row.fields, TANK_FIELD_Z),
                     },
                 );
             }
@@ -609,7 +615,7 @@ impl ShotPredictor {
         }
 
         // уровень конца луча: у попадания — уровень цели, у промаха —
-        // уровень последнего сегмента (луч с моста «падает» за кромкой)
+        // уровень сегмента на конце луча (луч с моста «падает» за кромкой)
         let end_level = match &hit {
             Some((_, _, level)) => *level,
             None => self.miss_level(muzzle, direction, range, start_level),
@@ -637,16 +643,17 @@ impl ShotPredictor {
         tracer
     }
 
-    // уровень, на котором луч закончился без попадания: последний сегмент
-    // разбиения (для одноуровневой карты — уровень стрелка)
+    // уровень, на котором луч закончился без попадания: сегмент,
+    // действующий на `t = range` (для одноуровневой карты — уровень
+    // стрелка). Зеркало `TanksSim::process_hitscan`
     fn miss_level(&self, origin: [f32; 2], dir: [f32; 2], range: f32, shooter_level: u8) -> u8 {
         let Some(levels) = &self.levels else {
             return shooter_level;
         };
 
-        crate::shot_levels::ray_segments(levels, origin, dir, range, shooter_level)
-            .last()
-            .map_or(shooter_level, |segment| segment.level)
+        let segments = crate::shot_levels::ray_segments(levels, origin, dir, range, shooter_level);
+
+        crate::shot_levels::level_at_distance(&segments, range).unwrap_or(shooter_level)
     }
 
     // ближайшее пересечение со стенами, динамикой карты и танками (кроме
@@ -755,22 +762,34 @@ impl ShotPredictor {
             }
 
             for (id, tank) in &self.tanks {
-                if *id == my_id || tank.level != level {
+                if *id == my_id {
+                    continue;
+                }
+
+                // один источник факта: если корпус есть в предсказанном
+                // мире, уровень и OBB берутся оттуда, а строка кадра —
+                // только запасной путь для ещё не предсказанных танков
+                let sim = sim_tanks.iter().find(|(sim_id, _, _)| sim_id == id);
+                let tank_level = sim.map_or(tank.level, |(_, _, level)| *level);
+
+                // танк на рампе на хосте держит коллизии ОБОИХ уровней
+                // (`Transit::Ramp`), а строка кадра везёт один дискретный
+                // уровень; признак перехода выводится из высоты — так
+                // предсказанное попадание совпадает с авторитетным
+                let in_transit = (tank.z - tank_level as f32).abs() > 1e-3;
+
+                if tank_level != level && !in_transit {
                     continue;
                 }
 
                 // габариты танка: width = size·4, height = size·3 (как Tank)
-                let obb = sim_tanks
-                    .iter()
-                    .find(|(sim_id, _, _)| sim_id == id)
-                    .map(|(_, obb, _)| *obb)
-                    .unwrap_or(Box2 {
-                        x: tank.x,
-                        y: tank.y,
-                        angle: tank.angle,
-                        half_w: tank.size * 2.0,
-                        half_h: tank.size * 1.5,
-                    });
+                let obb = sim.map(|(_, obb, _)| *obb).unwrap_or(Box2 {
+                    x: tank.x,
+                    y: tank.y,
+                    angle: tank.angle,
+                    half_w: tank.size * 2.0,
+                    half_h: tank.size * 1.5,
+                });
 
                 consider(
                     ray_vs_box(seg_origin, dir, length, &obb).map(|d| d + segment.t0),
@@ -1373,6 +1392,41 @@ mod tests {
 
         assert_eq!(tracer[6], Value::Bool(false), "{tracer:?}");
         assert_eq!(tracer[8].as_u64(), Some(0), "startLevel");
+    }
+
+    #[test]
+    fn ground_tracer_hits_the_tank_in_transit() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &layered_shot_map());
+
+        // тот же танк в той же клетке, но в переходе (z = 0.5 при level 1):
+        // на хосте он держит коллизии обоих уровней, значит наземный
+        // сегмент луча обязан его доставать
+        use vimp_engine_core::client::unpack::DecodedBlock;
+
+        let mut row = bridge_tank_row(55.0, 5.0);
+
+        row[11] = FieldValue::F32(0.5);
+
+        let mut items = IndexMap::new();
+
+        items.insert(2u8, Some(row));
+
+        shot.update_world(&DecodedSnapshot {
+            blocks: vec![DecodedBlock {
+                key: "m1".to_string(),
+                key_id: 1,
+                data: BlockData::Indexed8(items),
+            }],
+        });
+
+        let spawn = shot
+            .try_fire(&render_at_level(5.0, 5.0, 0), 1, 0.0, ShotWorld::default())
+            .unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6], Value::Bool(true), "{tracer:?}");
     }
 
     // строка чужого танка уровня 1 (size 2 → корпус 8×6, живой)

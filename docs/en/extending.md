@@ -50,7 +50,19 @@ holds the transitions). Each level brings its own `layers`, over its own
   the tile in front of it free.
 - **Cap the ends of the bridge with railings.** Level-0 walls are no
   obstacle to a tank on the slab, so a bridge that simply ends drops the
-  driver into the void beyond the map border.
+  driver into the void beyond the map border. This one is checked: a slab
+  cell may only have an open edge where the fall lands on walkable ground
+  (a level-0 cell inside the grid that is not in `physicsStatic`) — that is
+  a ledge. An edge over the map border or over a wall is rejected.
+- **A ramp has to arrive somewhere.** The cell past the top end of a ramp
+  run must be drivable surface of the level it climbs to (`floor` without a
+  railing). A ramp into the void is rejected: a tank would reach the top
+  and fall in the same step, and both the climb and the fall are normal
+  rules, so nothing would say a word.
+- **Every wall tile must be named by a render layer** — `physicsStatic`
+  tiles by `layers`, a level's `walls` by that level's `layers`. The radar
+  draws walls from the layer that lists them, so a wall no layer names is
+  solid in physics and absent from the radar. Also checked.
 - **Keep ground respawn points from under the slab.** A point without the
   4th element takes its level from the geometry, so one under the bridge
   spawns the tank on the bridge. Put an explicit `0` there, or move the
@@ -76,14 +88,20 @@ Step by step, the way `overpass.js` was built:
 ```bash
 npm test -- --silent          # tests/config/game.test.js checks tiles and respawns
 npm run build                 # export + manifest (a missing image stops it)
-npx vimp-contract             # rule E4 — structure of the layered fields
+npx vimp-contract             # rules E4/E5 — layered fields, walls on the radar
 npm run sim:scenarios         # bridge/fall/crosslevel/bots_bridge on overpass
 npm run dev                   # by eye: set room.map in src/standalone.js
 ```
 
 The core validates the same structure at load time and refuses a broken
 map, so a mistake is loud rather than silent — see
-[configuration.md](configuration.md#the-25d-fields-levels-ramps).
+[configuration.md](configuration.md#the-25d-fields-levels-ramps). The rules
+live in one place (`vimp_engine_core::map::validate_levels`) and run on both
+sides: the host on `load_map`, the client on `MAP_DATA` — the map arrives
+over the network, and a level grid that disagrees with the host's would
+otherwise desync prediction silently. The contract checker (`E4`) and the
+Rust validator share one corpus of cases
+(`vimp-engine/contract/fixtures/layered/`), so the two cannot drift apart.
 
 ## New map image
 
@@ -155,12 +173,17 @@ Steps:
    layout needs adding to the engine crate's `snapshot.rs` and mirroring
    in its client decoder `client/unpack.rs`, bumping the format version —
    that's an engine-repository change, coordinate there.
-6. Pass the **author's id** as the last element of the event/entity data
+6. Read the row through the named indices in
+   `src/client/snapshotFields.js` (`M1_LEVEL`, `W1_END_LEVEL`, …) instead
+   of a literal `data[12]`, and add the new key's constants there — the
+   frame is positional, and the schema in `src/config/snapshot.js` is the
+   only thing that fixes the order.
+7. Pass the **author's id** as the last element of the event/entity data
    (like `shooterId` for `w1` and `ownerId` for `w2`) — this game's client
    core (`core/src/client/shot.rs`) uses it to suppress authoritative
    duplicates of client-side spawns; it supports `hitscan`/`explosive`
    automatically from the weapon config.
-7. Add ammo to `src/config/game.js` (`panel`) and a panel key in
+8. Add ammo to `src/config/game.js` (`panel`) and a panel key in
    `src/config/client.js` (`modules.panel`).
 
 ## New sound

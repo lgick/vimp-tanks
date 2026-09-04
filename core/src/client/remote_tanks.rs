@@ -195,6 +195,46 @@ impl RemoteTanks {
 
         self.set.bodies().get(key)
     }
+
+    /// Авторитетное состояние известных тел из сырого кадра плюс уровень
+    /// корпуса: и то и другое живёт в одной строке, поэтому кадр обходится
+    /// один раз (реконсиляция зовёт `begin_reconcile`, контракт подсистемы —
+    /// `snapshot_bodies`).
+    fn snapshot_rows(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState, u8)> {
+        let mut entries = Vec::new();
+
+        for model_key in self.models.keys() {
+            let Some(BlockData::Indexed8(items)) = snapshot.block_by_key(model_key) else {
+                continue;
+            };
+
+            for (id, row) in items {
+                let Some(fields) = row else {
+                    continue;
+                };
+                let key = body_key(model_key, *id as u32);
+
+                if !self.set.bodies().contains_key(&key) {
+                    continue;
+                }
+
+                entries.push((
+                    key,
+                    ServerState {
+                        x: field_f32(fields, FIELD_X),
+                        y: field_f32(fields, FIELD_Y),
+                        angle: field_f32(fields, FIELD_ANGLE),
+                        vx: field_f32(fields, FIELD_VX),
+                        vy: field_f32(fields, FIELD_VY),
+                        angvel: field_f32(fields, FIELD_ANGVEL),
+                    },
+                    field_u8(fields, FIELD_LEVEL),
+                ));
+            }
+        }
+
+        entries
+    }
 }
 
 impl PredictedBodies for RemoteTanks {
@@ -302,70 +342,34 @@ impl PredictedBodies for RemoteTanks {
         self.meta.retain(|key, _| keep(key));
     }
 
-    /// Авторитетное состояние известных тел из сырого кадра (реконсиляция).
     fn snapshot_bodies(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState)> {
-        let mut entries = Vec::new();
-
-        for model_key in self.models.keys() {
-            let Some(BlockData::Indexed8(items)) = snapshot.block_by_key(model_key) else {
-                continue;
-            };
-
-            for (id, row) in items {
-                let Some(fields) = row else {
-                    continue;
-                };
-                let key = body_key(model_key, *id as u32);
-
-                if !self.set.bodies().contains_key(&key) {
-                    continue;
-                }
-
-                entries.push((
-                    key,
-                    ServerState {
-                        x: field_f32(fields, FIELD_X),
-                        y: field_f32(fields, FIELD_Y),
-                        angle: field_f32(fields, FIELD_ANGLE),
-                        vx: field_f32(fields, FIELD_VX),
-                        vy: field_f32(fields, FIELD_VY),
-                        angvel: field_f32(fields, FIELD_ANGVEL),
-                    },
-                ));
-            }
-        }
-
-        entries
+        self.snapshot_rows(snapshot)
+            .into_iter()
+            .map(|(key, state, _)| (key, state))
+            .collect()
     }
+
 
     /// Реконсиляция плюс уровень корпуса из того же СЫРОГО кадра:
     /// интерполированный сэмпл (`update`) отстаёт на буфер интерполяции, а
     /// маска коллизий переигранных шагов обязана совпадать с хостовой.
     fn begin_reconcile(&mut self, snapshot: &DecodedSnapshot) {
-        let entries = self.snapshot_bodies(snapshot);
-        let mut levels: Vec<(String, u8)> = Vec::new();
+        let rows = self.snapshot_rows(snapshot);
 
-        for model_key in self.models.keys() {
-            let Some(BlockData::Indexed8(items)) = snapshot.block_by_key(model_key) else {
-                continue;
-            };
-
-            for (id, row) in items {
-                let Some(fields) = row else {
-                    continue;
-                };
-
-                levels.push((body_key(model_key, *id as u32), field_u8(fields, FIELD_LEVEL)));
+        // уровень пишется до реконсиляции: переигранные шаги обязаны видеть
+        // авторитетную маску с первого же шага
+        for (key, _, level) in &rows {
+            if let Some(body) = self.set.bodies_mut().get_mut(key) {
+                body.level = *level;
             }
         }
+
+        let entries: Vec<(String, ServerState)> = rows
+            .into_iter()
+            .map(|(key, state, _)| (key, state))
+            .collect();
 
         self.set.begin_reconcile(&entries);
-
-        for (key, level) in levels {
-            if let Some(body) = self.set.bodies_mut().get_mut(&key) {
-                body.level = level;
-            }
-        }
     }
 
     /// Переводит в `Predicted` чужие танки, попавшие в раздутый OBB своего.

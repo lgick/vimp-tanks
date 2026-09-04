@@ -462,8 +462,8 @@ discrete `level` (`0` — ground, `1` — the overpass), the visual height
 | `Transit` | When | Collision mask | Input |
 | --- | --- | --- | --- |
 | `Grounded` | standing on its own level | that level only | normal |
-| `Ramp` | the hull's centre is on a ramp tile | **both** levels | normal |
-| `Falling` | drove off a ledge | empty — hits nothing | locked |
+| `Ramp { entered_at, from_level }` | the hull's centre is on a ramp tile | **both** levels | normal |
+| `Falling` | drove off a ledge | map walls only — no bodies | locked |
 
 `step_level()` is the single source of these rules for both sides: the
 authoritative path (`TanksSim::update_levels`) and the client replica call
@@ -473,11 +473,20 @@ the authoritative one.
 - **Ramps.** `z` follows the ramp's progress; `level` snaps at `z >= 0.5`.
   The snap costs nothing physically — on a ramp the mask already contains
   both levels — it only makes the state defined once the tank leaves the
-  ramp at either end.
+  ramp at either end. A run changes the level only for a tank that entered
+  it through the end matching its level, which is what `Ramp` remembers:
+  `entered_at` (the run's progress at the moment of entry) and `from_level`
+  (the level then). A tank that drove into a ramp cell from the side keeps
+  its level and treats the run as flat ground of that level — otherwise a
+  cell next to the top, reachable straight off the ground, would be a free
+  ride up past the ramp itself.
 - **Ledges.** A tank on level 1 over a tile with no slab enters `Falling`.
   The fall lasts `coreParams.levels.fallTime`, during which input is
-  ignored (held keys are picked up on landing) and the body collides with
-  nothing while coasting on inertia. On landing the tank is on level 0 and
+  ignored (held keys are picked up on landing) and the body carries the
+  `STATIC_LEVEL_GROUP` mask alone while coasting on inertia: the walls of
+  every level still stop it (at `maxForwardSpeed` a fall covers some seven
+  tiles, and without them the tank would land inside a building), while
+  tanks, crates, rays and blasts do not reach it. On landing the tank is on level 0 and
   takes `coreParams.levels.fallDamage`; a lethal landing emits
   `Death { victim, killer: victim }` — a suicide, so the engine's round
   meta awards no frag.
@@ -518,13 +527,26 @@ nothing on the wire and cannot fall out of sync with the position it is
 derived from. `LevelEvent::Landed` is ignored on the client — the damage is
 authoritative and arrives with the panel.
 
-The frame is still the last word: `track_frame` hands the row's `level` to
-`Predictor::correct_level`, which applies it **only while the replica is
-`Grounded`**. On a ramp the frame lags by the interpolation buffer, and a
-correction there would drag the climb back on every tick. An unfinished
-`Falling` is dropped before a reconciliation replay: the replay starts from
-the authoritative position, to which a fall from a discarded branch of the
-prediction does not belong.
+The frame is still the last word: `begin_reconcile` reads the local tank's
+`z`/`level` off the **raw** frame — the very one the replay starts from,
+rather than the interpolated sample, which lags by the buffer — and hands
+the pair to `Predictor::correct_level`. The level correction applies **only
+while the replica is `Grounded`**: on a ramp the replica runs ahead of the
+frame, and a correction there would drag the climb back on every tick. The
+fall, in contrast, is authoritative all the way through: instead of
+dropping an unfinished `Falling`, the reconciliation rebuilds its phase out
+of the frame's height (`level::fall_elapsed()` inverts the fall lerp of
+`step_level`). Otherwise the height of one's own tank would follow the
+length of the replay rather than the host's fall time — jerking on an RTT
+spike, and finishing the fall early on a long replay.
+
+The **first** frame is the exception: the engine sets the client's own
+`gameId` only after `begin_reconcile` (`client/game.rs`), so there is
+nothing yet to look the local tank's row up by. That one time, on the row's
+first sighting, `track_frame` reads it instead — otherwise a tank spawned on
+a slab (`overpass` has such respawns) would be predicted on the ground for a
+whole frame. On that frame the sample lags by nothing: there is nothing to
+interpolate between yet.
 
 Levels gate the predicted contact pass too. Every body of the step carries
 its own mask — `LevelState::collision_mask()` for the tank (on a ramp,
@@ -532,12 +554,18 @@ both levels), `level_group(PredictedBody::level)` for a subsystem body
 (`MapDynamics` reads it from `physicsDynamic`, `RemoteTanks` from the row).
 Wall tiles are collected per level from that mask, and a pair of bodies
 whose masks do not intersect never becomes a contact — a tank on the bridge
-does not push a box below it. A falling tank has an empty mask, so it
-produces no contacts at all while the subsystems keep stepping.
+does not push a box below it. A falling tank keeps only `STATIC_LEVEL_GROUP`, so it
+collects the walls and no bodies at all while the subsystems keep stepping.
 
 `ShotPredictor` cuts its ray with the same `ray_segments()` the host uses,
 and each segment sees only the walls, the boxes and the hulls of its own
-level; the resulting `startLevel`/`endLevel` go into the local tracer row,
+level. A hull in transit is the exception: the host holds both level masks
+for a tank on a ramp, so a row whose `z` differs from its `level` is offered
+to the segments of both levels. The level of a remote hull is taken from the
+predicted world (`RemoteTanks::sim_boxes()`) whenever the tank is predicted
+there, and from the frame row only as a fallback — the same rule the OBB
+already followed. The resulting `startLevel`/`endLevel` go into the local
+tracer row,
 and a locally planted bomb picks its level by the host's rule (over a cell
 with no slab of its level it lands on the ground).
 

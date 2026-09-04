@@ -128,6 +128,17 @@ describe('Map: слои 2.5D', () => {
     expect(bridge.zIndex).toBe(101);
   });
 
+  // проверяем ПРОВОДКУ, а не тело: `onRender` у Container — аксессор, и
+  // одноимённый метод на прототипе парта затенил бы его сеттер, оставив
+  // `_onRender` null. Тест, зовущий колбэк руками, такого не ловит
+  it('плита регистрирует колбэк onRender в PixiJS', () => {
+    const bridge = readyBridge(levelView(0, 15, 5));
+    const ground = makeMap(staticData, '/build/');
+
+    expect(typeof bridge._onRender).toBe('function');
+    expect(ground._onRender).toBe(null);
+  });
+
   it('плита гаснет, когда локальный игрок под ней', () => {
     // игрок на уровне 0 в тайле (col 1, row 0) — это тайл пола моста
     const bridge = readyBridge(levelView(0, 15, 5));

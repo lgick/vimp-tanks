@@ -88,7 +88,12 @@ npm run dev             # Vite dev server, opens the tab
 The tab enters as a guest (`Tanker`, nickname override in
 `localStorage.vimp_dev_nick`), votes itself into `team1` and asks for four
 bots — `index.html` and `src/standalone.js` hold every option
-(`startStandaloneGame`, map, `assetsBase`).
+(`startStandaloneGame`, map, `assetsBase`). The map is `pool mini` by
+default; pick another one without editing the file:
+
+```bash
+VITE_MAP='overpass' npm run dev   # the 2.5D demo map
+```
 
 `assetsBase` is `/build/` here, and both kinds of asset live under it:
 
@@ -197,10 +202,18 @@ the snapshot schema or the panel. The scenarios:
 | `combat.json` | two players, both weapons, explosions, a map with dynamic bodies (`c1`) |
 | `round.json` | bots, friendly fire, death → round end → respawn (invariant 10) |
 | `contact.json` | two tanks in contact: one pushes the other, both predict the remote hull (`remote_tanks.rs`) |
-| `bridge.json` | `overpass`: up the west ramp, across the bridge, down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
+| `bridge.json` | `overpass`: up the west ramp, across the bridge in the middle lane (the outer ones hold boxes), coasting down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
 | `fall.json` | `overpass`: off a gap in the railings — `Falling`, `z` down to 0, landing at level 0 |
 | `crosslevel.json` | `overpass`: two players on different levels, hitscan across the levels and a bomb on the slab that does not touch the tank underneath |
 | `bots_bridge.json` | `overpass`: a player plus `/bot 2` over a long run — bots use the ramp and do not get stuck (invariants 10/11) |
+
+A scenario asserts **nothing about the game rules**: the runner checks the
+engine's invariants and the prediction drift, and the four 2.5D scenarios
+above prove only that the loop survives a bridge, a fall and a cross-level
+shot. That the level really went 0 → 1 → 0, that a bot drove onto the
+bridge, that the slab screened an explosion — those are asserted in
+`core/tests/sim.rs` (`npm run core:test`); the scenarios stay a debugging
+tool with dumps to read by eye.
 
 Three of them run with the same drift thresholds as `movement.json`;
 `bots_bridge.json` sets `divergence: null` on purpose — over 1800 ticks the
@@ -223,6 +236,16 @@ local engine checkout, patch cargo locally — do **not** commit this:
 # Cargo.toml, workspace root
 [patch.crates-io]
 vimp-engine-core = { path = "../vimp/packages/engine/core" }
+```
+
+A committed patch breaks a fresh clone and CI (`../vimp` exists on your
+machine only) and ships a lock file pinned to a local path to npm. To avoid
+touching the tracked files at all, pass the patch on the command line
+instead — nothing in the working tree changes:
+
+```bash
+cargo test --workspace \
+  --config 'patch."crates-io".vimp-engine-core.path="../vimp/packages/engine/core"'
 ```
 
 ---

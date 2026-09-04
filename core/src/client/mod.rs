@@ -107,12 +107,20 @@ impl ClientMapConfig {
 const TANK_FIELD_CONDITION: usize = 7;
 const TANK_FIELD_SIZE: usize = 8;
 const TANK_FIELD_TEAM: usize = 9;
+const TANK_FIELD_Z: usize = 11;
 const TANK_FIELD_LEVEL: usize = 12;
 
 fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
     match fields.get(i) {
         Some(FieldValue::U8(v)) => *v,
         _ => 0,
+    }
+}
+
+fn field_f32(fields: &[FieldValue], i: usize) -> f32 {
+    match fields.get(i) {
+        Some(FieldValue::F32(v)) => *v,
+        _ => 0.0,
     }
 }
 
@@ -130,6 +138,7 @@ pub struct TanksClient {
     my_model_key: Option<String>,
     my_model_key_id: Option<u8>,
     my_tank_meta: Option<(u8, u8, u8)>, // condition, size, teamId
+    my_game_id: Option<u32>,
 }
 
 impl TanksClient {
@@ -186,6 +195,7 @@ impl GameClientDef for TanksClient {
             my_model_key: None,
             my_model_key_id: None,
             my_tank_meta: None,
+            my_game_id: None,
         }
     }
 
@@ -221,6 +231,25 @@ impl GameClientDef for TanksClient {
         for set in self.predictor.predicted_sets_mut() {
             set.begin_reconcile(snapshot);
         }
+
+        // высота и уровень своего танка — из СЫРОГО кадра, того самого, с
+        // позиции которого начнётся реплей: интерполированный сэмпл
+        // (`track_frame`) отстаёт на буфер, и по нему фаза падения
+        // восстанавливалась бы со сдвигом
+        let authoritative = match (self.my_game_id, self.my_model_key.as_ref()) {
+            (Some(my_id), Some(model_key)) => match snapshot.block_by_key(model_key) {
+                Some(BlockData::Indexed8(items)) => items
+                    .get(&(my_id as u8))
+                    .and_then(|row| row.as_ref())
+                    .map(|row| (field_f32(row, TANK_FIELD_Z), field_u8(row, TANK_FIELD_LEVEL))),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some((z, level)) = authoritative {
+            self.predictor.correct_level(z, level);
+        }
     }
 
     fn finish_reconcile(&mut self) {
@@ -249,6 +278,13 @@ impl GameClientDef for TanksClient {
             self.predictor.reset();
         }
 
+        // свой gameId движок ставит уже ПОСЛЕ `begin_reconcile`
+        // (client/game.rs), поэтому первый кадр тот пропускает: строку
+        // своего танка в снапшоте по чему искать, ещё неизвестно
+        let known_id = self.my_game_id;
+
+        self.my_game_id = my_game_id;
+
         let (Some(my_id), Some(model_key)) = (my_game_id, &self.my_model_key) else {
             return;
         };
@@ -270,14 +306,18 @@ impl GameClientDef for TanksClient {
 
                     self.my_tank_meta = Some((condition, size, team));
                     self.predictor.freeze(condition == 0);
-                    // авторитетный уровень: реплика считает его сама теми же
-                    // правилами, но кадр — последнее слово. Расхождение
-                    // возможно на границе рампы (кадр отстаёт на буфер
-                    // интерполяции), поэтому коррекция применяется только
-                    // когда реплика НЕ в переходе: иначе кадр отматывал бы
-                    // подъём назад на каждом тике
-                    self.predictor
-                        .correct_level(field_u8(row, TANK_FIELD_LEVEL));
+
+                    // уровень и высота своего танка идут из СЫРОГО кадра
+                    // (`begin_reconcile`), и только первый кадр берётся
+                    // отсюда: до него уровень остался бы нулевым, хотя
+                    // респаун бывает и на плите. Сэмпл здесь ещё не
+                    // отстаёт — интерполировать не с чем
+                    if known_id != Some(my_id) {
+                        self.predictor.correct_level(
+                            field_f32(row, TANK_FIELD_Z),
+                            field_u8(row, TANK_FIELD_LEVEL),
+                        );
+                    }
                 }
             }
         }
@@ -372,6 +412,19 @@ impl GameClientDef for TanksClient {
     fn set_map(&mut self, map_json: &str) -> Result<(), String> {
         let mut cfg: ClientMapConfig =
             serde_json::from_str(map_json).map_err(|e| e.to_string())?;
+
+        // MAP_DATA приходит по сети и до этой проверки на клиенте не
+        // проверялся вовсе: косой грид уровня не паникует, он молча даёт
+        // геометрию, отличную от хостовой, и предсказание расходится без
+        // единой строки в консоли. Правила те же, что у хоста
+        // (`MapConfig::validate`) — одна функция на обе стороны
+        vimp_engine_core::map::validate_levels(
+            &cfg.map,
+            &cfg.physics_static,
+            &cfg.levels,
+            &cfg.ramps,
+        )?;
+
         let levels = Rc::new(cfg.take_levels());
 
         self.predictor.reset();
@@ -428,6 +481,7 @@ pub type ClientState = vimp_engine_core::client::game::ClientState<TanksClient>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vimp_engine_core::client::unpack::DecodedBlock;
     use vimp_engine_core::client::{HOT_HAS_CAMERA, HOT_HAS_FRAMES, HOT_HAS_GAME, HOT_HAS_PREDICTED};
     use vimp_engine_core::snapshot::{Block, CameraData, PlayerBlock, SnapshotPacker};
 
@@ -885,6 +939,28 @@ mod tests {
         assert!(client.map_dynamics().unwrap().render_box("d0").is_some());
     }
 
+    // MAP_DATA приходит по сети, и до проверки клиент верил ему на слово:
+    // косой грид уровня не паникует, он даёт геометрию, отличную от
+    // хостовой, и предсказание расходится молча
+    #[test]
+    fn map_data_with_a_broken_level_grid_is_rejected() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+        let map_json = serde_json::json!({
+            "step": 32,
+            "scale": 1.0,
+            "map": [[0, 0], [0, 0]],
+            "physicsStatic": [],
+            "levels": { "1": { "map": [[0, 0]], "floor": [] } }
+        })
+        .to_string();
+
+        let error = client.set_map(&map_json).unwrap_err();
+
+        assert!(error.contains("rows"), "{error}");
+        // карта не принята целиком: половинчато загруженной карты не бывает
+        assert!(client.predictor.levels().is_none());
+    }
+
     // инвариант ClientMapConfig: предсказание движения и предсказание
     // выстрела видят карту одинаково, потому что сетка у них буквально одна
     #[test]
@@ -908,6 +984,45 @@ mod tests {
         assert_eq!(predictor_levels.tile_size(), 64.0);
         assert_eq!(predictor_levels.solid(0), vec![1]);
         assert_eq!(predictor_levels.grid(0), Some(&vec![vec![0, 1]]));
+    }
+
+    // движок ставит свой gameId ПОСЛЕ `begin_reconcile` (client/game.rs),
+    // поэтому первый кадр тот пропускает: без этой подстраховки танк,
+    // заспавненный на плите, целый кадр предсказывался бы на земле
+    #[test]
+    fn own_level_is_taken_from_the_first_frame() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+
+        client.set_model("m1");
+
+        let frame = |z: f32, level: u8| {
+            let mut row = tank_row(0.0, 3);
+
+            row[TANK_FIELD_Z] = FieldValue::F32(z);
+            row[TANK_FIELD_LEVEL] = FieldValue::U8(level);
+
+            FrameData {
+                snapshot: DecodedSnapshot {
+                    blocks: vec![DecodedBlock {
+                        key: "m1".to_string(),
+                        key_id: 1,
+                        data: BlockData::Indexed8(IndexMap::from([(2, Some(row))])),
+                    }],
+                },
+                camera: None,
+            }
+        };
+
+        client.track_frame(Some(2), &frame(1.0, 1));
+
+        assert_eq!(client.predictor.level_state().level, 1);
+        assert_eq!(client.predictor.level_state().z, 1.0);
+
+        // дальше уровень ведёт `begin_reconcile` по сырому кадру: сэмпл
+        // отстаёт на буфер и тянул бы подъём назад
+        client.track_frame(Some(2), &frame(0.0, 0));
+
+        assert_eq!(client.predictor.level_state().level, 1);
     }
 
     #[test]

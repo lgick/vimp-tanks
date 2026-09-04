@@ -1,5 +1,13 @@
 import { Text, Ticker, Container, Sprite } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
+import {
+  W2_X,
+  W2_Y,
+  W2_ANGLE,
+  W2_SIZE,
+  W2_TIME,
+  W2_LEVEL,
+} from '../snapshotFields.js';
 
 // базовый zIndex бомбы внутри своего уровня
 const BOMB_BASE_Z = 2;
@@ -8,18 +16,18 @@ export default class Bomb extends Container {
   constructor(params, assets, dependencies) {
     super();
 
-    // 2.5D: уровень, на котором лежит бомба (строка w2, индекс 6)
-    this.zIndex = levelZ(BOMB_BASE_Z, params[6]);
+    // 2.5D: уровень, на котором лежит бомба (строка w2)
+    this.zIndex = levelZ(BOMB_BASE_Z, params[W2_LEVEL]);
 
     this.body = new Sprite(assets.bombTexture);
     this.body.anchor.set(0.5);
 
-    this.x = params[0];
-    this.y = params[1];
+    this.x = params[W2_X];
+    this.y = params[W2_Y];
 
-    this.rotation = params[2];
-    this._size = params[3]; // соотношение сторон 1:1
-    this._totalDurationMs = params[4];
+    this.rotation = params[W2_ANGLE];
+    this._size = params[W2_SIZE]; // соотношение сторон 1:1
+    this._totalDurationMs = params[W2_TIME];
 
     this._soundManager = dependencies.soundManager;
     this._soundId = null;
@@ -98,9 +106,9 @@ export default class Bomb extends Container {
   // авторитетная строка приходит один раз — подтверждением локально
   // предсказанной бомбы: переносим сущность в авторитетную точку
   update(params) {
-    this.x = params[0];
-    this.y = params[1];
-    this.rotation = params[2];
+    this.x = params[W2_X];
+    this.y = params[W2_Y];
+    this.rotation = params[W2_ANGLE];
 
     if (this._soundId) {
       const alive = this._soundManager.updateSoundData(this._soundId, {

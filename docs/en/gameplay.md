@@ -121,14 +121,29 @@ jump key: the tank changes level only by driving.
   to the upper level. While on the ramp the tank collides with the geometry
   of *both* levels, so it neither falls through the bridge nor clips into
   the wall at the top.
+- **Ramps are entered from their ends.** A run lifts (or lowers) only the
+  tank that drove in through the end matching its own level: from the foot
+  going up, from the top going down. A tank that entered a ramp cell from
+  the side — a cell near the top is often reachable straight off the
+  ground — keeps its level, and the run behaves as ordinary flat ground for
+  it until it leaves and comes back through an end. The same holds for a
+  spawn point placed on a ramp: it starts on the level the map geometry
+  gives it, without a free ride upwards.
 - **On the bridge.** Tanks on different levels ignore each other
   completely: a tank driving under the overpass will not bump into the one
   above it, and vice versa.
 - **Off the ledge.** A bridge edge without railings is a ledge. Driving off
   it starts a fall: controls are dead for 0.35 s, the tank coasts on
-  inertia and collides with nothing, and the landing costs 15 health. A
-  fatal landing counts as a suicide — the stats record a loss and nobody
-  gets a frag.
+  inertia and the landing costs 15 health. While airborne it collides with
+  the walls of every level and with nothing else — a tank, a crate, a ray
+  or a blast does not reach it, but a building does, so a fall alongside
+  one ends in front of the wall instead of inside it. A fatal landing
+  counts as a suicide — the stats record a loss and nobody gets a frag.
+- **Crates on the bridge do not fall.** Level rules apply to tanks only:
+  a dynamic map object keeps the level the map gave it. Pushed over a ledge
+  it would hang on the slab layer over open ground, so a layered map must
+  not place level 1 crates next to a gap in the railings (see
+  `src/data/maps/overpass.js`).
 
 ### Shooting across levels
 
@@ -140,11 +155,15 @@ rules:
 | **Bridge to bridge** | While the ray is over the slab it only hits level 1 targets; railings block it. |
 | **Bridge to ground** | At the first cell without a slab the ray drops to the ground and from there only hits level 0 targets. It never climbs back. |
 | **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it. |
-| **Ground to bridge** | In the very first slab cell it enters, the ray can hit a level 1 tank — unless that cell is a railing. Past it the slab shields everything and the ray continues along the ground. |
+| **Ground to bridge** | In the very first slab cell it enters, the ray can hit a level 1 tank — unless that cell is a railing. The window is exactly that one cell wide and closes where the ray leaves it, so a tank standing on the second slab cell is already out of reach. Past it the slab shields everything and the ray continues along the ground. |
 | **Tank on a ramp** | Visible to rays of both levels. |
-| **Falling tank** | Invulnerable: while airborne (0.35 s) neither rays nor explosions reach it. This is a rule, not a side effect. |
+| **Falling tank** | Invulnerable: while airborne (0.35 s) neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. |
 | **Explosion** | Only hits targets on its own level — the slab shields it both upwards and downwards. |
 | **Bomb** | Lands on its owner's level; if there is no slab of that level under the drop point (on a ramp, for instance), the bomb ends up on the ground. |
+
+On a miss the tracer is drawn at the level in force at the **end** of the
+ray, not at the last level it visited: a ground shot that grazes the bridge
+ledge ends on the ground, not on the slab layer.
 
 Which maps have levels and how they are authored — see
 [extending.md](extending.md#new-map).
@@ -170,7 +189,9 @@ On a 2.5D map (levels, ramps, bridges) a bot knows its own level:
 - while falling it is not steered at all, and the fall is not mistaken for
   being stuck;
 - it prefers a target on its own level, and holds fire when the bridge slab
-  shields the target — instead it drives towards it, over a ramp;
+  shields the target — instead it drives towards it, over a ramp. A target
+  its ray does reach is shot at even where the levels overlap, such as a
+  ground enemy standing in the ledge window;
 - it strafes after a shot only to a point walkable on its own level, and it
   steers around obstacles of its own level (railings above a bot on the
   ground are not obstacles).

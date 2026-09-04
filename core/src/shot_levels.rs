@@ -106,9 +106,20 @@ pub fn ray_segments(
     // первая клетка С плитой: в ней (и только в ней) луч уровня 0 может
     // достать танк уровня 1, стоящий на открытой кромке
     let mut t_slab = range;
+    // вход в СЛЕДУЮЩУЮ клетку = выход из клетки плиты: точная верхняя
+    // граница пробы. Оценка «диагональ клетки» была бы завышенной для
+    // любого угла входа, кроме углового, и проба накрывала бы вторую
+    // клетку плиты — танк на ней поражался бы с земли
+    let mut t_exit = range;
     let mut slab_cell: Option<(i64, i64)> = None;
 
     walk_ray_cells(origin, dir, range, rows, cols, tile, |cx, cy, t| {
+        if slab_cell.is_some() {
+            t_exit = t;
+
+            return false;
+        }
+
         if !is_slab(cx, cy) {
             return true;
         }
@@ -116,7 +127,7 @@ pub fn ray_segments(
         t_slab = t;
         slab_cell = Some((cx, cy));
 
-        false
+        true
     });
 
     let mut out = ground_only(range);
@@ -133,33 +144,48 @@ pub fn ray_segments(
     // только стоя под самой кромкой (у соседней клетки против направления
     // луча плиты нет), иначе он «простреливал» бы плиту из глубины
     if t_slab <= 0.0 {
-        let step_x: i64 = if dir[0] > 0.0 { 1 } else { -1 };
-        let step_y: i64 = if dir[1] > 0.0 { 1 } else { -1 };
+        // знак нуля обязателен: для осевого луча иначе проверялся бы
+        // диагональный сосед вместо клетки строго позади
+        let step = |d: f32| -> i64 {
+            if d > 0.0 {
+                1
+            } else if d < 0.0 {
+                -1
+            } else {
+                0
+            }
+        };
 
-        if is_slab(cx - step_x, cy - step_y) {
+        if is_slab(cx - step(dir[0]), cy - step(dir[1])) {
             return out;
         }
     }
 
-    // проба уровня 1 внутри ОДНОЙ клетки кромки. Верхняя граница — выход
-    // из этой клетки; считаем её как t_slab + диагональ клетки, чего
-    // заведомо хватает на любой угол входа, а лишнее отрежет проверка
-    // «ближайшее попадание» (сегменты перекрываются, минимальный toi
-    // выигрывает)
-    let cell_span = tile * std::f32::consts::SQRT_2;
-
+    // проба уровня 1 внутри ОДНОЙ клетки кромки
     out.push(RaySegment {
         t0: t_slab,
-        t1: (t_slab + cell_span).min(range),
+        t1: t_exit.min(range),
         level: 1,
     });
 
     out
 }
 
-/// Уровень луча на дистанции `t` от старта: по нему решается, поразит ли
-/// выстрел цель, стоящую на своём уровне. Боты спрашивают это перед
-/// стрельбой, чтобы не палить в плиту моста.
+/// Достаёт ли луч на дистанции `t` цель, стоящую на уровне `level`.
+///
+/// Именно это спрашивают боты перед выстрелом: сегменты уровней 0 и 1 у
+/// кромки плиты перекрываются, и «какой уровень выигрывает» дало бы
+/// ложный запрет — наземный бот не стрелял бы в наземного врага,
+/// оказавшегося в окне пробы.
+pub fn covers_level(segments: &[RaySegment], t: f32, level: u8) -> bool {
+    segments
+        .iter()
+        .any(|seg| t >= seg.t0 && t <= seg.t1 && seg.level == level)
+}
+
+/// Верхний уровень луча на дистанции `t` от старта. Для решения «попадёт
+/// ли выстрел в цель» нужен `covers_level`; здесь `max` полезен там, где
+/// нужен ровно один уровень — например конец трассера при промахе.
 pub fn level_at_distance(segments: &[RaySegment], t: f32) -> Option<u8> {
     segments
         .iter()
@@ -266,6 +292,81 @@ mod tests {
         );
         assert!(segments[1].t1 > segments[1].t0);
         assert!(segments[1].t1 < RANGE);
+    }
+
+    #[test]
+    fn probe_ends_at_the_border_of_the_edge_cell() {
+        // кромка плиты на x = 30, вторая клетка плиты — x 40..50
+        let segments = ray_segments(&layered(), [5.0, 5.0], [1.0, 0.0], RANGE, 0);
+        let probe = segments[1];
+
+        assert!(
+            (probe.t1 - 35.0).abs() < 1e-3,
+            "проба обязана кончиться на границе клетки: {segments:?}"
+        );
+        assert!(covers_level(&segments, 30.0, 1), "первая клетка плиты");
+        assert!(
+            !covers_level(&segments, 40.0, 1),
+            "вторая клетка плиты танку с земли уже недоступна: {segments:?}"
+        );
+    }
+
+    #[test]
+    fn oblique_probe_is_shorter_than_the_cell_diagonal() {
+        // луч входит в клетку плиты (3, 2) сбоку и почти сразу уходит
+        // из неё вверх — оценка «диагональ» была бы вшестеро длиннее
+        let segments = ray_segments(&layered(), [5.0, 55.0], [0.6, -0.8], RANGE, 0);
+        let probe = segments[1];
+        let span = probe.t1 - probe.t0;
+
+        assert_eq!(probe.level, 1, "{segments:?}");
+        assert!(
+            span < TILE * std::f32::consts::SQRT_2,
+            "проба длиннее диагонали клетки: {segments:?}"
+        );
+        assert!((span - 2.083).abs() < 1e-2, "{segments:?}");
+    }
+
+    #[test]
+    fn axial_ray_checks_the_cell_strictly_behind() {
+        let map = layered();
+
+        // стрелок под серединой плиты (колонка 5, строка 5), луч строго
+        // на север: клетка позади — (5, 6), тоже плита
+        let deep = ray_segments(&map, [55.0, 55.0], [0.0, -1.0], RANGE, 0);
+
+        assert_eq!(deep, ground_only(RANGE), "{deep:?}");
+
+        // тот же луч из нижней строки: позади — край карты, значит
+        // стрелок стоит под самой кромкой
+        let edge = ray_segments(&map, [55.0, 75.0], [0.0, -1.0], RANGE, 0);
+
+        assert_eq!(edge.len(), 2, "{edge:?}");
+        assert_eq!(edge[1].level, 1);
+        assert_eq!(edge[1].t0, 0.0);
+    }
+
+    #[test]
+    fn miss_level_of_a_ground_ray_stays_on_the_ground() {
+        // луч прошёл мимо кромки: последний сегмент списка — проба
+        // уровня 1, но на конце луча действует уровень 0
+        let segments = ray_segments(&layered(), [5.0, 5.0], [1.0, 0.0], RANGE, 0);
+
+        assert_eq!(segments.last().map(|seg| seg.level), Some(1));
+        assert_eq!(level_at_distance(&segments, RANGE), Some(0));
+    }
+
+    #[test]
+    fn covers_level_sees_both_levels_inside_the_probe() {
+        let segments = ray_segments(&layered(), [5.0, 5.0], [1.0, 0.0], RANGE, 0);
+        let probe = segments[1];
+        let inside = (probe.t0 + probe.t1) / 2.0;
+
+        // наземная цель в окне пробы поражается — «максимум уровня» здесь
+        // дал бы ложный запрет боту
+        assert!(covers_level(&segments, inside, 0));
+        assert!(covers_level(&segments, inside, 1));
+        assert!(!covers_level(&segments, RANGE, 1));
     }
 
     #[test]

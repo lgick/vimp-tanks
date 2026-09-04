@@ -102,6 +102,12 @@ which `ShotEffect` anchors its debris to the box the shot hit (see
 local player is and on which level: the local `Tank` writes it, the bridge
 slab reads it (see below).
 
+The same two names are repeated in `ClientPlugin.serviceNames`. The hook
+needs a live core, so the contract checker cannot read what it returns; the
+list is what lets rule `C4` tell a game service from a typo in
+`componentDependencies` instead of downgrading itself to a warning — an
+unprovided service is silently `undefined` in the part.
+
 ### Draw order across levels (2.5D)
 
 Every part is a direct child of the stage with `sortableChildren = true`, so

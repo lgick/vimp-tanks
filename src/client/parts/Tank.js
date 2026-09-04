@@ -1,6 +1,18 @@
 import { Container, Sprite } from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
+import {
+  M1_X,
+  M1_Y,
+  M1_ANGLE,
+  M1_GUN_ROTATION,
+  M1_ENGINE_LOAD,
+  M1_CONDITION,
+  M1_SIZE,
+  M1_TEAM,
+  M1_Z,
+  M1_LEVEL,
+} from '../snapshotFields.js';
 
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
@@ -76,23 +88,29 @@ export default class Tank extends Container {
     // параметры с сервера:
     // [x, y, rotation, gunRotation, vX, vY,
     // engineLoad, condition, size, teamId, angvel, z, level]
-    this.x = data[0] || 0;
-    this.y = data[1] || 0;
-    this.rotation = data[2] || 0;
-    this.gun.rotation = data[3] || 0;
-    this._engineLoad = data[6] || 0;
-    this._condition = data[7];
-    this._size = data[8];
-    this._teamId = data[9];
+    this.x = data[M1_X] || 0;
+    this.y = data[M1_Y] || 0;
+    this.rotation = data[M1_ANGLE] || 0;
+    this.gun.rotation = data[M1_GUN_ROTATION] || 0;
+    this._engineLoad = data[M1_ENGINE_LOAD] || 0;
+    this._condition = data[M1_CONDITION];
+    this._size = data[M1_SIZE];
+    this._teamId = data[M1_TEAM];
 
     // 2.5D: непрерывная высота (рампа/падение) и дискретный уровень
-    this._z = data[11] || 0;
-    this._level = data[12] || 0;
+    this._z = data[M1_Z] || 0;
+    this._level = data[M1_LEVEL] || 0;
     this.zIndex = levelZ(TANK_BASE_Z, this._level);
 
     // свой танк — единственный, кто вправе писать в levelView: по нему
-    // плита моста над игроком становится полупрозрачной (Map.onRender)
-    this._isLocal = dependencies.localPlayer?.is(context?.id) === true;
+    // плита моста над игроком становится полупрозрачной (Map.onRender).
+    //
+    // Спрашиваем в момент, когда нужен ответ, а не в конструкторе: парты
+    // создаются из FIRST_SHOT_DATA, который приходит ДО первого бинарного
+    // кадра, и свой танк строится, пока `localPlayer.id` ещё null — флаг,
+    // посчитанный один раз, был бы навсегда false ровно у той сущности,
+    // ради которой он и заведён
+    this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
     this._levelView = dependencies.levelView || null;
 
     // правильный якорь для пушки в зависимости от команды
@@ -190,15 +208,15 @@ export default class Tank extends Container {
   }
 
   update(data) {
-    this.x = data[0];
-    this.y = data[1];
-    this.rotation = data[2];
-    this.gun.rotation = data[3];
-    this._engineLoad = data[6];
+    this.x = data[M1_X];
+    this.y = data[M1_Y];
+    this.rotation = data[M1_ANGLE];
+    this.gun.rotation = data[M1_GUN_ROTATION];
+    this._engineLoad = data[M1_ENGINE_LOAD];
 
-    const level = data[12] || 0;
+    const level = data[M1_LEVEL] || 0;
 
-    this._z = data[11] || 0;
+    this._z = data[M1_Z] || 0;
 
     if (level !== this._level) {
       this._level = level;
@@ -211,7 +229,7 @@ export default class Tank extends Container {
     this.body.scale.set(this._scaleFactor * zScale);
     this.gun.scale.set(this._scaleFactor * zScale);
 
-    if (this._isLocal && this._levelView) {
+    if (this._levelView && this._isLocal()) {
       this._levelView.set(level, this.x, this.y);
     }
 
@@ -225,8 +243,8 @@ export default class Tank extends Container {
       }
     }
 
-    const newCondition = data[7];
-    const teamId = data[9];
+    const newCondition = data[M1_CONDITION];
+    const teamId = data[M1_TEAM];
 
     let needsVisualChange = false;
 

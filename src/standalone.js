@@ -26,6 +26,9 @@ await startStandaloneGame({
   // входит именно наблюдателем
   startupVotes: [['teamChange', 'team1']],
   startupCommands: ['/bot 4'],
-  room: { map: 'overpass' }, // 2.5D-демо; вернуть 'pool mini' перед релизом
+  // карта по умолчанию — `pool mini`; демо-карту 2.5D запускать через
+  // переменную окружения Vite, не правкой файла:
+  // `VITE_MAP='overpass' npm run dev`
+  room: { map: import.meta.env.VITE_MAP || 'pool mini' },
   devMode: true,
 });

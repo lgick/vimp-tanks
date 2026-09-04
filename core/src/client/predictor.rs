@@ -25,12 +25,12 @@ use vimp_engine_core::client::rigid_body::{
     separate_bodies,
 };
 use vimp_engine_core::config::PLAYER_STATE_LEN;
-use vimp_engine_core::map::{MapLevels, level_group};
+use vimp_engine_core::map::{MapLevels, STATIC_LEVEL_GROUP, level_group};
 use vimp_engine_core::physics::normalize_angle;
 
 use super::map_dynamics::MapDynamics;
 use super::remote_tanks::RemoteTanks;
-use super::predicted_set::{PredictedBodies, PredictedBody};
+use super::predicted_set::PredictedBodies;
 
 // максимальный возраст записей истории ввода (мс)
 const HISTORY_MAX_AGE: f64 = 2000.0;
@@ -152,6 +152,10 @@ pub struct Predictor {
     /// слоями
     level_state: LevelState,
     level_rules: LevelRules,
+    /// Авторитетные `(z, level)` своего танка из последнего сырого кадра:
+    /// уровень и фаза падения принадлежат хосту, реплика их только
+    /// доигрывает (см. `correct_level`)
+    authoritative_level: Option<(f32, u8)>,
     // часы симуляции, общие с предсказанным миром
     local_now: f64,
 
@@ -223,6 +227,7 @@ impl Predictor {
             levels: None,
             level_state: LevelState::default(),
             level_rules,
+            authoritative_level: None,
             local_now: 0.0,
             forward_bit: bit("forward"),
             back_bit: bit("back"),
@@ -340,10 +345,14 @@ impl Predictor {
         self.levels.as_ref()
     }
 
-    /// Авторитетный уровень из кадра. Применяется только вне перехода —
-    /// кадр отстаёт на буфер интерполяции, и на рампе он тянул бы реплику
-    /// назад каждым тиком.
-    pub fn correct_level(&mut self, level: u8) {
+    /// Авторитетные высота и уровень своего танка из сырого кадра.
+    /// Запоминаются целиком (фазу падения по ним восстановит
+    /// `on_server_state`), а поправка уровня применяется только вне
+    /// перехода: на рампе реплика идёт впереди кадра, и коррекция тянула бы
+    /// подъём назад каждым тиком.
+    pub fn correct_level(&mut self, z: f32, level: u8) {
+        self.authoritative_level = Some((z, level));
+
         if matches!(self.level_state.transit, Transit::Grounded) && self.level_state.level != level
         {
             self.level_state.level = level;
@@ -379,6 +388,7 @@ impl Predictor {
     pub fn reset(&mut self) {
         self.pending_reset = true;
         self.level_state = LevelState::default();
+        self.authoritative_level = None;
         // до прихода следующего player-блока рендерить нечего: иначе предикт
         // дорисовывает актора в позиции уже несуществующего мира
         self.has_state = false;
@@ -510,10 +520,22 @@ impl Predictor {
         self.centering = centering;
         self.has_state = true;
 
-        // реплей начинается с авторитетной позиции: незавершённое падение
-        // из прошлой ветки предсказания к ней не относится (уровень и z
-        // пересчитает сам реплей, шаг за шагом)
-        if let Transit::Falling { .. } = self.level_state.transit {
+        // реплей начинается с авторитетной позиции, поэтому фаза падения
+        // берётся из того же кадра (`z` ниже своего уровня = танк в
+        // воздухе), а не из прошлой ветки предсказания: иначе высота своего
+        // танка определялась бы длиной реплея — при скачке RTT она дёргалась
+        // бы, а на длинном реплее падение доигрывалось бы раньше времени
+        if let Some((z, level)) = self.authoritative_level
+            && level >= 1
+            && z < level as f32
+        {
+            self.level_state.level = level;
+            self.level_state.z = z;
+            self.level_state.transit = Transit::Falling {
+                elapsed: level::fall_elapsed(z, level, &self.level_rules),
+                from: level,
+            };
+        } else if let Transit::Falling { .. } = self.level_state.transit {
             self.level_state.transit = Transit::Grounded;
         }
 
@@ -619,31 +641,16 @@ impl Predictor {
     // один фикс-шаг реплики движения: формулы тика общие с Tank::update
     // (crate::motion), интеграция — эмпирический порядок Rapier
     fn step(&mut self, keys: u32) {
-        if self.model.is_none() {
-            return;
-        }
-
         let dt = (self.step_ms / 1000.0) as f32;
 
-        // правила уровня — до применения ввода, ровно как в
-        // TanksSim::update_levels: иначе шаг падения посчитался бы по
-        // позиции, которую ввод уже сдвинул. Событие приземления реплика
-        // игнорирует: урон авторитетен и приедет кадром панели
-        if let Some(levels) = &self.levels {
-            level::step_level(
-                &mut self.level_state,
-                self.state.x,
-                self.state.y,
-                levels,
-                &self.level_rules,
-                dt,
-            );
-        }
+        self.step_level(dt);
 
         // падение: ввод игнорируется целиком (зеркало Tank::update)
         let keys = if self.level_state.input_locked() { 0 } else { keys };
 
-        let model = self.model.as_ref().unwrap();
+        let Some(model) = &self.model else {
+            return;
+        };
 
         let forward = keys & self.forward_bit != 0;
         let back = keys & self.back_bit != 0;
@@ -697,6 +704,25 @@ impl Predictor {
         self.resolve_world(dt);
     }
 
+    /// Правила уровня одного шага — до применения ввода, ровно как в
+    /// TanksSim::update_levels: иначе шаг падения посчитался бы по позиции,
+    /// которую ввод уже сдвинул. Событие приземления реплика игнорирует:
+    /// урон авторитетен и приедет кадром панели.
+    fn step_level(&mut self, dt: f32) {
+        let Some(levels) = &self.levels else {
+            return;
+        };
+
+        level::step_level(
+            &mut self.level_state,
+            self.state.x,
+            self.state.y,
+            levels,
+            &self.level_rules,
+            dt,
+        );
+    }
+
     /// Столкновения одного шага: свой танк, предсказанные тела подсистем и
     /// стены разрешаются в ОДНОЙ симуляции — потому нарисованный танк и
     /// нарисованное тело не выдавливают друг друга.
@@ -739,9 +765,9 @@ impl Predictor {
             linear_damping: model.damping.linear,
             angular_damping: model.damping.angular,
         }];
-        // маска уровней своего танка: в падении она пуста — падающий не
-        // рождает ни одного контакта, но подсистемы всё равно шагают (иначе
-        // ящики замерли бы на время полёта)
+        // маска уровней своего танка: в падении это группа статики — тел
+        // падающий не задевает, но стены обоих уровней задевает (то же
+        // правило, что у хоста в `level::LevelState::collision_mask`)
         let tank_mask = self.level_state.collision_mask();
         let mut geometry = vec![(tank_obb.half_w, tank_obb.half_h)];
         let mut surfaces = vec![Surface {
@@ -770,19 +796,16 @@ impl Predictor {
         // маска тела шага: индекс 0 — свой танк (переход по рампе даёт обе),
         // остальные — уровень своей сущности. Тела разных уровней друг
         // друга не касаются: танк на мосту не толкает ящик под мостом
-        let mask_of = |index: usize, bodies: &[&mut PredictedBody]| {
-            if index == 0 {
-                tank_mask
-            } else {
-                level_group(bodies[index - 1].level)
-            }
-        };
+        let mut masks = Vec::with_capacity(movable);
+
+        masks.push(tank_mask);
+        masks.extend(bodies.iter().map(|body| level_group(body.level)));
 
         // контакты со стенами (партнёр — статика в точке задетого тайла):
         // стены собираются по КАЖДОМУ уровню из маски тела
         if let Some(levels) = &self.levels {
             for index in 0..movable {
-                let mask = mask_of(index, &bodies);
+                let mask = masks[index];
                 let obb = Box2 {
                     x: sim[index].x,
                     y: sim[index].y,
@@ -792,7 +815,10 @@ impl Predictor {
                 };
 
                 for level in 0..levels.level_count() as u8 {
-                    if !mask.intersects(level_group(level)) {
+                    // стена уровня несёт свою группу И группу статики
+                    // (`static_level_interaction` в движке), поэтому маска
+                    // падающего собирает стены всех уровней
+                    if !mask.intersects(level_group(level) | STATIC_LEVEL_GROUP) {
                         continue;
                     }
 
@@ -828,7 +854,7 @@ impl Predictor {
         for a in 0..movable {
             for b in (a + 1)..movable {
                 // тела разных уровней не касаются
-                if (mask_of(a, &bodies) & mask_of(b, &bodies)).is_empty() {
+                if (masks[a] & masks[b]).is_empty() {
                     continue;
                 }
 
@@ -1536,7 +1562,7 @@ mod tests {
         p.step(0);
 
         assert_eq!(p.level_state(), expected);
-        assert_eq!(p.level_state().transit, Transit::Ramp);
+        assert!(matches!(p.level_state().transit, Transit::Ramp { .. }));
         assert!((p.level_state().z - 0.25).abs() < 1e-5);
         assert_eq!(p.level_state().level, 0);
 
@@ -1597,7 +1623,7 @@ mod tests {
     }
 
     #[test]
-    fn falling_replica_makes_no_contacts() {
+    fn falling_replica_hits_walls_but_not_bodies() {
         let mut p = make_predictor();
 
         apply_map(&mut p, &layered_map());
@@ -1609,14 +1635,49 @@ mod tests {
                 from: 1,
             },
         };
-        // корпус внутри стены уровня 0 (колонка 5: x от 200 до 240)
-        p.state.x = 220.0;
+        // корпус заходит в стену уровня 0 (колонка 5: x от 200 до 240)
+        // (корпус 8×6: левая грань 199, правая — внутри стены)
+        p.state.x = 202.0;
         p.state.y = 100.0;
         p.step(0);
 
-        // выталкивания нет: маска падающего пуста
-        assert_eq!(p.state.x, 220.0);
-        assert_eq!(p.state.vx, 0.0);
+        // стена выталкивает: падающий не проходит сквозь здание
+        assert!(
+            p.state.x < 202.0,
+            "стена уровня 0 не задета в падении: x={}",
+            p.state.x
+        );
+    }
+
+    #[test]
+    fn falling_replica_ignores_bodies() {
+        let mut p = make_predictor();
+        let mut set = BoxSet::new(40.0);
+
+        set.set.bodies_mut()["box"].level = 0;
+
+        p.add_predicted_set(Box::new(set));
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Falling {
+                elapsed: 0.0,
+                from: 1,
+            },
+        };
+        p.state.x = 26.0; // правый край танка 30, левая грань ящика 30
+        p.state.y = 20.0;
+        p.state.vx = 200.0;
+
+        for _ in 0..30 {
+            p.step(0);
+        }
+
+        let body = box_body(&mut p).body;
+
+        // ящик не сдвинут: падающий проходит сквозь тела
+        assert_eq!(body.x, 40.0);
+        assert_eq!(body.vx, 0.0);
     }
 
     #[test]
@@ -1667,7 +1728,7 @@ mod tests {
         apply_map(&mut p, &layered_map());
 
         // на плоскости кадр перебивает реплику
-        p.correct_level(1);
+        p.correct_level(1.0, 1);
         assert_eq!(p.level_state().level, 1);
         assert_eq!(p.level_state().z, 1.0);
 
@@ -1678,8 +1739,58 @@ mod tests {
 
         let on_ramp = p.level_state();
 
-        p.correct_level(1);
+        p.correct_level(1.0, 1);
         assert_eq!(p.level_state(), on_ramp);
+    }
+
+    #[test]
+    fn reconcile_restores_the_fall_phase_from_the_frame() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.level_state = LevelState {
+            level: 1,
+            z: 0.75,
+            transit: Transit::Falling {
+                elapsed: 0.25 * p.level_rules.fall_time,
+                from: 1,
+            },
+        };
+
+        // кадр застал падение на половине высоты
+        p.correct_level(0.5, 1);
+        p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
+
+        let expected = level::fall_elapsed(0.5, 1, &p.level_rules);
+
+        assert!(
+            matches!(p.level_state().transit, Transit::Falling { elapsed, from: 1 }
+                if (elapsed - expected).abs() < 1e-5),
+            "{:?}",
+            p.level_state().transit
+        );
+        assert_eq!(p.level_state().z, 0.5);
+        assert_eq!(p.level_state().level, 1);
+    }
+
+    #[test]
+    fn reconcile_ends_the_fall_when_the_frame_says_grounded() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.level_state = LevelState {
+            level: 1,
+            z: 0.5,
+            transit: Transit::Falling {
+                elapsed: 0.5 * p.level_rules.fall_time,
+                from: 1,
+            },
+        };
+
+        p.correct_level(0.0, 0);
+        p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
+
+        assert_eq!(p.level_state().transit, Transit::Grounded);
     }
 
     #[test]

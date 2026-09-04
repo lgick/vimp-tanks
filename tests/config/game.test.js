@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { rules } from 'vimp-engine/devtools/contract/rules/index.js';
+import { FAIL } from 'vimp-engine/devtools/contract/result.js';
 import gameConfig from '../../src/config/game.js';
 
 // Страховка от рассинхрона имён между GameManifest.roomForm и roomDefaults
@@ -44,9 +46,28 @@ describe('gameConfig.coreParams.levels (2.5D)', () => {
   });
 });
 
+// Правила карт живут в движке (контрактный чекер, `npx vimp-contract`), и
+// ровно они же — в ядре (`MapConfig::validate`). Гонять их здесь, а не
+// повторять руками: ручная копия проверяет меньше и расходится молча.
+describe('карты проходят правила движка (E4/E5)', () => {
+  const run = id => rules.find(rule => rule.id === id).check({ gameConfig });
+
+  it.each(['E4', 'E5'])('%s', id => {
+    const result = run(id);
+
+    expect(result.violations).toEqual([]);
+    expect(result.status).not.toBe(FAIL);
+  });
+
+  it('правила действительно смотрят на карты, а не пропускаются', () => {
+    expect(run('E4').status).not.toBe('skip');
+    expect(run('E5').status).not.toBe('skip');
+  });
+});
+
 // Демо-карта 2.5D: единственная в наборе, у которой есть `levels`/`ramps`.
-// Проверяется то, что молчит в рантайме — карта с промахом по тайлу или с
-// перекошенными респаунами грузится без единой строки в консоли.
+// Здесь остаётся то, чего правила движка не знают: тайл-лист карты и
+// раскладка респаунов по командам.
 describe('карта overpass (src/data/maps/overpass.js)', () => {
   const overpass = gameConfig.maps.overpass;
 
@@ -79,14 +100,6 @@ describe('карта overpass (src/data/maps/overpass.js)', () => {
 
     for (const tile of used) {
       expect(tile).toBeLessThan(frames);
-    }
-  });
-
-  it('перила входят в floor уровня (иначе ядро отвергнет карту)', () => {
-    for (const level of Object.values(overpass.levels)) {
-      for (const wall of level.walls) {
-        expect(level.floor).toContain(wall);
-      }
     }
   });
 

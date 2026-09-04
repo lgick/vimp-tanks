@@ -4,12 +4,41 @@ use serde::{Deserialize, Serialize};
 use crate::body_tag::BodyTag;
 use crate::config::{KeyConfig, ModelConfig, PanelValue, WeaponConfig};
 use crate::level::LevelState;
-use vimp_engine_core::config::PLAYER_STATE_LEN;
+use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
 use crate::motion::{self, TurretInput};
 use vimp_engine_core::map::{level_interaction, levels_interaction};
 use vimp_engine_core::physics::{deg_to_rad, round2};
 use vimp_engine_core::rng::Rng;
+
+/// Строка снапшота танка: 7 float (x,y,angle,gunRotation,vx,vy,engineLoad) +
+/// condition/size/teamId + angvel + z/level (движковый `BlockKind::Indexed8`
+/// — форма, не игровая сущность; движок принимает `Vec<FieldValue>` в
+/// порядке `m1`-схемы src/config/snapshot.js).
+#[derive(Clone, Copy)]
+pub struct TankRow {
+    pub floats: [f32; 7],
+    pub condition: u8,
+    pub size: u8,
+    pub team: u8,
+    pub angvel: f32,
+    pub z: f32,
+    pub level: u8,
+}
+
+impl TankRow {
+    pub fn fields(&self) -> Vec<FieldValue> {
+        let mut fields: Vec<FieldValue> = self.floats.iter().copied().map(FieldValue::F32).collect();
+
+        fields.push(FieldValue::U8(self.condition));
+        fields.push(FieldValue::U8(self.size));
+        fields.push(FieldValue::U8(self.team));
+        fields.push(FieldValue::F32(self.angvel));
+        fields.push(FieldValue::F32(self.z));
+        fields.push(FieldValue::U8(self.level));
+        fields
+    }
+}
 
 /// Битовые маски клавиш игрока, разрешённые из config.playerKeys.
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
@@ -554,12 +583,12 @@ impl Tank {
     /// чужого корпуса за задержку интерполяции (кадр v5, см. RemoteTanks).
     /// Хвост строки — `angvel`, `z` и `level` (2.5D): порядок обязан
     /// совпадать со схемой `m1` (src/config/snapshot.js).
-    pub fn snapshot_row(&self, body: &RigidBody, size: f32) -> ([f32; 7], u8, u8, u8, f32, f32, u8) {
+    pub fn snapshot_row(&self, body: &RigidBody, size: f32) -> TankRow {
         let pos = body.translation();
         let vel = body.linvel();
 
-        (
-            [
+        TankRow {
+            floats: [
                 round2(pos.x),
                 round2(pos.y),
                 round2(body.rotation().angle()),
@@ -568,13 +597,13 @@ impl Tank {
                 round2(vel.y),
                 round2(self.engine_load),
             ],
-            self.condition,
-            size as u8,
-            self.team_id,
-            round2(body.angvel()),
-            round2(self.level_state.z),
-            self.level_state.level,
-        )
+            condition: self.condition,
+            size: size as u8,
+            team: self.team_id,
+            angvel: round2(body.angvel()),
+            z: round2(self.level_state.z),
+            level: self.level_state.level,
+        }
     }
 
     /// Состояние для client-side prediction (без округлений).
@@ -731,14 +760,16 @@ mod tests {
         tank.level_state = LevelState {
             level: 1,
             z: 0.456,
-            transit: Transit::Ramp,
+            transit: Transit::Ramp {
+                entered_at: 0.0,
+                from_level: 0,
+            },
         };
 
-        let (_floats, _condition, _size, _team, _angvel, z, level) =
-            tank.snapshot_row(&world.bodies[tank.body], 2.0);
+        let row = tank.snapshot_row(&world.bodies[tank.body], 2.0);
 
-        assert_eq!(z, 0.46);
-        assert_eq!(level, 1);
+        assert_eq!(row.z, 0.46);
+        assert_eq!(row.level, 1);
     }
 
     #[test]

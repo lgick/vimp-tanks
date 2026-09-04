@@ -9,11 +9,6 @@ import bakers from './bakers/index.js';
 import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 import { createLevelView } from './levelView.js';
 
-// один экземпляр на клиента: создаётся при сборке модуля, живёт столько же,
-// сколько сам плагин — сервисы пересобираются на смену ядра, состояние
-// «где игрок» при этом переписывается первым же кадром локального танка
-const levelView = createLevelView();
-
 // ClientPlugin танков: рендеры сущностей (parts), процедурные текстуры
 // (bakers) и игровые хуки клиентского ядра (ClientCore). default export
 // client-entry игры (vite.config.js --mode client, Этап 6.1);
@@ -47,6 +42,13 @@ export default {
   parts,
   bakers,
   styles,
+
+  // имена сервисов, которые доливает hooks.services(core): без этого списка
+  // контрактный чекер (правило C4) не может отличить игровой сервис от
+  // опечатки в componentDependencies — хук требует живого ядра, а имена
+  // из его `return` статически не видны
+  serviceNames: ['levelView', 'mapDynamics'],
+
   hooks: {
     // сервисы игры для её же parts (движок их не описывает — только раздаёт
     // тем, кто объявил их в componentDependencies, см. src/config/client.js).
@@ -55,6 +57,12 @@ export default {
     // levelView — где и на каком уровне локальный игрок: по нему плита моста
     // над ним становится полупрозрачной (2.5D)
     services(core) {
+      // экземпляр на ядро, а не на модуль: в headless-раннере
+      // (`npm run sim:scenarios`) в одном процессе живёт несколько
+      // VirtualClient, и общее на модуль состояние «где игрок» перезаписывал
+      // бы тот из них, кто обновился последним
+      const levelView = createLevelView();
+
       return {
         levelView,
         mapDynamics: {

@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### ⚠️ Breaking
+
+- Requires `vimp-engine-core` 0.11.0 (`STATIC_LEVEL_GROUP`).
+- The state dump changed shape again: `Transit::Ramp` is no longer a bare
+  variant but carries `entered_at` and `from_level`, so a dump taken by an
+  older build no longer loads (same class of change as the `BotBrain`
+  handoff dump below).
+
+### Added
+
+- The client checks `MAP_DATA` before it builds its replica of the map.
+  `ClientCore.set_map` now runs the engine's `map::validate_levels` — the
+  very rules the host runs on `load_map` — and refuses a broken map instead
+  of building geometry that differs from the authoritative one and desyncing
+  prediction with nothing in the console.
+- `ClientPlugin.serviceNames` lists the two services the plugin provides
+  (`levelView`, `mapDynamics`). It restores contract rule `C4` to an error:
+  the checker cannot call `hooks.services(core)`, so without the list a typo
+  in `componentDependencies` was only a warning. `npx vimp-contract --strict`
+  is green again.
+
+### Changed
+
+- A falling tank no longer phases through buildings. It used to collide
+  with nothing at all, and at `maxForwardSpeed` a 0.35 s fall covers some
+  seven tiles — enough to end up inside a wall and be shoved out by the
+  solver. It now carries the engine's `STATIC_LEVEL_GROUP` mask: the walls
+  of every level stop it, while tanks, crates, rays and blasts still do
+  not reach it (the invulnerability window is unchanged).
+- A ramp changes a tank's level only when it is entered through the end
+  matching that level — from the foot going up, from the top going down.
+  A ramp run has open sides, and the cell next to its top is often
+  reachable straight off the ground, which used to snap the tank onto the
+  bridge for free, past the ramp itself. Entering from the side now keeps
+  the tank's level and the run behaves as flat ground for it.
+- The map fingerprint that decides whether the level geometry has to be
+  rebuilt now includes an FNV-1a checksum of the level grids. `setId` plus
+  the grid size is the same for every tanks map, so two layered maps of
+  equal size were indistinguishable on the round-restart path, which calls
+  `createMap` without `clear()`.
+- `overpass`: the two bridge crates moved off the railing gaps onto the
+  outer slab rows. Level rules apply to tanks only, so a crate pushed over
+  a ledge would hang on the slab layer above open ground.
+
+### Fixed
+
+- The local tank takes its level from the very first frame. The engine sets
+  the client's own `gameId` after `begin_reconcile`, so that first frame
+  found no row to read and a tank spawned on a slab (`overpass` has two such
+  respawns per team) was predicted on the ground for a frame — wrong
+  collision groups and a tracer on the wrong level. Later frames keep coming
+  from the raw frame, as before: an interpolated sample lags by the buffer
+  and would drag a finished climb back down.
+- The level-1 probe a ground ray gets at a bridge ledge is now exactly one
+  cell long. Its end was estimated as the cell diagonal, which is the
+  longest a ray can stay inside a cell, so at any other entry angle the
+  probe spilled into the next cells and a tank standing well inside the
+  slab could be shot from the ground. The exit distance is now taken from
+  the cell walk itself.
+- A ray fired straight along an axis from under the bridge is now checked
+  against the cell strictly behind it. The zero component of the direction
+  was treated as negative, so the "is the shooter deep under the slab?"
+  test looked at a diagonal neighbour — exactly the case of shooting north
+  from the `overpass` `team2` spawn.
+- A bot no longer holds fire at an enemy on its own level standing in the
+  ledge window. The gate asked which level wins at that distance (the
+  upper one, by design), instead of whether the ray covers the target's
+  level at all.
+- A missed shot ends at the level in force at the end of the ray rather
+  than at the level of the last segment in the list, so a ground tracer
+  that grazes the bridge ledge is no longer drawn on the slab layer. Host
+  and client are corrected together and stay bit-identical.
+- The bridge slab now really turns semi-transparent while the local player
+  drives under it. The feature was dead for two independent reasons:
+  `Map` declared `onRender` as a class method, which shadows the
+  `Container.prototype.onRender` accessor so PixiJS never registered the
+  callback; and `Tank` computed "is this me?" once in the constructor,
+  where `localPlayer.id` is still `null` for a tank built from
+  `FIRST_SHOT_DATA` — the local one. The callback is now assigned as a
+  property (slab layers only), and the local check is asked at update time.
+- The `levelView` service is created per client core instead of once per
+  module, so several `VirtualClient`s in one headless process no longer
+  share (and overwrite) the "where is the player" state.
+- `src/standalone.js` is back on the `pool mini` map; the 2.5D demo map is
+  selected with `VITE_MAP='overpass' npm run dev` instead of an edit.
+- A fall now survives reconciliation. The replica used to drop an
+  unfinished `Falling` and start it over, so the height of one's own tank
+  followed the length of the replay rather than the host's fall time — it
+  jerked on an RTT spike and could land early on a long replay. The phase
+  is rebuilt from the authoritative `z`/`level`, which are now read off the
+  raw frame (`begin_reconcile`) rather than the interpolated sample.
+- A tank on a ramp is now predicted to be hit the way the host resolves it.
+  The host holds both level masks for it, while the client filtered targets
+  by the single discrete `level` of the frame row, so a predicted tracer
+  disagreed with the authoritative hit. A row whose `z` differs from its
+  `level` is now offered to the segments of both levels.
+- The level of a remote hull in the shot predictor comes from the predicted
+  world (`sim_boxes()`) when the tank is predicted there, and from the frame
+  row only as a fallback — the same single source the OBB already used.
+
+## [0.17.0] - 2026-09-03
+
 ### Added
 
 - 2.5D levels in the game core: a tank now carries a level (`0` — ground,

@@ -35,6 +35,18 @@ impl BombRow {
     }
 }
 
+/// Параметры спавна бомбы: подряд идущие `u8`/`u32` в позиционном списке
+/// аргументов перепутать нечем поймать, поэтому они собраны в структуру.
+pub struct BombSpawn {
+    pub weapon_index: usize,
+    pub shot_id: u32,
+    pub owner_id: u32,
+    pub team_id: u8,
+    /// Уровень, на котором лежит бомба: взрыв поражает только его.
+    pub level: u8,
+    pub position: Vector,
+}
+
 /// Взрывной снаряд (порт src/server/parts/Bomb.js).
 /// Логика детонации — в game.rs (ей нужен доступ к урону и событиям).
 #[derive(Serialize, Deserialize)]
@@ -49,16 +61,16 @@ pub struct Bomb {
 }
 
 impl Bomb {
-    pub fn new(
-        world: &mut PhysicsWorld,
-        weapon_index: usize,
-        weapon: &WeaponConfig,
-        shot_id: u32,
-        owner_id: u32,
-        team_id: u8,
-        level: u8,
-        position: Vector,
-    ) -> Self {
+    pub fn new(world: &mut PhysicsWorld, weapon: &WeaponConfig, spawn: BombSpawn) -> Self {
+        let BombSpawn {
+            weapon_index,
+            shot_id,
+            owner_id,
+            team_id,
+            level,
+            position,
+        } = spawn;
+
         let tag = BodyTag::Shot {
             shot_id,
             team_id,
@@ -135,13 +147,15 @@ mod tests {
         let mut world = PhysicsWorld::new();
         let bomb = Bomb::new(
             &mut world,
-            0,
             &weapon(),
-            1,
-            7,
-            1,
-            1,
-            Vector::new(10.0, 20.0),
+            BombSpawn {
+                weapon_index: 0,
+                shot_id: 1,
+                owner_id: 7,
+                team_id: 1,
+                level: 1,
+                position: Vector::new(10.0, 20.0),
+            },
         );
 
         assert_eq!(bomb.level, 1);

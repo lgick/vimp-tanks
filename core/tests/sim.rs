@@ -246,6 +246,13 @@ fn level_of(core: &GameCore, game_id: u32) -> u64 {
     data["m1"][game_id.to_string()][12].as_u64().unwrap()
 }
 
+/// Координата x танка из players_data (индекс 0 строки схемы m1).
+fn tank_x(core: &GameCore, game_id: u32) -> f32 {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()][0].as_f64().unwrap() as f32
+}
+
 fn make_core() -> GameCore {
     GameCore::new(&config_json()).unwrap()
 }
@@ -752,14 +759,20 @@ fn dynamic_box_ships_velocity_tail_only_while_moving() {
 // wasm-bindgen обёртки.
 
 /// Та же слоёная карта, но колонка 10 плиты — перила (тайл 4: и пол, и
-/// стена уровня 1). Ими закрыт западный край моста.
+/// стена уровня 1). Ими закрыт западный край моста — кроме строки 9, куда
+/// приходит рампа: перила поперёк её вершины валидатор считает рампой,
+/// ведущей в пустоту (въехать некуда).
 fn railed_map_json() -> String {
     let mut map: serde_json::Value = serde_json::from_str(&layered_map_json()).unwrap();
 
     {
         let slab = map["levels"]["1"]["map"].as_array_mut().unwrap();
 
-        for row in slab.iter_mut().take(15).skip(5) {
+        for (index, row) in slab.iter_mut().enumerate().take(15).skip(5) {
+            if index == 9 {
+                continue;
+            }
+
             row.as_array_mut().unwrap()[10] = serde_json::json!(4);
         }
     }
@@ -886,6 +899,64 @@ fn landing_applies_fall_damage() {
 }
 
 #[test]
+fn second_layered_map_of_the_same_size_rebuilds_levels() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, SLAB.0, SLAB.1, 0.0).unwrap();
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+
+    // та же размерность и тот же setId, но плиты в этой точке больше нет:
+    // отпечаток обязан заметить смену содержимого слоёв
+    let mut other: serde_json::Value = serde_json::from_str(&layered_map_json()).unwrap();
+
+    other["levels"]["1"]["map"] = serde_json::json!(vec![vec![0; 20]; 20]);
+    // плиты нет — рампе некуда вести, иначе карту отвергнет валидатор
+    other["ramps"] = serde_json::json!([]);
+
+    core.load_map(&other.to_string()).unwrap();
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 0, "слои пересобраны по новой карте");
+}
+
+#[test]
+fn falling_tank_stops_at_the_wall() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // разгон на запад, к стене периметра (колонка 0: x от 0 до 32)
+    core.spawn_actor(1, "m1", 1, 400.0, 112.0, 180.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    for _ in 0..600 {
+        core.step(DT);
+
+        if tank_x(&core, 1) < 80.0 {
+            break;
+        }
+    }
+
+    let x_before = tank_x(&core, 1);
+
+    assert!(x_before < 80.0, "танк не разогнался: x={x_before}");
+
+    // обрыв под танком: дальше он летит по инерции, ввод заблокирован
+    core.set_actor_level(1, 1);
+    steps(&mut core, 60);
+
+    let x_after = tank_x(&core, 1);
+
+    assert_eq!(level_of(&core, 1), 0, "танк приземлился");
+    assert!(
+        x_after > 32.0,
+        "падающий прошёл сквозь стену периметра: x={x_after}"
+    );
+    assert!(x_after < x_before, "инерция падения не сработала");
+}
+
+#[test]
 fn tanks_on_different_levels_do_not_collide() {
     let mut core = make_core();
 
@@ -1004,6 +1075,31 @@ fn ground_shot_hits_the_tank_on_the_open_edge() {
 }
 
 #[test]
+fn ground_shot_stops_at_the_second_slab_cell() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // тот же выстрел снизу, но цель — во ВТОРОЙ клетке плиты: проба
+    // уровня 1 живёт только в клетке кромки
+    core.spawn_actor(1, "m1", 1, 290.0, 272.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 376.0, 272.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 2), 1);
+    core.take_events();
+
+    fire(&mut core, 1, 4);
+
+    let all = events(&mut core);
+
+    assert_eq!(
+        health_of(&all, 2),
+        None,
+        "вглубь плиты проба не достаёт: {all:?}"
+    );
+}
+
+#[test]
 fn railing_protects_the_tank_from_below() {
     let mut core = make_core();
 
@@ -1111,6 +1207,10 @@ fn bomb_dropped_over_the_void_lands_on_the_ground() {
     core.spawn_actor(2, "m1", 2, 280.0, 336.0, 0.0).unwrap();
 
     steps(&mut core, 2);
+    // уровень назван явно: спавн на рампе геометрия считает заездом сбоку и
+    // держит на земле, а тест про бомбу требует стрелка наверху
+    core.set_actor_level(1, 1);
+    steps(&mut core, 2);
     assert_eq!(level_of(&core, 1), 1, "танк на верхней половине рампы");
     assert_eq!(level_of(&core, 2), 0);
     core.take_events();
@@ -1144,4 +1244,107 @@ fn players_json_matches_schema_width() {
     let row = data["m1"]["1"].as_array().unwrap();
 
     assert_eq!(row.len(), width, "строка JSON-пути обязана быть полной");
+}
+
+// Утверждения к отладочным сценариям tests/scenarios/*.json: раннер
+// сценариев проверяет только движковые инварианты и расхождение
+// предсказания, поэтому «уровень действительно сменился», «бот заехал на
+// мост» и «взрыв экранирован» живут здесь, а не читаются глазами в дампах.
+
+#[test]
+fn tank_climbs_the_ramp_and_falls_back_to_the_ground() {
+    // сценарий tests/scenarios/bridge.json + fall.json: 0 → 1 → 0
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // подножие рампы, движение на восток: рампа → плита → кромка плиты
+    core.spawn_actor(1, "m1", 1, 208.0, 304.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 0, "старт на земле");
+
+    let mut climbed = None;
+    let mut landed = None;
+
+    for tick in 0..900 {
+        core.step(DT);
+
+        let level = level_of(&core, 1);
+
+        if climbed.is_none() && level == 1 {
+            climbed = Some(tick);
+        } else if climbed.is_some() && level == 0 {
+            landed = Some(tick);
+            break;
+        }
+    }
+
+    assert!(climbed.is_some(), "танк не поднялся на плиту");
+    assert!(
+        landed.is_some(),
+        "съехав с кромки плиты, танк обязан вернуться на землю"
+    );
+    // плита кончается на колонке 12 (x < 416): приземление — восточнее
+    assert!(
+        tank_x(&core, 1) > 416.0,
+        "приземление за кромкой плиты, x = {}",
+        tank_x(&core, 1)
+    );
+}
+
+#[test]
+fn scripted_bot_drives_onto_the_bridge() {
+    // сценарий tests/scenarios/bots_bridge.json: нав-граф слоёной карты
+    // действительно приводит бота наверх, а не только строит путь
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 112.0, 304.0, 0.0).unwrap();
+
+    let mut reached = false;
+
+    // до 60 секунд патрулирования: цель патруля случайна, мост выпадает не
+    // с первой попытки
+    for _ in 0..7200 {
+        core.step(DT);
+
+        if level_of(&core, 1) == 1 {
+            reached = true;
+            break;
+        }
+    }
+
+    assert!(reached, "бот ни разу не заехал на мост");
+}
+
+/// Демо-карта 2.5D целиком (src/data/maps/overpass.js), сериализованная
+/// скриптом экспорта; синхронность фикстуры с модулем стережёт
+/// tests/config/game.test.js.
+fn overpass_map_json() -> &'static str {
+    include_str!("../../tests/core/fixtures/overpass.json")
+}
+
+#[test]
+fn overpass_loads_and_places_respawns_on_their_levels() {
+    let mut core = make_core();
+
+    core.load_map(overpass_map_json())
+        .expect("overpass обязан проходить валидацию карты");
+
+    // респауны карты объявлены в НЕмасштабированных единицах: хост
+    // умножает их на scale (0.4) до спавна — RoundManager.createMap
+    let at = |x: f32, y: f32| (x * 0.4, y * 0.4);
+    // мостовой респаун team1 (объявлен уровнем 1) и наземный team2:
+    // уровень тут берётся из геометрии, без set_actor_level
+    let (x, y) = at(336.0, 944.0);
+    core.spawn_actor(1, "m1", 1, x, y, 0.0).unwrap();
+
+    let (x, y) = at(2352.0, 208.0);
+    core.spawn_actor(2, "m1", 2, x, y, 180.0).unwrap();
+
+    steps(&mut core, 2);
+
+    assert_eq!(level_of(&core, 1), 1, "мостовой респаун — уровень 1");
+    assert_eq!(level_of(&core, 2), 0, "наземный респаун — уровень 0");
 }

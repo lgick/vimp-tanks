@@ -2,6 +2,15 @@ import { Container, Ticker } from 'pixi.js';
 import TrackMark from './TrackMark.js';
 import { normalizeAngle } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../../levelZ.js';
+import {
+  M1_X,
+  M1_Y,
+  M1_ANGLE,
+  M1_ENGINE_LOAD,
+  M1_CONDITION,
+  M1_SIZE,
+  M1_LEVEL,
+} from '../../snapshotFields.js';
 
 // базовый zIndex следов внутри своего уровня
 const TRACKS_BASE_Z = 1;
@@ -14,16 +23,16 @@ export default class Tracks extends Container {
     // на нём, даже когда танк уже уехал по рампе. Поэтому отметки живут не в
     // самом парте, а в контейнере СВОЕГО уровня: контейнер парта один, а
     // слоёв два, и разъехаться по zIndex они могут только сиблингами на сцене
-    this._level = data[12] || 0;
+    this._level = data[M1_LEVEL] || 0;
     this._markLayers = new Map();
     this.zIndex = levelZ(TRACKS_BASE_Z, this._level);
 
-    this._currentX = data[0] || 0;
-    this._currentY = data[1] || 0;
-    this._currentRotation = data[2] || 0;
-    this._engineLoad = data[6] || 0;
-    this._condition = data[7];
-    this._size = data[8];
+    this._currentX = data[M1_X] || 0;
+    this._currentY = data[M1_Y] || 0;
+    this._currentRotation = data[M1_ANGLE] || 0;
+    this._engineLoad = data[M1_ENGINE_LOAD] || 0;
+    this._condition = data[M1_CONDITION];
+    this._size = data[M1_SIZE];
 
     // состояние для расчета дельт и ускорений
     this._prevX = this._currentX;
@@ -97,13 +106,13 @@ export default class Tracks extends Container {
   }
 
   update(data) {
-    this._currentX = data[0];
-    this._currentY = data[1];
-    this._currentRotation = data[2];
-    this._engineLoad = data[6];
-    this._condition = data[7];
+    this._currentX = data[M1_X];
+    this._currentY = data[M1_Y];
+    this._currentRotation = data[M1_ANGLE];
+    this._engineLoad = data[M1_ENGINE_LOAD];
+    this._condition = data[M1_CONDITION];
 
-    const level = data[12] || 0;
+    const level = data[M1_LEVEL] || 0;
 
     if (level !== this._level) {
       this._level = level;
