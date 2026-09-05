@@ -1090,7 +1090,7 @@ mod tests {
             },
         );
 
-        Rc::new(MapLevels::build(&grid0, &[], &levels, &[], 32.0))
+        Rc::new(MapLevels::build(&grid0, &[], &levels, &[], 32.0, None))
     }
 
     #[test]
@@ -1187,7 +1187,7 @@ mod tests {
             );
         }
 
-        Rc::new(MapLevels::build(&grid0, &[], &levels, &[], 32.0))
+        Rc::new(MapLevels::build(&grid0, &[], &levels, &[], 32.0, None))
     }
 
     // ящик уровня `level` с центром (144, 16) — колонка 4, за кромкой

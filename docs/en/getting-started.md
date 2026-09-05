@@ -116,6 +116,33 @@ VITE_MAP='terraces' npm run dev    # the three-level one
 - **sounds** — `build/sounds/`, the product of `npm run audio:process`.
   Without ffmpeg they simply stay silent; the match works either way.
 
+`npm run audio:process` is the only step that touches loudness: it runs the
+ffmpeg filter chain (silence trim + `loudnorm` to `I = -16` LUFS) for both
+outputs — mp3 and webm — while `npm run build` merely stages the result into
+`dist/sounds/`. After reprocessing, check the result with a measurement
+rather than by ear:
+
+```bash
+npm run audio:check   # ebur128 over build/sounds/, per sound, both codecs
+```
+
+A looped sample takes a different chain: no `silenceremove` (it cuts at a
+threshold rather than at a zero crossing, and a shifted loop start clicks on
+every turn) and a two-pass `loudnorm` (`linear=true`, measured values from a
+first pass) — a single pass normalizes DYNAMICALLY, and a gain that drifts
+inside a half-second loop is heard as an uneven idle and as a step at the
+loop seam. The script reads which sounds loop from `src/config/sounds.js`,
+so the pipeline and the catalog cannot drift apart.
+
+It prints the integrated loudness of every `.mp3`/`.webm` pair and exits
+non-zero when the two codecs of one sound differ by more than 1 LU — the
+regression that made the webm branch (Chrome, Firefox, Edge) unnormalized
+while only the mp3 (Safari) was filtered. It also flags a file that lands
+more than 2 LU off the target, which single-pass `loudnorm` cannot always
+avoid on a very dynamic source, and skips files shorter than the 400 ms
+gating window, where integrated loudness is undefined. It needs ffmpeg and
+is not part of CI.
+
 WebRTC isn't used at all in this mode.
 
 `npm run build` is *not* needed here: Vite serves `src/**` and

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Container, Texture } from 'pixi.js';
-import Tank from '../../../src/client/parts/Tank.js';
+import Tank, {
+  calculateEngineSoundParams,
+} from '../../../src/client/parts/Tank.js';
+import { shadow, parallax } from '../../../src/config/render.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
 // (регистрация/обновление/снятие) — визуал рендером не трогаем.
@@ -135,7 +138,6 @@ describe('Tank: уровни 2.5D', () => {
     }),
     alphaFor: () => 1,
     tintFor: () => 0xffffff,
-    layered: false,
   });
 
   // localPlayer — движковый сервис: сравнивает id сущности со своим gameId
@@ -210,15 +212,13 @@ describe('Tank: уровни 2.5D', () => {
 });
 
 // Признаки высоты и уровня (задачи 3 и 4 мастер-плана): тень — самый дешёвый
-// и самый читаемый из них, бейдж — знак СВОЕГО уровня, и только на слоёной
-// карте.
+// и самый читаемый из них, дальше идёт масштаб корпуса. Ни бейджа уровня,
+// ни наклона корпуса больше нет (этапы 5 и 5.2 кодревью): уровень читается
+// по кольцу на радаре, затемнению нижних слоёв, тени и параллаксу.
 describe('Tank: признаки уровня и высоты', () => {
-  const badges = [Texture.EMPTY, Texture.EMPTY, Texture.EMPTY];
-
   const viewAssets = {
     ...assets,
     tankShadowTexture: { texture: Texture.EMPTY, contentSize: 24 },
-    levelBadgeTexture: badges,
   };
 
   // строка m1 целиком: [..., angvel, z, level]
@@ -242,11 +242,10 @@ describe('Tank: признаки уровня и высоты', () => {
   // при пустом трансформе её центр — середина полотна
   const renderer = { screen: { width: 800, height: 600 } };
 
-  const makeView = (layered = true) => ({
+  const makeView = () => ({
     level: 0,
     x: 0,
     y: 0,
-    layered,
     set() {},
     alphaFor: () => 1,
     tintFor: () => 0xffffff,
@@ -267,38 +266,121 @@ describe('Tank: признаки уровня и высоты', () => {
     return { tank, stage };
   };
 
-  it('тень уезжает от корпуса тем сильнее, чем выше танк', () => {
+  // проекция 2.5D: смещается КОРПУС, тень остаётся в мировой точке. Раньше
+  // было наоборот, и тень выглядела выше танка
+  it('корпус уезжает от тени тем сильнее, чем выше танк', () => {
     const { tank } = onStage({ levelView: makeView() });
 
     tank.update(row(0, 0, 100, 100));
     tank.onRender();
 
+    expect(tank.x).toBeCloseTo(100);
     expect(tank._shadow.x).toBeCloseTo(100);
 
     tank.update(row(0, 2, 100, 100));
     tank.onRender();
 
-    const low = Math.abs(tank._shadow.x - tank.x);
+    const low = Math.abs(tank.x - tank._shadow.x);
 
     tank.update(row(0, 4, 100, 100));
     tank.onRender();
 
-    expect(Math.abs(tank._shadow.x - tank.x)).toBeGreaterThan(low);
+    expect(Math.abs(tank.x - tank._shadow.x)).toBeGreaterThan(low);
   });
 
-  it('тень уезжает сильнее у края экрана, чем в центре камеры', () => {
+  // масштаб высоты — та же проекция, что у плиты: танк на уровне 1 крупнее
+  // наземного ровно настолько же, насколько крупнее сама плита под ним
+  it('корпус на высоте крупнее ровно на shear', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100));
+
+    const ground = tank.body.scale.x;
+
+    tank.update(row(1, 1, 100, 100));
+
+    expect(tank.body.scale.x / ground).toBeCloseTo(1 + parallax.shear, 6);
+    expect(tank.gun.scale.x).toBeCloseTo(tank.body.scale.x, 6);
+    // обломки едут по той же проекции: иначе подбитый танк съедет с плиты
+    expect(tank.wreck.scale.x).toBeCloseTo(tank.body.scale.x, 6);
+  });
+
+  // тень — силуэт корпуса: круглая тень нормировалась по `size` (2 единицы
+  // при корпусе 8 × 6) и её мягкий ореол вылезал из-под углов вращающегося
+  // корпуса серым кружком
+  it('тень при z = 0 не крупнее корпуса больше, чем на sizeFactor', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100));
+    tank.onRender();
+
+    const { contentSize } = viewAssets.tankShadowTexture;
+    // длина корпуса на экране: полотно танка — 4 × размер модели
+    const bodyLength = tank._size * 4;
+    const shadowLength = tank._shadow.scale.x * contentSize;
+
+    expect(shadowLength).toBeCloseTo(bodyLength * shadow.sizeFactor, 6);
+    expect(shadowLength / bodyLength).toBeLessThan(1.1);
+    // масштаб один на обе оси: текстура уже в пропорции корпуса
+    expect(tank._shadow.scale.y).toBeCloseTo(tank._shadow.scale.x, 6);
+  });
+
+  it('с высотой тень растёт и бледнеет', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100));
+    tank.onRender();
+
+    const groundScale = tank._shadow.scale.x;
+    const groundAlpha = tank._shadow.alpha;
+
+    tank.update(row(1, 1, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow.scale.x).toBeGreaterThan(groundScale);
+    expect(tank._shadow.alpha).toBeLessThan(groundAlpha);
+  });
+
+  it('тень всегда стоит в мировой точке танка', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 3, 100, 250));
+    tank.onRender();
+
+    expect(tank._shadow.x).toBeCloseTo(100);
+    expect(tank._shadow.y).toBeCloseTo(250);
+    // корпус при этом уехал от центра камеры (400, 300)
+    expect(tank.x).toBeLessThan(100);
+    expect(tank.y).toBeLessThan(250);
+  });
+
+  it('корпус уезжает сильнее у края экрана, чем в центре камеры', () => {
     const { tank } = onStage({ levelView: makeView() });
 
     // центр камеры — (400, 300): в нём сдвига нет вовсе
     tank.update(row(0, 3, 400, 300));
     tank.onRender();
 
-    expect(Math.abs(tank._shadow.x - tank.x)).toBeCloseTo(0);
+    expect(Math.abs(tank.x - tank._shadow.x)).toBeCloseTo(0);
 
     tank.update(row(0, 3, 100, 300));
     tank.onRender();
 
-    expect(Math.abs(tank._shadow.x - tank.x)).toBeGreaterThan(0);
+    expect(Math.abs(tank.x - tank._shadow.x)).toBeGreaterThan(0);
+  });
+
+  // в levelView, в звук и в уклон уходит НЕсмещённая точка: иначе поехали бы
+  // и дыра в плите, и панорама своего танка
+  it('в levelView уходит мировая, а не нарисованная точка', () => {
+    const set = vi.fn();
+    const localPlayer = { is: () => true };
+    const { tank } = onStage({ levelView: { ...makeView(), set }, localPlayer });
+
+    tank.update(row(1, 1, 100, 250));
+    tank.onRender();
+
+    expect(set).toHaveBeenLastCalledWith(1, 100, 250, 1);
+    expect(tank.x).not.toBeCloseTo(100);
   });
 
   // тень лежит на слое, НАД которым висит танк: по ней и видно, что танк
@@ -328,86 +410,156 @@ describe('Tank: признаки уровня и высоты', () => {
 
     expect(stage.children).toHaveLength(0);
   });
+});
 
-  // парты строятся из FIRST_SHOT_DATA, когда свой id ещё неизвестен: бейдж
-  // обязан появиться позже, а не остаться скрытым навсегда
-  it('бейдж уровня показывается только своему танку', () => {
+// Д9: слушатель — центр камеры, то есть свой же танк. Источник, лежащий
+// ровно на слушателе, HRTF сворачивает в гребенчатую окраску («гул»), а
+// расхождение камеры и танка в пару пикселей кидает звук целиком в одно
+// ухо. Свой двигатель принадлежит игроку, а не миру.
+describe('Tank: свой двигатель непространственный', () => {
+  const row = (id = '1') => ({ id });
+
+  const makeTankFor = (soundManager, localPlayer) =>
+    new Tank(data(), assets, { soundManager, localPlayer }, row());
+
+  const lastCall = mock => mock.mock.calls[mock.mock.calls.length - 1];
+
+  it('свой танк регистрирует звук с spatial: false', () => {
+    const soundManager = makeSoundManager();
+
+    new Tank(
+      data(),
+      assets,
+      { soundManager, localPlayer: { is: id => id === '1' } },
+      row(),
+    );
+
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(false);
+  });
+
+  it('чужой танк остаётся пространственным', () => {
+    const soundManager = makeSoundManager();
+
+    new Tank(
+      data(),
+      assets,
+      { soundManager, localPlayer: { is: () => false } },
+      row('2'),
+    );
+
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(true);
+  });
+
+  it('без сервиса localPlayer звук пространственный', () => {
+    const soundManager = makeSoundManager();
+
+    makeTank(soundManager);
+
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(true);
+  });
+
+  // парт своего танка строится из FIRST_SHOT_DATA, до первого бинарного
+  // кадра: в конструкторе `localPlayer.id` ещё null, и флаг обязан
+  // догнать через updateSoundData
+  it('флаг догоняет, если localPlayer заполнился после создания', () => {
     let myId = null;
-    const localPlayer = {
-      is: id => myId !== null && String(id) === String(myId),
-    };
-    const { tank } = onStage({ levelView: makeView(), localPlayer });
+    const soundManager = makeSoundManager();
+    const tank = new Tank(
+      data(),
+      assets,
+      {
+        soundManager,
+        localPlayer: { is: id => myId !== null && String(id) === String(myId) },
+      },
+      row(),
+    );
 
-    tank.onRender();
-
-    expect(tank._badge.visible).toBe(false);
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(true);
 
     myId = '1';
-    tank.onRender();
+    tank.update(data());
 
-    expect(tank._badge.visible).toBe(true);
+    expect(lastCall(soundManager.updateSoundData)[1].spatial).toBe(false);
   });
 
-  it('на плоской карте бейджа нет вовсе', () => {
-    const { tank } = onStage({
-      levelView: makeView(false),
-      localPlayer: { is: () => true },
-    });
+  // короткий ряд (m1 без хвоста) не должен ронять NaN в sound.rate:
+  // clamp(undefined) даёт NaN, а NaN !== NaN — движок звал бы rate каждый
+  // кадр и Web Audio отверг бы нефинитное значение
+  it('короткий ряд не даёт NaN в параметрах звука', () => {
+    const soundManager = makeSoundManager();
+    const tank = makeTankFor(soundManager, { is: () => true });
 
-    tank.onRender();
+    tank.update([0, 0, 0, 0, 0, 0]); // ряд обрывается до engineLoad
 
-    expect(tank._badge.visible).toBe(false);
+    const { rate, volume } = lastCall(soundManager.updateSoundData)[1];
+
+    expect(Number.isFinite(rate)).toBe(true);
+    expect(Number.isFinite(volume)).toBe(true);
   });
 
-  // значок печётся в «пекарских» пикселях, как и корпус, но добавляется
-  // отдельным спрайтом: забыть про `_scaleFactor` — значит получить диск
-  // вдвое шире танка, который ложится на корпус, и вместо танка на карте
-  // виден белый кружок
-  it('бейдж приведён к мировому масштабу корпуса', () => {
-    const { tank } = onStage({
-      levelView: makeView(),
-      localPlayer: { is: () => true },
-    });
+  it('позиция звука мировая и несмещённая', () => {
+    const soundManager = makeSoundManager();
+    const tank = makeTankFor(soundManager, { is: () => true });
 
-    expect(tank._badge.scale.x).toBeCloseTo(tank._scaleFactor * 1.4);
-    expect(tank._badge.scale.y).toBeCloseTo(tank._badge.scale.x);
+    tank.update([120, 240, 0, 0, 0, 0, 0, 100, 10, 1, 0, 1, 1]);
+
+    expect(lastCall(soundManager.updateSoundData)[1].position).toEqual({
+      x: 120,
+      y: 240,
+    });
+  });
+});
+
+// Параметры звука двигателя: нагрузка задаёт и высоту тона, и громкость, а
+// на холостых тон ещё и слегка покачивается — ровный бас ухо слышит как
+// гул, а не как работающий двигатель.
+describe('calculateEngineSoundParams', () => {
+  it('на холостом ходу отдаёт базовый тон и пониженную громкость', () => {
+    const { rate, volumeFactor } = calculateEngineSoundParams(0);
+
+    expect(rate).toBeCloseTo(1, 6);
+    expect(volumeFactor).toBeCloseTo(0.6, 6);
   });
 
-  // корпус — 4 × 3 размера (`src/data/models.js`), значит по полудлине это
-  // два размера от центра; значок обязан выноситься дальше при ЛЮБОМ курсе
-  it('бейдж не наезжает на корпус и не кружит вокруг него', () => {
-    const { tank } = onStage({
-      levelView: makeView(),
-      localPlayer: { is: () => true },
-    });
+  it('на полном ходу поднимает и тон, и громкость до максимума', () => {
+    const { rate, volumeFactor } = calculateEngineSoundParams(1);
 
-    const halfLength = tank._size * 2;
+    expect(rate).toBeCloseTo(1.15, 6);
+    expect(volumeFactor).toBeCloseTo(1, 6);
+  });
 
-    for (const angle of [0, Math.PI / 4, Math.PI / 2, 2.5, -1.3]) {
-      const data = row(0);
+  it('при напряжении (газ в стену) поднимает тон выше полного хода', () => {
+    expect(calculateEngineSoundParams(2).rate).toBeCloseTo(1.25, 6);
+  });
 
-      data[2] = angle;
-      tank.update(data);
-      tank.onRender();
+  it('ограничивает громкость на нагрузке свыше 1.0', () => {
+    expect(calculateEngineSoundParams(3).volumeFactor).toBeCloseTo(1, 6);
+  });
 
-      // в мировых осях значок всегда строго под танком
-      const badge = tank.toGlobal(tank._badge.position);
+  it('монотонно повышает тон с ростом нагрузки', () => {
+    const rates = [0, 0.25, 0.5, 0.75, 1].map(
+      load => calculateEngineSoundParams(load).rate,
+    );
 
-      expect(badge.x).toBeCloseTo(tank.x);
-      expect(badge.y - tank.y).toBeGreaterThan(halfLength);
-      expect(tank._badge.rotation).toBeCloseTo(-angle);
+    for (let i = 1; i < rates.length; i += 1) {
+      expect(rates[i]).toBeGreaterThan(rates[i - 1]);
     }
   });
 
-  it('бейдж берёт текстуру своего уровня', () => {
-    const { tank } = onStage({
-      levelView: makeView(),
-      localPlayer: { is: () => true },
-    });
+  it('нечисловая нагрузка не даёт NaN', () => {
+    const { rate, volumeFactor } = calculateEngineSoundParams(undefined);
 
-    tank.update(row(2));
-    tank.onRender();
+    expect(Number.isFinite(rate)).toBe(true);
+    expect(Number.isFinite(volumeFactor)).toBe(true);
+  });
 
-    expect(tank._badge.texture).toBe(badges[2]);
+  it('покачивает тон на холостых и не трогает его на полном ходу', () => {
+    // четверть периода 2.5 Гц — максимум синуса
+    const peakMs = 100;
+
+    expect(calculateEngineSoundParams(0, peakMs).rate).toBeCloseTo(1.015, 6);
+    expect(calculateEngineSoundParams(0, 0).rate).toBeCloseTo(1, 6);
+    // на полном ходу покачивание выключено множителем (1 - baseLoad)
+    expect(calculateEngineSoundParams(1, peakMs).rate).toBeCloseTo(1.15, 6);
   });
 });

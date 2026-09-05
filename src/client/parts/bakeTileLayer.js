@@ -77,8 +77,11 @@ export async function bakeTileLayer({
     frame: new Rectangle(0, 0, mapWidth, mapHeight),
   });
 
-  // очищаем временный контейнер
+  // очищаем временный контейнер и разбор тайл-листа: `Spritesheet` держит
+  // по текстуре на кадр, а нужен он был только на время запекания. Сам
+  // baseTexture — общий ассет игры и остаётся в кеше Assets
   tempContainer.destroy({ children: true });
+  spriteSheet.destroy();
 
   return bakedTexture;
 }

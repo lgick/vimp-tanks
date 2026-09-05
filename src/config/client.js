@@ -1,5 +1,5 @@
 import sounds from './sounds.js';
-import { seeThrough, volume } from './render.js';
+import { seeThrough, parallax, volume, shadow } from './render.js';
 
 // Игровая половина клиентского CONFIG_DATA: сущности рендера, канвасы,
 // keyset игрока, схемы panel/stat, тексты chat/vote/gameInform. Движковые
@@ -10,8 +10,8 @@ export default {
   parts: {
     // распределение данных в заданные классы
     gameSets: {
-      c1: ['Map', 'MapVolume', 'MapRadar'],
-      c2: ['Map', 'MapVolume'],
+      c1: ['Map', 'MapRadar'],
+      c2: ['Map'],
       m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks'],
       w1: ['ShotEffect'],
       w2: ['Bomb'],
@@ -20,7 +20,6 @@ export default {
     // отображение классов на полотнах
     entitiesOnCanvas: {
       Map: 'vimp',
-      MapVolume: 'vimp',
       MapRadar: 'radar',
       TankRadar: 'radar',
       Tank: 'vimp',
@@ -103,23 +102,16 @@ export default {
           name: 'tankShadowTexture',
           component: 'Tank',
           params: {
-            // тень заметно крупнее корпуса: нормировка по contentSize
-            // оставляет её видимый размер независимым от запаса под размытие
-            radius: 12,
-            blur: 4,
+            // силуэт корпуса: та же пропорция 4:3, что у самого танка
+            // (`tankTexture`). Размытие маленькое — оно даёт мягкий край, а
+            // не второй силуэт вокруг фигуры; нормировка по contentSize
+            // оставляет видимый размер независимым от запаса под размытие
+            width: 40,
+            height: 30,
+            radius: 6,
+            blur: 2,
             quality: 20,
             color: 0x000000,
-          },
-        },
-        {
-          name: 'levelBadgeTexture',
-          component: 'Tank',
-          params: {
-            radius: 7,
-            fontSize: 10,
-            borderWidth: 1.5,
-            borderColor: 0x101010,
-            textColor: 0x101010,
           },
         },
         {
@@ -152,12 +144,22 @@ export default {
 
     // карта зависимостей компонентов
     componentDependencies: {
-      // Map и MapVolume пекут свои слои в текстуру, Tank по рендереру
-      // восстанавливает центр камеры (тень и параллакс объёма)
-      renderer: ['Map', 'MapVolume', 'Tank'],
+      // Map печёт свои слои в текстуру; по рендереру восстанавливают центр
+      // камеры все, кто рисуется на высоте (проекция 2.5D,
+      // src/client/parallax.js): слои и тела карты, танк, следы, дым, бомбы
+      // и эффекты
+      renderer: [
+        'Map',
+        'Tank',
+        'Tracks',
+        'Smoke',
+        'Bomb',
+        'ShotEffect',
+        'ExplosionEffect',
+      ],
       // база ассетов игры: Map строит из неё URL тайл-листов и спрайтов
       // динамических тел (`${assetsBase}img/<file>`), см. assets/img/
-      assetsBase: ['Map', 'MapVolume'],
+      assetsBase: ['Map'],
       // компоненты использующие звук
       soundManager: ['ExplosionEffect', 'ShotEffect', 'Bomb', 'Tank'],
       // геометрия динамики карты (рендерные боксы ящиков): эффект попадания
@@ -167,28 +169,33 @@ export default {
       mapDynamics: ['ShotEffect'],
       // 2.5D: где локальный игрок и на каком он уровне. Пишет Tank, читают
       // все, кто уступает ему видимость: плита моста и ящики на ней, чужие
-      // танки, дым, бомбы и эффекты — по одной формуле (levelView.alphaFor)
+      // танки, дым, бомбы, эффекты и следы — по одной формуле
+      // (levelView.alphaFor)
       levelView: [
         'Tank',
         'Map',
-        'MapVolume',
         'MapRadar',
         'Smoke',
         'Bomb',
         'ShotEffect',
         'ExplosionEffect',
+        'Tracks',
       ],
-      // «свой ли это танк» — движковый сервис; локальный танк единственный,
-      // кто вправе писать в levelView
-      localPlayer: ['Tank'],
+      // «своя ли это сущность» — движковый сервис; локальный танк
+      // единственный, кто вправе писать в levelView, а свой танк и свой
+      // выстрел вдобавок звучат непространственно (spatial: false)
+      localPlayer: ['Tank', 'ShotEffect'],
     },
 
-    // 2.5D-рендер: прозрачность уровней над игроком и объёмные элементы.
+    // 2.5D-рендер: прозрачность уровней над игроком, проекция высоты и
+    // объёмные элементы.
     // Источник этих чисел — src/config/render.js: партам движок конфиг не
     // отдаёт (фабрика даёт только сервисы), поэтому они импортируют модуль
     // напрямую, а здесь он лежит как часть клиентского конфига игры
     seeThrough,
+    parallax,
     volume,
+    shadow,
 
     // звуковые ассеты
     sounds,

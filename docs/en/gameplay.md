@@ -119,21 +119,49 @@ A map may carry up to eight levels: the ground (0) and overhead floors
 - **Up and down a ramp.** A ramp is a directional run of ground tiles.
   Driving along it lifts the tank smoothly; the level snaps to the nearest
   whole one (0.5 is the border between floors). A single ramp may span
-  several floors at once (0 → 2): while on it the tank collides with the
-  geometry of *every* level the run connects, so it neither falls through
-  the bridge nor clips into the wall at the top.
+  several floors at once (0 → 2): while CLIMBING it the tank collides with
+  the geometry of *every* level the run connects, so it neither falls
+  through the bridge nor clips into the wall at the top. A tank merely
+  driving under the run's cells (a `1 → 2` ramp sits above ordinary ground)
+  stays on its own level with its own walls: a ground wall under a ramp
+  cannot be driven through.
 - **Slopes are felt.** Uphill the tank is slower (the speed ceiling drops
   with the grade) and on a steep climb with no throttle it rolls back
-  down; downhill it picks up speed. The grade follows the hull heading, so
+  down; downhill it picks up speed. The effect used to be a fraction of a
+  percent: the grade was measured in "levels per pixel" while the constants
+  were written for a dimensionless tangent. The grade is dimensionless now
+  (the map's level height over the run's length), and a climb is actually
+  felt. The grade follows the hull heading, so
   climbing at an angle is easier than head-on. The numbers are
   `climbGravity` and `climbMaxSpeedFactor` in
   [configuration.md](configuration.md#gamejs).
+- **A climb is visible.** The tank rises out of the wedge: the shadow stays
+  on the layer under it, the hull moves away from the shadow and grows with
+  height by the same projection as the slab, and the wedge itself is drawn
+  as a solid embankment with sides and a top end face. The hull no longer
+  tilts and the tracks no longer kick dust — a grade recovered from the
+  height between frames froze under a parked tank. To see it:
+  `VITE_MAP='terraces' npm run dev`, team `team1`, whose first spawn point
+  is the foot of the steep ramp facing west; hold `W`. At full throttle the
+  climb lasts a third of a second. There is no
+  level number above the tank — the level reads from another tank's ring in
+  its level colour, the layer tinting on the radar, the dimming of levels
+  below the player, the transparency of the slab above them, the shadow on
+  the layer under the tank and the height parallax.
 - **Ramps are entered from their ends.** A run lifts (or lowers) only the
   tank that drove in through the end matching its own level: from the foot
   going up, from the top going down. A tank that entered a ramp cell from
   the side — a cell near the top is often reachable straight off the
   ground — keeps its level, and the run behaves as ordinary flat ground for
-  it until it leaves and comes back through an end. The same holds for a
+  it until it leaves and comes back through an end. More than that: the
+  run's sides and its "wrong" end are closed off — driving onto the wedge
+  sideways, or in under it from the top, physically stops the tank. A legal
+  climber does not see those barriers at all. A **wide** ramp — a rectangular
+  block of ramp tiles — is driven through whole: the core cuts such a block
+  into parallel lane runs, and changing lanes mid-climb keeps the climb
+  going instead of being judged as a fresh entry. Lanes of DIFFERENT length
+  (a stepped block) count as different ramps, and moving between them is
+  judged by the gate as usual. The same holds for a
   spawn point placed on a ramp: it starts on the level the map geometry
   gives it, without a free ride upwards.
 - **On the bridge.** Tanks on different levels ignore each other

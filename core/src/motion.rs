@@ -83,7 +83,12 @@ pub fn drive_accel(
     model: &ModelConfig,
     rules: &LevelRules,
 ) -> f32 {
-    // в горку потолок скорости ниже: двигатель не тянет полный газ вверх
+    // в горку потолок скорости ниже: двигатель не тянет полный газ вверх.
+    // `.max(0.25)` — осознанный нижний предел: уклон безразмерный, и на
+    // отвесной карте (`levelHeight` много больше тайла) множитель ушёл бы
+    // в ноль и ниже, то есть потолок скорости стал бы отрицательным и
+    // подъём — невозможным вовсе. На демо-картах (уклон ≤ 0.5) предел не
+    // достигается: он включается с уклона 1.5
     let limit = model.max_forward_speed
         * (1.0 - rules.climb_max_speed_factor * grade.max(0.0)).max(0.25);
     let mut accel = 0.0;
@@ -168,8 +173,8 @@ mod tests {
             fall_time: 0.35,
             fall_damage: 15.0,
             max_fall_damage: 100.0,
-            climb_gravity: 220.0,
-            climb_max_speed_factor: 0.55,
+            climb_gravity: 500.0,
+            climb_max_speed_factor: 0.5,
         }
     }
 
@@ -226,8 +231,8 @@ mod tests {
         let rules = rules();
 
         let flat = drive_accel(1.0, true, false, 100.0, 0.0, &model, &rules);
-        let up = drive_accel(1.0, true, false, 100.0, 0.5, &model, &rules);
-        let down = drive_accel(1.0, true, false, 100.0, -0.5, &model, &rules);
+        let up = drive_accel(1.0, true, false, 100.0, 0.33, &model, &rules);
+        let down = drive_accel(1.0, true, false, 100.0, -0.33, &model, &rules);
 
         assert!(up < flat, "в горку тяга обязана быть меньше: {up} vs {flat}");
         assert!(
@@ -240,11 +245,28 @@ mod tests {
     fn uphill_lowers_the_speed_limit() {
         let model = model();
         let rules = rules();
-        // на уклоне 1.0 потолок — 45% от максимума
-        let speed = model.max_forward_speed * 0.5;
+        // уклон 0.5 — самый крутой прогон демо-карт (`terraces.rampSteep`):
+        // потолок на нём 75 % от максимума
+        let speed = model.max_forward_speed * 0.8;
 
-        assert!(drive_accel(1.0, true, false, speed, 1.0, &model, &rules) < 0.0);
+        assert!(drive_accel(1.0, true, false, speed, 0.5, &model, &rules) < 0.0);
         assert!(drive_accel(1.0, true, false, speed, 0.0, &model, &rules) > 0.0);
+    }
+
+    #[test]
+    fn a_reachable_grade_is_climbed_at_full_throttle() {
+        let model = model();
+        let rules = rules();
+
+        // достижимые уклоны демо-карт: 0.11 (`rampLong`), 0.33
+        // (`overpass.rampNorth`), 0.5 (`rampSteep`). На полном газе тяга
+        // обязана оставаться положительной на каждом из них
+        for grade in [0.11, 0.33, 0.5] {
+            assert!(
+                drive_accel(1.0, true, false, 0.0, grade, &model, &rules) > 0.0,
+                "уклон {grade} обязан проезжаться на полном газе"
+            );
+        }
     }
 
     #[test]

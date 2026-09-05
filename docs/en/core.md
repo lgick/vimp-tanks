@@ -463,7 +463,7 @@ vector `slope_vec` and the `Transit` it is in.
 | `Transit` | When | Collision mask | Input |
 | --- | --- | --- | --- |
 | `Grounded` | standing on its own level | that level only | normal |
-| `Ramp { climbing, low, high }` | the hull's centre is on a ramp tile | **every** level of the run (`low..=high`) | normal |
+| `Ramp { climbing, low, high, run }` | the hull's centre is on a ramp tile | with `climbing` — **every** level of the run (`low..=high`), otherwise its own level only | normal |
 | `Falling { elapsed, from, to }` | drove off a ledge | map walls only — no bodies | locked |
 
 `step_level()` is the single source of these rules for both sides: the
@@ -474,19 +474,39 @@ the authoritative one.
 - **Ramps.** `z` follows the ramp's progress; `level` is the nearest whole
   one (`z.round()` clamped to the run's ends), so a 0 → 2 ramp only hands
   out level 2 near its top instead of a third of the way up. The snap costs
-  nothing physically — on a ramp the mask already contains every level of
+  nothing physically — on a run the mask already contains every level of
   the run — it only makes the state defined once the tank leaves the ramp
-  at either end. The entry gate is decided ONCE, on entering the run, and
-  is kept in `Ramp { climbing }`: the entry is legal when the previous
+  at either end. Only a LEGAL climb widens the mask: for a tank that came
+  in from the side, or for one driving under the run's cells (a `1 → 2`
+  ramp lives in the level-1 grid with ordinary ground beneath it), the run
+  is a flat tile of its own level and the mask stays that level's group.
+  Otherwise a ground tank under the run would take the bridge's levels and
+  drive through the walls of its own. The entry gate is decided ONCE, on
+  entering the run, and is kept in `Ramp { climbing, run }` — together with
+  the run's NUMBER: moving into an adjacent run is a new entry, and the
+  neighbour's verdict is not inherited. The ONE exception is a lane change
+  on a wide ramp (`is_lane_change`): a rectangular block of ramp tiles is
+  cut into parallel lane runs by `MapLevels::build_runs`, and the crate
+  numbers the lanes of one hill with a shared `RampRun::block`, so a step
+  ACROSS the axis into a run of the SAME block carries the verdict over —
+  without it every lane border would break the climb halfway up. The number
+  comes from the engine on purpose: the physics fences a block by the same
+  field, and two definitions of one hill would drift apart. Lanes of
+  DIFFERENT length fall into different blocks and the gate judges the move. The entry is legal when the previous
   step's cell (`prev_cell`, written every step) lies outside this run, is
   its neighbour along the run's axis, and the end matches the tank's level
   — up from the foot, down from the top. A tank that came in from the side,
   diagonally, or ran into the top end from below (the passage under the
-  bridge) keeps its level and treats the run as flat ground. A spawn
+  bridge) keeps its level and treats the run as flat ground — if the run's
+  guards let it in at all (see below). A spawn
   directly on a run has nothing to judge by: there the old half-of-the-run
   rule applies.
-- **Grade.** On a ramp `slope_vec` is the uphill vector in levels per world
-  unit; `LevelState::grade(heading)` gives the longitudinal grade under the
+- **Grade.** On a ramp `slope_vec` is the uphill vector, and it is
+  DIMENSIONLESS: the engine computes it as `rise * levelHeight / span`,
+  where `levelHeight` is the map's level height in world units (the tile
+  size by default). On the demo maps the grade runs from 0.11
+  (`terraces.rampLong`) to 0.5 (`terraces.rampSteep`).
+  `LevelState::grade(heading)` gives the longitudinal grade under the
   hull's heading, and `motion::drive_accel` subtracts `grade *
   climbGravity` from the thrust and trims the speed ceiling by
   `climbMaxSpeedFactor * grade`. Off a ramp the grade is exactly 0 and the
@@ -495,7 +515,9 @@ the authoritative one.
   level enters `Falling`. The landing level is chosen at the moment of the
   drop — `MapLevels::landing_level` (the nearest floor below with a surface
   in that cell) — so a tank falling off level 2 over a level 1 slab lands on
-  that slab. The fall lasts `coreParams.levels.fallTime` per level of
+  that slab. The stored `to` only shapes the trajectory: the landing level
+  is recomputed from the cell of TOUCHDOWN, otherwise drifting past the
+  lower slab would sit the tank on a floor no longer under it. The fall lasts `coreParams.levels.fallTime` per level of
   height, during which input is
   ignored (held keys are picked up on landing) and the body carries the
   `STATIC_LEVEL_GROUP` mask alone while coasting on inertia: the walls of
@@ -511,8 +533,24 @@ the authoritative one.
   existed.
 
 Collision masks live on the hull collider (`Tank::collider`) and are
-rewritten by `Tank::sync_collision_groups` only when the mask actually
-changes.
+rewritten by `Tank::sync_collision_groups` only when the mask — or the
+"driving up a run" flag — actually changes: a legal climber passes the
+run's GUARDS straight through (`map::levels_interaction_on_ramp`), while
+everyone else sees them. The guards are the run's sides and its "wrong"
+end: separate engine colliders (`GameMap::create_ramp_guards`) that live in
+no grid and fence a whole BLOCK of ramp lanes, never a single lane. The
+client replica builds them itself with the same formulas
+(`Predictor::resolve_world`) — otherwise prediction would drive onto a run
+from the side where the host holds it. Walls the replica reads as the glued
+blocks of `MapLevels::static_blocks` (`collect_block_contacts`), the very
+list the host puts its colliders by.
+
+The guards are invisible to a bot's obstacle-avoidance rays
+(`bots::controller::avoid_obstacles` casts with
+`map::levels_interaction_on_ramp`): a run is one tile wide, so the side rays
+would hit its rails on every approach and turn the bot away from the foot.
+Driving in from the side is held by the guards themselves and by the nav
+graph, which routes no path through the cells of a run.
 
 `TanksSim` keeps its own copy of the map's `MapLevels` (`spawn_actor` never
 sees the map): it is refreshed in `on_fixed_step` whenever the map's
@@ -560,9 +598,20 @@ A height below the level is not enough to call it a fall, though. On a run
 the level snaps to `z.round()`, so a frame taken on the upper half of any
 ramp carries exactly that pair — and a fall locks the input, so reading it
 as one would drop the throttle on half of every climb while the host held
-it. The frame is read as a fall only **off a run** and only where the
-geometry has no floor of that level under the tank: the same two questions
-the host asks in `step_level` before it starts one.
+it. The frame is read as a fall only for a body that is **not climbing a
+run** and only where the geometry has no floor of that level under the
+tank: the same two questions the host asks in `step_level` before it starts
+one.
+
+The `LevelState` itself takes part in reconciliation too. The replay starts
+from the authoritative position, and the level state is not a position: its
+`prev_cell` and gate verdict would carry on from the end of the previous
+replay, and on the run's entry cell the gate would fire on the client only.
+So the predictor snapshots `LevelState` every step
+(`Predictor::push_level_snapshot`, a history as deep as the input history)
+and rewinds the state to the step the frame was taken on
+(`rewind_level_state`) before replaying; everything predicted later is
+recomputed by the replay.
 
 The **first** frame is the exception: the engine sets the client's own
 `gameId` only after `begin_reconcile` (`client/game.rs`), so there is
@@ -598,9 +647,14 @@ to the segments of both levels. The level of a remote hull is taken from the
 predicted world (`RemoteTanks::sim_boxes()`) whenever the tank is predicted
 there, and from the frame row only as a fallback — the same rule the OBB
 already followed. The resulting `startLevel`/`endLevel` go into the local
-tracer row,
-and a locally planted bomb picks its level by the host's rule (over a cell
-with no slab of its level it lands on the ground).
+tracer row, and the level of a locally planted bomb is decided by
+`level::bomb_level()` — ONE function for the replica and the host
+(`TanksSim::create_weapon_action` calls the same one). The rule: over a
+cell with no slab of its own level, and for a falling tank (input locked),
+the bomb settles on the nearest support BELOW (`MapLevels::landing_level`)
+rather than straight on the ground; a map with no level geometry gives the
+ground. Two copies of that rule drifted silently — the blast was drawn a
+floor below the damage.
 
 ### Shooting and explosions across levels (`core/src/shot_levels.rs`)
 

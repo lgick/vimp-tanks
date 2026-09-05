@@ -15,7 +15,7 @@ import { seeThroughAlpha, seeThroughTint } from './seeThrough.js';
 // (`mode`): иначе каждый парт читал бы конфиг по-своему и «дыра» вокруг
 // игрока разъехалась бы между слоем и ящиком на нём.
 export function createLevelView(cfg = seeThrough) {
-  const state = { level: 0, x: 0, y: 0, z: 0, layered: false };
+  const state = { level: 0, x: 0, y: 0, z: 0 };
 
   return {
     set(level, x, y, z = 0) {
@@ -23,13 +23,6 @@ export function createLevelView(cfg = seeThrough) {
       state.x = x;
       state.y = y;
       state.z = z;
-    },
-
-    // карта со слоями: отмечает `Map`, создавая слой уровня >= 1. По этому
-    // флагу локальный танк показывает бейдж уровня — на плоской карте
-    // (`pool mini`) значок с вечным «0» был бы только шумом
-    markLayered() {
-      state.layered = true;
     },
 
     alphaFor(level, worldX, worldY) {
@@ -53,9 +46,6 @@ export function createLevelView(cfg = seeThrough) {
     },
     get mode() {
       return cfg.mode;
-    },
-    get layered() {
-      return state.layered;
     },
     get level() {
       return state.level;

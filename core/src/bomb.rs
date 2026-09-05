@@ -126,7 +126,7 @@ impl Bomb {
 mod tests {
     use super::*;
 
-    use vimp_engine_core::map::level_group;
+    use vimp_engine_core::map::{body_filter, level_group};
 
     fn weapon() -> WeaponConfig {
         serde_json::from_value(serde_json::json!({
@@ -165,7 +165,9 @@ mod tests {
         let groups = world.colliders[handle].collision_groups();
 
         assert_eq!(groups.memberships, level_group(1));
-        assert_eq!(groups.filter, level_group(1));
+        // бомба не поднимается по рампе, поэтому стражи прогона для неё
+        // существуют — фильтр собирает движковый `body_filter`
+        assert_eq!(groups.filter, body_filter(level_group(1), false));
         assert!(!groups.memberships.contains(level_group(0)));
     }
 }

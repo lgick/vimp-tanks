@@ -2,6 +2,9 @@ import { Container, Ticker } from 'pixi.js';
 import TrackMark from './TrackMark.js';
 import { normalizeAngle } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../../levelZ.js';
+import { cameraCenter } from '../../camera.js';
+import { applyParallax } from '../../parallax.js';
+import { parallax as parallaxConfig } from '../../../config/render.js';
 import {
   M1_X,
   M1_Y,
@@ -16,8 +19,14 @@ import {
 const TRACKS_BASE_Z = 1;
 
 export default class Tracks extends Container {
-  constructor(data, assets) {
+  constructor(data, assets, dependencies = {}) {
     super();
+
+    // 2.5D: следы на плите НАД игроком обязаны гаснуть вместе с ней, а сами
+    // отметки — висеть на высоте своего уровня. Дым, ящики, танки и бомбы
+    // это уже делают; следы оставались единственным непрозрачным пятном
+    this._levelView = dependencies.levelView || null;
+    this._renderer = dependencies.renderer || null;
 
     // 2.5D: след принадлежит тому уровню, на котором он оставлен, и остаётся
     // на нём, даже когда танк уже уехал по рампе. Поэтому отметки живут не в
@@ -103,6 +112,14 @@ export default class Tracks extends Container {
 
     this._tickListener = ticker => this._internalUpdate(ticker.deltaMS);
     Ticker.shared.add(this._tickListener);
+
+    // `onRender` у Container — аксессор: назначается СВОЙСТВОМ, иначе сеттер
+    // не отработает и PixiJS не позовёт колбэк ни разу. Контейнер парта
+    // пустой (отметки живут сиблингами), но RenderGroup зовёт `_onRender`
+    // по своему списку, а не по содержимому — колбэк приходит каждый кадр
+    if (this._levelView) {
+      this.onRender = () => this._updateLayers();
+    }
   }
 
   update(data) {
@@ -261,6 +278,31 @@ export default class Tracks extends Container {
       );
 
       layer.addChild(mark);
+    }
+  }
+
+  // видимость и высота контейнеров отметок: alpha и tint — по уровню слоя
+  // (та же формула levelView, что у ящиков и танков), сдвиг — тот же
+  // параллакс, что у плиты, на которой след оставлен. Точка для «дыры»
+  // берётся у своего танка: след — его собственный, и держится рядом
+  _updateLayers() {
+    if (!this._markLayers.size) {
+      return;
+    }
+
+    const camera = cameraCenter(this.parent, this._renderer);
+
+    for (const [level, layer] of this._markLayers) {
+      layer.alpha = this._levelView.alphaFor(
+        level,
+        this._currentX,
+        this._currentY,
+      );
+      layer.tint = this._levelView.tintFor(level);
+
+      if (level) {
+        applyParallax(layer, camera, level * parallaxConfig.shear);
+      }
     }
   }
 

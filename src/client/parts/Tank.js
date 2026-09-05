@@ -2,7 +2,11 @@ import { Container, Sprite } from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
-import { createGradeTracker } from '../grade.js';
+import { offsetPoint } from '../parallax.js';
+import {
+  parallax as parallaxConfig,
+  shadow as shadowConfig,
+} from '../../config/render.js';
 import {
   M1_X,
   M1_Y,
@@ -19,57 +23,36 @@ import {
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
 
-// подъём спрайта при высоте z: масштаб корпуса даёт читаемую разницу
-// «внизу / наверху» без 3D
-const Z_SCALE_GAIN = 0.06;
-
-// тень — главный и самый дешёвый признак высоты: она же показывает, что
-// танк едет по рампе, а не по земле. Сдвиг тени — доля расстояния до центра
-// камеры на единицу z (параллакс: чем дальше от центра экрана, тем сильнее)
-const SHADOW_SHEAR = 0.07;
-
-// тень растёт и бледнеет с высотой
-const SHADOW_SCALE_GAIN = 0.1;
-const SHADOW_BASE_ALPHA = 0.4;
-const SHADOW_ALPHA_FALLOFF = 0.12;
-
-// тень чуть шире корпуса
-const SHADOW_SIZE_FACTOR = 1.3;
-
-// ракурс корпуса на подъёме: танк, едущий в горку, короче вдоль курса
-const GRADE_SQUASH_GAIN = 0.35;
-
-// бейдж уровня под корпусом своего танка: доля `size` до центра значка.
-// Корпус — 4 × 3 размера (`src/data/models.js`), то есть половина длины —
-// два размера; значок обязан выноситься за неё, иначе он ложится на танк
-const BADGE_OFFSET = 3.4;
-
-// значок печётся в тех же «пекарских» пикселях, что и корпус, и его так же
-// надо привести к мировому масштабу; 1.4 — запас на читаемость цифры
-const BADGE_SCALE = 1.4;
+// масштаб корпуса на высоте, тень и ракурс на подъёме — числа 2.5D, они
+// живут в src/config/render.js (`parallax`, `shadow`)
 
 // скорость (высота тона) на холостом ходу
 const MIN_ENGINE_RATE = 1;
 
 // скорость при движении
-const MAX_ENGINE_RATE = 1.1;
+const MAX_ENGINE_RATE = 1.15;
 
 // повышенная скорость при напряжении (газ в стену)
-const STRAIN_ENGINE_RATE = 1.18;
+const STRAIN_ENGINE_RATE = 1.25;
 
-// множитель громкости на холостом ходу (90% от базовой)
-const MIN_ENGINE_VOLUME_FACTOR = 0.9;
+// множитель громкости на холостом ходу (60% от базовой)
+const MIN_ENGINE_VOLUME_FACTOR = 0.6;
 
 // множитель на полном ходу (100% от базовой)
 const MAX_ENGINE_VOLUME_FACTOR = 1.0;
 
+// глубина и частота покачивания высоты тона на холостом ходу
+const IDLE_WOBBLE_DEPTH = 0.015;
+const IDLE_WOBBLE_HZ = 2.5;
+
 /**
  * Вычисляет параметры звука двигателя на основе нагрузки на двигатель.
  * @param {number} load - Нагрузка на двигатель (от 0.0 до > 1.0).
+ * @param {number} [timeMs=0] - Время для покачивания тона на холостых.
  * @returns {{rate: number, volumeFactor: number}} -
  * Объект со скоростью (pitch) и множителем громкости.
  */
-function calculateEngineSoundParams(load) {
+export function calculateEngineSoundParams(load, timeMs = 0) {
   // load 0.0 -> холостой ход
   // load 1.0 -> движение на полной скорости
   // load > 1.0 -> напряжение (газ в стену)
@@ -77,8 +60,11 @@ function calculateEngineSoundParams(load) {
   // интерполяция скорости (pitch) и громкости,
   // разделение базовой нагрузки (до 1.0)
   // и нагрузки от напряжения (свыше 1.0).
-  const baseLoad = clamp(load, 0, 1);
-  const strainLoad = Math.max(0, load - 1.0);
+  // нечисловая нагрузка (короткий ряд) не должна доходить до Web Audio:
+  // clamp(undefined) даёт NaN, а NaN в rate — нефинитное значение параметра
+  const safeLoad = Number.isFinite(load) ? load : 0;
+  const baseLoad = clamp(safeLoad, 0, 1);
+  const strainLoad = Math.max(0, safeLoad - 1.0);
 
   const rate =
     lerp(MIN_ENGINE_RATE, MAX_ENGINE_RATE, baseLoad) +
@@ -90,7 +76,16 @@ function calculateEngineSoundParams(load) {
     baseLoad,
   );
 
-  return { rate, volumeFactor };
+  // неизменная высота тона у баса читается ухом как гул, а не как
+  // двигатель: на холостых тон слегка покачивается, а с ростом нагрузки
+  // покачивание сходит на нет — там за характер отвечает сама нагрузка
+  const wobble =
+    1 +
+    IDLE_WOBBLE_DEPTH *
+      (1 - baseLoad) *
+      Math.sin(2 * Math.PI * IDLE_WOBBLE_HZ * (timeMs / 1000));
+
+  return { rate: rate * wobble, volumeFactor };
 }
 
 export default class Tank extends Container {
@@ -112,7 +107,6 @@ export default class Tank extends Container {
 
     this._textures = assets.tankTexture;
     this._shadowAsset = assets.tankShadowTexture || null;
-    this._badgeTextures = assets.levelBadgeTexture || null;
     this._renderer = dependencies.renderer || null;
 
     // тень живёт СИБЛИНГОМ на сцене, а не ребёнком танка: у неё свой
@@ -121,14 +115,16 @@ export default class Tank extends Container {
     // Движок про неё не знает, значит убирает её destroy() этого парта
     this._shadow = null;
 
-    // уклон под танком: схема `m1` его не везёт, клиент считает сам
-    this._grade = createGradeTracker();
-
     // параметры с сервера:
     // [x, y, rotation, gunRotation, vX, vY,
     // engineLoad, condition, size, teamId, angvel, z, level]
-    this.x = data[M1_X] || 0;
-    this.y = data[M1_Y] || 0;
+    // мировая (НЕсмещённая) точка танка: в неё уходят звук и levelView, а
+    // `this.position` каждый кадр перезаписывается проекцией высоты
+    // (см. _updateView)
+    this._worldX = data[M1_X] || 0;
+    this._worldY = data[M1_Y] || 0;
+    this.x = this._worldX;
+    this.y = this._worldY;
     this.rotation = data[M1_ANGLE] || 0;
     this.gun.rotation = data[M1_GUN_ROTATION] || 0;
     this._engineLoad = data[M1_ENGINE_LOAD] || 0;
@@ -151,17 +147,6 @@ export default class Tank extends Container {
     // ради которой он и заведён
     this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
     this._levelView = dependencies.levelView || null;
-
-    // бейдж уровня: только у своего танка и только на слоёной карте —
-    // иначе на `pool mini` появился бы значок с вечным «0»
-    this._badge = null;
-
-    if (this._badgeTextures) {
-      this._badge = new Sprite();
-      this._badge.anchor.set(0.5);
-      this._badge.visible = false;
-      this.addChild(this._badge);
-    }
 
     // видимость уровня и признаки высоты считаются каждый кадр, а не по
     // приходу строки: и камера, и локальный игрок двигаются между кадрами.
@@ -192,10 +177,6 @@ export default class Tank extends Container {
     this.gun.scale.set(this._scaleFactor);
     this.wreck.scale.set(this._scaleFactor);
 
-    if (this._badge) {
-      this._badge.scale.set(this._scaleFactor * BADGE_SCALE);
-    }
-
     this._soundManager = dependencies.soundManager;
     this._soundId = null;
 
@@ -223,12 +204,24 @@ export default class Tank extends Container {
   }
 
   _getSoundData() {
-    const { rate, volumeFactor } = calculateEngineSoundParams(this._engineLoad);
+    const { rate, volumeFactor } = calculateEngineSoundParams(
+      this._engineLoad,
+      performance.now(),
+    );
 
     return {
-      position: { x: this.x, y: this.y },
+      position: { x: this._worldX, y: this._worldY },
       rate,
       volume: this._baseEngineVolume * volumeFactor,
+      // свой двигатель не принадлежит миру: он всегда по центру и без HRTF.
+      // Слушатель — центр камеры, то есть сам этот танк: источник, лежащий
+      // ровно на слушателе, HRTF сворачивает в гребенчатую окраску («гул»),
+      // а расхождение камеры и танка в пару пикселей кидает звук целиком в
+      // одно ухо (азимут в Web Audio зависит от направления, не от
+      // расстояния). Флаг считается каждый кадр: `_isLocal()` даёт true
+      // только после появления `localPlayer.id`, а обновление уезжает в
+      // движок через `updateSoundData`
+      spatial: !this._isLocal(),
     };
   }
 
@@ -269,11 +262,14 @@ export default class Tank extends Container {
   }
 
   update(data) {
-    this.x = data[M1_X];
-    this.y = data[M1_Y];
+    this._worldX = data[M1_X];
+    this._worldY = data[M1_Y];
     this.rotation = data[M1_ANGLE];
     this.gun.rotation = data[M1_GUN_ROTATION];
-    this._engineLoad = data[M1_ENGINE_LOAD];
+    // `|| 0`, как в конструкторе: без него короткий ряд даёт undefined,
+    // clamp() возвращает NaN, и в `sound.rate` каждый кадр уезжает NaN
+    // (сравнение `rate !== activeInstance.rate` для NaN всегда истинно)
+    this._engineLoad = data[M1_ENGINE_LOAD] || 0;
 
     const level = data[M1_LEVEL] || 0;
 
@@ -285,18 +281,17 @@ export default class Tank extends Container {
     }
 
     // высота читается масштабом корпуса: танк на эстакаде крупнее наземного
-    const zScale = 1 + this._z * Z_SCALE_GAIN;
+    // ровно настолько же, насколько крупнее сама плита под ним — это та же
+    // проекция, что и сдвиг (`src/client/parallax.js`)
+    const zScale = 1 + this._z * parallaxConfig.shear;
+    const size = this._scaleFactor * zScale;
 
-    // ракурс: корпус, едущий в горку, короче вдоль курса. Уклон восстановлен
-    // из z между кадрами и сглажен — сырая разностная производная дрожит
-    const grade = this._grade.update(this.x, this.y, this._z);
-    const squash = 1 - clamp(Math.abs(grade), 0, 1) * GRADE_SQUASH_GAIN;
-
-    this.body.scale.set(this._scaleFactor * zScale * squash, this._scaleFactor * zScale);
-    this.gun.scale.set(this._scaleFactor * zScale * squash, this._scaleFactor * zScale);
+    this.body.scale.set(size, size);
+    this.gun.scale.set(size, size);
+    this.wreck.scale.set(size, size);
 
     if (this._levelView && this._isLocal()) {
-      this._levelView.set(level, this.x, this.y, this._z);
+      this._levelView.set(level, this._worldX, this._worldY, this._z);
     }
 
     // обновление звуковой логики; страховка: живой танк без регистрации
@@ -330,16 +325,34 @@ export default class Tank extends Container {
     }
   }
 
-  // признаки уровня и высоты: прозрачность над игроком, затемнение под ним,
-  // тень и бейдж своего уровня. Зовётся из `onRender` каждый кадр
+  // признаки уровня и высоты: прозрачность над игроком, затемнение под ним
+  // и тень. Зовётся из `onRender` каждый кадр
   _updateView() {
     if (this._levelView) {
-      this.alpha = this._levelView.alphaFor(this._level, this.x, this.y);
+      this.alpha = this._levelView.alphaFor(
+        this._level,
+        this._worldX,
+        this._worldY,
+      );
       this.tint = this._levelView.tintFor(this._level);
     }
 
+    // проекция 2.5D: смещается КОРПУС — на свою высоту и тем сильнее, чем
+    // дальше он от центра экрана (src/client/parallax.js). Тем же числом
+    // смещается плита уровня, поэтому танк с неё не съезжает.
+    // Раньше сдвигалась тень, а корпус стоял в мировой точке — проекция
+    // была вывернута наизнанку, и тень выглядела выше танка
+    const camera = cameraCenter(this.parent, this._renderer);
+    const view = offsetPoint(
+      this._worldX,
+      this._worldY,
+      camera,
+      this._z * parallaxConfig.shear,
+    );
+
+    this.position.set(view.x, view.y);
+
     this._updateShadow();
-    this._updateBadge();
   }
 
   _updateShadow() {
@@ -352,7 +365,10 @@ export default class Tank extends Container {
 
       this._shadow = new Sprite(texture);
       this._shadow.anchor.set(0.5);
-      this._shadowScale = (this._size * SHADOW_SIZE_FACTOR) / contentSize;
+      // текстура тени уже в пропорции корпуса, поэтому масштаб один на обе
+      // оси и нормируется по КОРПУСУ (4 × size вдоль курса), а не по size
+      this._shadowScale =
+        (this._size * 4 * shadowConfig.sizeFactor) / contentSize;
       this.parent.addChild(this._shadow);
     }
 
@@ -365,52 +381,21 @@ export default class Tank extends Container {
       return;
     }
 
-    // параллакс: тень уезжает от корпуса тем сильнее, чем выше танк и чем
-    // дальше он от центра камеры — ровно так читается высота в GTA 2
-    const camera = cameraCenter(this.parent, this._renderer);
-    const shear = SHADOW_SHEAR * this._z;
-
-    shadow.x = camera ? this.x + (this.x - camera.x) * shear : this.x;
-    shadow.y = camera ? this.y + (this.y - camera.y) * shear : this.y;
+    // тень остаётся в МИРОВОЙ точке: высоту показывает разъезд корпуса с
+    // ней, а сама она лежит на земле и никуда не уезжает
+    shadow.x = this._worldX;
+    shadow.y = this._worldY;
     shadow.rotation = this.rotation;
-    shadow.scale.set(this._shadowScale * (1 + this._z * SHADOW_SCALE_GAIN));
+    shadow.scale.set(
+      this._shadowScale * (1 + this._z * shadowConfig.scaleGain),
+    );
     shadow.alpha =
-      Math.max(0, SHADOW_BASE_ALPHA - this._z * SHADOW_ALPHA_FALLOFF) *
+      Math.max(0, shadowConfig.baseAlpha - this._z * shadowConfig.alphaFalloff) *
       this.alpha;
 
     // тень лежит на слое, НАД которым висит танк: на рампе это ещё нижний
     // уровень, и именно поэтому по ней видно, что танк уже поднялся
     shadow.zIndex = levelZ(TANK_BASE_Z - 1, Math.floor(this._z));
-  }
-
-  _updateBadge() {
-    if (!this._badge) {
-      return;
-    }
-
-    const show = !!this._levelView?.layered && this._isLocal();
-
-    this._badge.visible = show;
-
-    if (!show) {
-      return;
-    }
-
-    const texture = this._badgeTextures[this._level];
-
-    if (texture && this._badge.texture !== texture) {
-      this._badge.texture = texture;
-    }
-
-    // бейдж — знак игрока, а не части корпуса: ни поворота танка, ни его
-    // места в корпусе он не разделяет. Смещение задаётся в экранных осях
-    // (мировое `(0, +d)`, повёрнутое на `-rotation`), иначе значок кружил
-    // бы вокруг танка при развороте и заезжал бы на корпус
-    const distance = this._size * BADGE_OFFSET;
-
-    this._badge.x = distance * Math.sin(this.rotation);
-    this._badge.y = distance * Math.cos(this.rotation);
-    this._badge.rotation = -this.rotation;
   }
 
   // останавливает и сбрасывает все звуки, связанные с танком

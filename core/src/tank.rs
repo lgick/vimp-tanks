@@ -7,7 +7,7 @@ use crate::level::LevelState;
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
 use crate::motion::{self, TurretInput};
-use vimp_engine_core::map::{level_interaction, levels_interaction};
+use vimp_engine_core::map::{level_interaction, levels_interaction, levels_interaction_on_ramp};
 use vimp_engine_core::physics::{deg_to_rad, round2};
 use vimp_engine_core::rng::Rng;
 
@@ -556,7 +556,16 @@ impl Tank {
     /// Переписывает маску коллизий корпуса под текущее состояние уровня.
     pub fn sync_collision_groups(&self, world: &mut PhysicsWorld) {
         if let Some(collider) = world.colliders.get_mut(self.collider) {
-            collider.set_collision_groups(levels_interaction(self.level_state.collision_mask()));
+            let mask = self.level_state.collision_mask();
+            // поднимающийся по прогону проходит стражей насквозь, все
+            // остальные — включая заехавшего на прогон сбоку — их видят
+            let groups = if self.level_state.on_ramp() {
+                levels_interaction_on_ramp(mask)
+            } else {
+                levels_interaction(mask)
+            };
+
+            collider.set_collision_groups(groups);
         }
     }
 
@@ -781,6 +790,7 @@ mod tests {
                 climbing: true,
                 low: 0,
                 high: 1,
+                run: 0,
             },
             ..LevelState::default()
         };

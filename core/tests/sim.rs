@@ -1407,6 +1407,91 @@ fn box_pushed_off_the_slab_falls_to_the_ground() {
     assert_eq!(map.dynamic_levels(), vec![0], "группа тела сменилась на земную");
 }
 
+/// Карта, где прогон рампы лежит в гриде УРОВНЯ 1 (`from: 1, to: 2`), а под
+/// ним — проезжая земля со стеной на клетке (10, 9). Ею проверяется маска
+/// танка, заехавшего ПОД прогон.
+fn overhead_map_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for x in 0..20 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[19] = 1;
+    }
+
+    // стена уровня 0 ПОД клеткой прогона 1 → 2
+    grid[9][10] = 1;
+
+    let mut slab1: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+    let mut slab2: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for row in slab1.iter_mut().take(15).skip(5) {
+        for cell in row.iter_mut().take(15).skip(8) {
+            *cell = 2;
+        }
+    }
+
+    // прогон 1 → 2 — строка 9, колонки 9..12
+    for x in 9..13 {
+        slab1[9][x] = 3;
+    }
+
+    for row in slab2.iter_mut().take(15).skip(5) {
+        for cell in row.iter_mut().take(15).skip(13) {
+            *cell = 2;
+        }
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[100, 100, 0]],
+            "team2": [[500, 100, 180]]
+        },
+        "levels": {
+            "1": { "map": slab1, "floor": [2, 3], "walls": [] },
+            "2": { "map": slab2, "floor": [2], "walls": [] }
+        },
+        "ramps": [{ "tile": 3, "dir": "east", "from": 1, "to": 2 }]
+    })
+    .to_string()
+}
+
+#[test]
+fn ground_wall_under_a_high_ramp_stops_the_tank() {
+    // дефект Д2 итерации 2: под клетками прогона 1 → 2 танк уровня 0 брал
+    // маску уровней прогона и проезжал сквозь стены СВОЕГО уровня
+    let mut core = make_core();
+
+    core.load_map(&overhead_map_json()).unwrap();
+
+    // клетка (7, 9) уровня 0, носом на восток; стена — клетка (10, 9)
+    core.spawn_actor(1, "m1", 1, 240.0, 304.0, 0.0).unwrap();
+    steps(&mut core, 2);
+    core.set_actor_level(1, 0);
+    core.apply_input(1, 1, "down", "forward");
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        assert_eq!(level_of(&core, 1), 0, "под прогоном танк остаётся на земле");
+    }
+
+    let x = tank_x(&core, 1);
+
+    assert!(x > 280.0, "танк обязан доехать до стены, x = {x}");
+    assert!(x < 320.0, "стена уровня 0 обязана остановить танк, x = {x}");
+}
+
 #[test]
 fn scripted_bot_drives_onto_the_bridge() {
     // сценарий tests/scenarios/bots_bridge.json: нав-граф слоёной карты
@@ -1475,6 +1560,44 @@ fn overpass_ramp_is_climbed_at_full_throttle() {
     }
 
     assert!(climbed, "рампа overpass обязана проезжаться на полном газе");
+}
+
+/// Риск итерации 2: стражи прогона (`GameMap::create_ramp_guards`) не имеют
+/// права ловить танк, законно поднявшийся по рампе. Контакт со стражем виден
+/// по угловой скорости: прогон прямой, руля нет, крутить танк нечему.
+#[test]
+fn a_climbing_tank_never_touches_a_ramp_guard() {
+    let mut core = make_core();
+
+    core.load_map(overpass_map_json()).unwrap();
+
+    let cell = |x: f32, y: f32| ((x + 0.5) * 12.8, (y + 0.5) * 12.8);
+    let (x, y) = cell(4.0, 35.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 270.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 2);
+
+    let mut max_angvel: f32 = 0.0;
+
+    // подъём и ВЫЕЗД с прогона: корпус сходит с клеток прогона позже центра
+    for _ in 0..600 {
+        core.step(DT);
+        max_angvel = max_angvel.max(angvel_of(&core, 1).abs());
+    }
+
+    assert_eq!(level_of(&core, 1), 1, "танк обязан подняться на плиту");
+    assert!(
+        max_angvel < 0.2,
+        "прогон обязан проезжаться без контакта со стражем, |angvel| = {max_angvel}"
+    );
+}
+
+/// Угловая скорость танка из players_data (индекс 10 строки схемы m1).
+fn angvel_of(core: &GameCore, game_id: u32) -> f32 {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()][10].as_f64().unwrap() as f32
 }
 
 #[test]
@@ -1678,11 +1801,12 @@ fn tank_cannot_enter_the_ramp_from_under_the_slab() {
         );
     }
 
-    // прогон занимает строки 31..34: танк обязан ПРОЕХАТЬ его насквозь,
-    // а не упереться в него
+    // прогон занимает строки 31..34, и с итерации 2 его «неправильный»
+    // торец закрыт стражем (`ramp_guard_interaction`): въезд под клин
+    // сверху обязан упираться в него, а не проезжать прогон насквозь
     assert!(
-        tank_y(&core, 1) > 35.0 * 12.8,
-        "танк не доехал до конца прогона, y = {}",
+        tank_y(&core, 1) < 31.0 * 12.8,
+        "страж прогона обязан остановить танк перед клином, y = {}",
         tank_y(&core, 1)
     );
 }
@@ -1738,3 +1862,87 @@ fn crate_pushed_off_the_upper_slab_lands_on_the_lower_one() {
     );
     assert_eq!(z_of_crate(&after), 1.0, "и его высота — ровно уровень 1");
 }
+
+/// Карта с ШИРОКОЙ рампой: тайл прогона занимает блок строк 8..10 в
+/// колонках 6..9. Движок режет такой блок на три параллельных прогона (по
+/// прогону на строку), поэтому ею проверяется перестроение между полосами
+/// прямо на подъёме. Синтетическая копия блока `rampNorth` карты
+/// `overpass` (3 × 3): реальные карты живут в JS и в rust-тесты не
+/// загружаются.
+fn wide_ramp_map_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for x in 0..20 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[19] = 1;
+    }
+
+    for row in grid.iter_mut().take(11).skip(8) {
+        for cell in row.iter_mut().take(10).skip(6) {
+            *cell = 3;
+        }
+    }
+
+    let mut slab: Vec<Vec<i32>> = vec![vec![0; 20]; 20];
+
+    for row in slab.iter_mut().take(15).skip(5) {
+        for cell in row.iter_mut().take(13).skip(10) {
+            *cell = 2;
+        }
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[100, 100, 0]],
+            "team2": [[500, 100, 180]]
+        },
+        "levels": {
+            "1": { "map": slab, "floor": [2], "walls": [] }
+        },
+        "ramps": [{ "tile": 3, "dir": "east", "from": 0, "to": 1 }]
+    })
+    .to_string()
+}
+
+#[test]
+fn wide_ramp_is_climbed_across_lanes() {
+    let mut core = make_core();
+
+    core.load_map(&wide_ramp_map_json()).unwrap();
+    // подножие средней полосы (колонка 5, строка 9), нос повёрнут вбок:
+    // танк едет наискось и на подъёме переезжает в соседнюю полосу
+    core.spawn_actor(1, "m1", 1, 176.0, 304.0, -20.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 0, "у подножия рампа ещё внизу");
+
+    let start_y = tank_y(&core, 1);
+
+    steps(&mut core, 150);
+
+    assert_eq!(
+        level_of(&core, 1),
+        1,
+        "подъём не сорвался на границе полос: x = {}, y = {}",
+        tank_x(&core, 1),
+        tank_y(&core, 1)
+    );
+    assert!(
+        (start_y - tank_y(&core, 1)) >= 32.0,
+        "танк обязан был сменить полосу: y {start_y} → {}",
+        tank_y(&core, 1)
+    );
+}
+

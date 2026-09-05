@@ -1,5 +1,8 @@
 import { Text, Ticker, Container, Sprite } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
+import { cameraCenter } from '../camera.js';
+import { offsetPoint } from '../parallax.js';
+import { parallax as parallaxConfig } from '../../config/render.js';
 import {
   W2_X,
   W2_Y,
@@ -26,18 +29,32 @@ export default class Bomb extends Container {
 
     // `onRender` — аксессор Container: назначаем свойством, иначе сеттер
     // не отработает и колбэк не позовётся ни разу
-    if (this._levelView) {
+    this._renderer = dependencies.renderer || null;
+
+    if (this._levelView || this._renderer) {
       this.onRender = () => {
-        this.alpha = this._levelView.alphaFor(this._level, this.x, this.y);
-        this.tint = this._levelView.tintFor(this._level);
+        if (this._levelView) {
+          this.alpha = this._levelView.alphaFor(
+            this._level,
+            this._worldX,
+            this._worldY,
+          );
+          this.tint = this._levelView.tintFor(this._level);
+        }
+
+        this._applyHeight();
       };
     }
 
     this.body = new Sprite(assets.bombTexture);
     this.body.anchor.set(0.5);
 
-    this.x = params[W2_X];
-    this.y = params[W2_Y];
+    // мировая (НЕсмещённая) точка: `this.position` каждый кадр
+    // перезаписывается проекцией высоты (см. _applyHeight)
+    this._worldX = params[W2_X];
+    this._worldY = params[W2_Y];
+    this.x = this._worldX;
+    this.y = this._worldY;
 
     this.rotation = params[W2_ANGLE];
     this._size = params[W2_SIZE]; // соотношение сторон 1:1
@@ -120,13 +137,15 @@ export default class Bomb extends Container {
   // авторитетная строка приходит один раз — подтверждением локально
   // предсказанной бомбы: переносим сущность в авторитетную точку
   update(params) {
-    this.x = params[W2_X];
-    this.y = params[W2_Y];
+    this._worldX = params[W2_X];
+    this._worldY = params[W2_Y];
+    this.x = this._worldX;
+    this.y = this._worldY;
     this.rotation = params[W2_ANGLE];
 
     if (this._soundId) {
       const alive = this._soundManager.updateSoundData(this._soundId, {
-        position: { x: this.x, y: this.y },
+        position: { x: this._worldX, y: this._worldY },
       });
 
       // регистрацию мог снять reset(); перерегистрировать нечего —
@@ -135,6 +154,20 @@ export default class Bomb extends Container {
         this._soundId = null;
       }
     }
+  }
+
+  // Проекция высоты: бомба на мосту рисуется смещённой и увеличенной ровно
+  // так же, как сама плита под ней. Позиция лежит на самом контейнере,
+  // поэтому applyParallax тут не применим — сдвиг считается от мировой
+  // точки, а масштаб ставится отдельно. Высоты в строке `w2` нет: бомба
+  // лежит на плите своего уровня
+  _applyHeight() {
+    const k = this._level * parallaxConfig.shear;
+    const camera = cameraCenter(this.parent, this._renderer);
+    const view = offsetPoint(this._worldX, this._worldY, camera, k);
+
+    this.position.set(view.x, view.y);
+    this.scale.set(1 + k);
   }
 
   _stopTimer() {

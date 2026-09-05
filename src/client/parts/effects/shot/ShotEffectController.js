@@ -2,6 +2,9 @@ import { Container } from 'pixi.js';
 import TracerEffect from './TracerEffect.js';
 import ImpactEffect from './ImpactEffect.js';
 import { levelZ } from '../../../levelZ.js';
+import { cameraCenter } from '../../../camera.js';
+import { applyParallax } from '../../../parallax.js';
+import { parallax as parallaxConfig } from '../../../../config/render.js';
 import {
   W1_START_X,
   W1_START_Y,
@@ -10,6 +13,7 @@ import {
   W1_BODY_X,
   W1_BODY_Y,
   W1_WAS_HIT,
+  W1_SHOOTER_ID,
   W1_END_LEVEL,
   W1_ANCHOR,
 } from '../../../snapshotFields.js';
@@ -51,20 +55,43 @@ export default class ShotEffectController extends Container {
 
     this._assets = assets;
     this._soundManager = dependencies.soundManager;
+
+    // свой ли это выстрел: звук своего выстрела берёт позицию корпуса
+    // стрелка на момент выстрела, а слушатель — центр камеры, то есть
+    // предсказанный свой танк. Предсказанный локальный выстрел и его
+    // авторитетное эхо не совпадают по позиции — один и тот же выстрел
+    // звучал то по центру, то целиком в одно ухо. Свой выстрел принадлежит
+    // игроку, а не миру, поэтому не панорамируется
+    this._isLocalShot =
+      dependencies.localPlayer?.is(data[W1_SHOOTER_ID]) === true;
     this._mapDynamics = dependencies.mapDynamics || null;
     this._levelView = dependencies.levelView || null;
 
     // трассер и осколки уступают видимость игроку под плитой ровно так же,
     // как всё остальное на верхнем уровне (единая формула — в levelView).
     // `onRender` — аксессор Container, назначается свойством
-    if (this._levelView) {
+    this._renderer = dependencies.renderer || null;
+
+    if (this._levelView || this._renderer) {
       this.onRender = () => {
-        this.alpha = this._levelView.alphaFor(
-          this.endLevel,
-          this.endPositionX,
-          this.endPositionY,
+        if (this._levelView) {
+          this.alpha = this._levelView.alphaFor(
+            this.endLevel,
+            this.endPositionX,
+            this.endPositionY,
+          );
+          this.tint = this._levelView.tintFor(this.endLevel);
+        }
+
+        // проекция высоты: трассер и осколки на мосту стоят на мосту.
+        // Дети контроллера авторятся в мировых координатах, сам он
+        // единичный — трансформ контейнера даёт им ровно offsetPoint
+        applyParallax(
+          this,
+          cameraCenter(this.parent, this._renderer),
+          this.endLevel * parallaxConfig.shear,
+          1,
         );
-        this.tint = this._levelView.tintFor(this.endLevel);
       };
     }
 
@@ -81,6 +108,7 @@ export default class ShotEffectController extends Container {
       'shot',
       {
         position: { x: this.soundPositionX, y: this.soundPositionY },
+        spatial: !this._isLocalShot,
       },
       () => {
         this._soundComplete = true;

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { Texture, Ticker } from 'pixi.js';
+import { Container, Texture, Ticker } from 'pixi.js';
 import Bomb from '../../../src/client/parts/Bomb.js';
+import { parallax } from '../../../src/config/render.js';
 
 // Part бомбы: звуковой контур и снятие тика. Одноразовый сэмпл постановки
 // живёт дольше самой сущности — её убирает детонация.
@@ -21,8 +22,8 @@ const params = [10, 20, 0, 16, 3000, 1];
 // копятся между тестами и ломают счётчик тикера
 const created = [];
 
-const makeBomb = soundManager => {
-  const bomb = new Bomb(params, assets, { soundManager });
+const makeBomb = (soundManager, dependencies = {}, row = params) => {
+  const bomb = new Bomb(row, assets, { soundManager, ...dependencies });
 
   created.push(bomb);
 
@@ -118,5 +119,46 @@ describe('Bomb: авторитетная коррекция позиции', () 
     bomb.destroy();
 
     expect(soundManager.releaseSound).not.toHaveBeenCalled();
+  });
+});
+
+// Проекция высоты: бомба на мосту рисуется смещённой ОТ центра камеры и
+// увеличенной ровно так же, как плита под ней. Одно число на всю динамику
+// (`src/config/render.js`, `parallax.shear`) — иначе бомба съедет с моста
+describe('Bomb: проекция высоты', () => {
+  // камера — трансформ сцены плюс размер полотна (src/client/camera.js)
+  const renderer = { screen: { width: 800, height: 600 } };
+
+  const onStage = row => {
+    const bomb = makeBomb(makeSoundManager(), { renderer }, row);
+    const stage = new Container();
+
+    stage.addChild(bomb);
+
+    return bomb;
+  };
+
+  it('на земле сдвига и масштаба нет', () => {
+    const bomb = onStage([100, 100, 0, 16, 3000, 1, 0]);
+
+    bomb.onRender();
+
+    expect(bomb.x).toBeCloseTo(100, 6);
+    expect(bomb.y).toBeCloseTo(100, 6);
+    expect(bomb.scale.x).toBeCloseTo(1, 6);
+  });
+
+  it('на уровне 1 бомба уезжает от центра камеры и становится крупнее', () => {
+    const bomb = onStage([100, 100, 0, 16, 3000, 1, 1]);
+
+    bomb.onRender();
+
+    // центр камеры — (400, 300): точка уезжает ОТ него
+    expect(bomb.x).toBeLessThan(100);
+    expect(bomb.y).toBeLessThan(100);
+    expect(bomb.scale.x).toBeCloseTo(1 + parallax.shear, 6);
+    // мировая точка при этом не тронута: по ней считают звук и alpha
+    expect(bomb._worldX).toBe(100);
+    expect(bomb._worldY).toBe(100);
   });
 });

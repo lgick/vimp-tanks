@@ -43,11 +43,32 @@ holds the transitions). Each level brings its own `layers`, over its own
   100 up belongs to level 1 and would draw over the bridge. Nothing else
   has to be done to make an upper layer cover the ground.
 - **Height for a layer (`volumes`, optional).** `volumes` maps a render
-  layer's `zIndex` to its height in levels; `MapVolume` extrudes such a
-  layer and shifts it as the camera moves, while the flat `Map` layer stays
+  layer's `zIndex` to its height in levels; the `Map` part extrudes such a
+  layer itself — `parts.volume.slices` sprites of the same baked picture,
+  each pushed further from the camera centre — while the flat layer stays
   underneath as the block's base. Visual only: the core knows nothing about
   the height, and `parts.volume.enabled = false` switches the effect off
   entirely.
+- **A ramp needs nothing extra to get a volume.** From `ramps[]` and the
+  level grid, `Map` rebuilds the runs and draws each of them as a slope
+  whose every vertex carries its own height, plus a **skirt** — the two
+  sides along the axis and the end face at the top, pulled down to the
+  run's base plane. So a ramp reads as a solid embankment from the side,
+  a tank driving under it (a `rampSide` passage) is hidden by it, and where
+  a gap is visible under a high run (`1 → 2`) driving through really is
+  allowed. The wedge is drawn by the render layer that draws the ramp tiles
+  themselves.
+- **A wide ramp is a rectangular block of one ramp tile.** The core cuts
+  such a block into parallel lane runs and lets a tank change lanes
+  mid-climb; the picture merges them back into one run. Lanes of DIFFERENT
+  length (a stepped block) count as different ramps: the entry gate judges
+  a move between them, and the climb breaks. Keep the block rectangular.
+- **Height of one level (`levelHeight`, optional).** World units per level
+  before `scale`; the tile size by default. It is what makes the ramp grade
+  dimensionless in the core, that is, what a climb FEELS like — raise it if
+  the ramps of your map are too easy. It does not affect the picture: how
+  much height the render shows is `parts.parallax.shear`, shared by every
+  map.
 - **Railings must be part of the slab** — a `walls` tile also belongs in
   `floor`, otherwise the railing hangs in the air and a shot from below
   does not see it.
@@ -209,11 +230,19 @@ Steps:
    build:assets` — `audio:process` normalizes it (ffmpeg) and emits
    **`.webm` and `.mp3`** (the codec list — `codecList`) into
    `dist/sounds/`, served via `assetsBase`.
-3. Playback: UI/system sounds — `soundManager.playSystemSound(name)`;
+3. The `loop` flag also picks the filter chain in
+   `scripts/process-audio.js`: a looping sample is normalized with a
+   **two-pass** `loudnorm` and skips `silenceremove` — a single pass is a
+   dynamic normalizer and head trimming shifts the seam, so either way the
+   two ends of the loop stop matching in level (heard as pulsing).
+4. Playback: UI/system sounds — `soundManager.playSystemSound(name)`;
    spatial ones — `registerSound(name, { position })` (voice limits and
    priorities are handled by the engine's `SoundManager`, see the
    engine's
    [client.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/client.md#soundmanager)).
+   A sound that belongs to the player rather than to the world (their own
+   engine, their own shot) is declared as
+   `registerSound(name, { position, spatial: false })`.
 
 ## New client entity (part)
 
@@ -235,7 +264,8 @@ Steps:
    resizes every sprite. Bakers for the same shape are shared:
    `explosionTexture`/`smokeTexture`/`impactParticleTexture` all map to
    `blurredCircleTexture` in `bakers/index.js`, differing only by
-   `params`.
+   `params`. A shape of its own gets a baker of its own — that is what
+   `tankShadowTexture` (the hull silhouette) is.
 4. If it needs services (`renderer`, `soundManager`), add the class to
    `componentDependencies`.
 

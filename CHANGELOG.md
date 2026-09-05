@@ -7,6 +7,241 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-06
+
+### ⚠️ Breaking
+
+- Requires `vimp-engine-core` 0.14.1 and `vimp-engine` 0.32.1: the map's
+  `levelHeight`, the ramp guards, the glued wall blocks
+  (`MapLevels::static_blocks`), the ramp block number (`RampRun::block`) and
+  the `role`-tagged dynamic map row all come from there.
+
+### Migration
+
+- The `c1`/`c2` snapshot rows must declare `role: 'z'` and `role: 'level'`
+  on their `z`/`level` fields (`src/config/snapshot.js`). Without the roles
+  the engine refuses to load a layered map instead of silently shipping a
+  flat row.
+- `climbGravity` and `climbMaxSpeedFactor` were recalibrated (220 → 500,
+  0.55 → 0.5) because the ramp grade is dimensionless now. A game config
+  that kept the old numbers gets a climb that is 30–100 times weaker than
+  intended.
+
+### Changed
+
+- `MapVolume` is gone: the `Map` part draws a layer's volume itself, as
+  sprites over the SAME baked texture (the layer used to be baked twice)
+  and as children of the same container. Anything that referred to the part
+  by name — `gameSets`, `entitiesOnCanvas`, `componentDependencies` — moves
+  to `Map`. The extrusion no longer rewrites ~40 000 vertices and four
+  vertex buffers per frame of camera movement: the whole shift is one
+  container transform.
+- `volume.shear` moved to a shared `parallax.shear`
+  (`src/config/render.js`): one number now drives the level layer, its
+  volume, the ramp wedge, the tank hull and the track marks. The hull used
+  a shear of its own (0.07), which meant a tank could not sit still on the
+  slab it was standing on.
+- The ramp grade is dimensionless (`rise * levelHeight / span`) instead of
+  "levels per pixel", so climbing is actually felt: on the demo maps the
+  grade now runs from 0.11 (`terraces.rampLong`) to 0.5
+  (`terraces.rampSteep`) rather than 0.0087…0.039. `climbGravity` and
+  `climbMaxSpeedFactor` were recalibrated to match — uphill speed and
+  roll-back both change noticeably.
+- The client replica mirrors the engine's ramp guards
+  (`Predictor::resolve_world`): prediction no longer drives onto a run from
+  the side where the host holds the tank. The mirror follows the engine
+  block by block, and walls are read as the glued blocks the host puts its
+  colliders by (`MapLevels::static_blocks` → `collect_block_contacts`)
+  instead of tile by tile: a hull along a long wall used to collect several
+  contacts with different levers where the host has one.
+- The 2.5D render constants left the parts for `src/config/render.js`: the
+  `zIndex` stride between levels joins `parallax`, and the new `shadow`
+  block holds the tank shadow. They ship in the client config as
+  `parts.parallax` and `parts.shadow`.
+- The ramp wedge is a slope instead of a staircase: `Map` builds ONE mesh
+  per run (`volume.rampSegments` segments per cell) whose every vertex
+  carries its own height, so the parallax shift grows along the run
+  continuously. The steps of the old `volume.slices` wedge were plainly
+  visible in game. `volume.slices` now applies to layer volumes only, and
+  `runSliceFrame` is gone with the last thing that used it.
+- The height projection is one for the whole dynamics: the tank and its
+  wreck, the engine smoke, bombs and the shot and explosion effects are all
+  drawn shifted AND scaled by the same `parallax.shear` as the slab under
+  them, so smoke and blasts on the bridge stand on the bridge instead of on
+  the ground below it. `Smoke`, `Bomb`, `ShotEffect` and `ExplosionEffect`
+  join `renderer` in `componentDependencies`.
+- A layer's volume moved out of the part into an occluder container of its
+  own on the stage (see Fixed); the ramp wedge stays a child of the part —
+  a tank climbing a ramp has to be drawn over its surface.
+- The engine sound reads its load differently: the idle volume factor is
+  0.6 of `volume` instead of 0.9, full speed and strain pitch a little
+  higher (1.15 / 1.25 instead of 1.1 / 1.18), and at idle the pitch wobbles
+  slightly (1.5 % at 2.5 Hz, fading out as the load grows) — a bass tone
+  held at a fixed pitch reads to the ear as a hum, not as a running engine.
+  `tankEngine.volume` is 0.5, so a standing tank is a touch louder than
+  before (0.30 vs 0.26 effective) and a moving one clearly louder.
+  `calculateEngineSoundParams` is exported and guards a non-finite load.
+- Every `volume` in `src/config/sounds.js` was recomputed against the
+  normalized webm (`roundStart` 0.35, `victory` 0.38, `defeat` 0.5, `frag`
+  0.26, `hit` 0.36, `gameOver` 0.31, `shot` 0.51, `explosion` 0.74,
+  `bombHasBeenPlanted` 0.48, `tankEngine` 0.29). Each number is the old one
+  scaled by that file's measured loudness change, so every sound is as loud
+  as it used to be; the relative mix is unchanged.
+- `npm run audio:check` (`scripts/check-audio-levels.js`) measures
+  `build/sounds/` with `ebur128` and fails when the two codecs of one sound
+  disagree by more than 1 LU. Run it after `npm run audio:process`; it needs
+  ffmpeg and is not part of CI.
+
+### Removed
+
+- The hull tilt on a slope and the dust from under the tracks are gone,
+  together with `src/client/grade.js`, the `grade` and `dust` config blocks
+  and `levelView.setLevelHeight`. The client-side grade sums decayed only in
+  frames WITH motion, so a wrong value froze under a parked tank and the
+  fall effect stayed after the landing. Height now reads from the shadow,
+  the parallax and the height scale. The map's `levelHeight` stays — the
+  core needs it for the physics grade.
+- `parallax.zScaleGain` is gone: the height scale is the same projection as
+  the shift (`1 + z * shear`), so the tank, its wreck, the smoke, bombs and
+  the effects grow exactly as much as the slab they stand on.
+- The level badge next to the local tank is gone, together with its
+  `levelBadgeTexture` baker and the `bakedAssets` entry. The level still
+  reads from the radar ring, the layer colours on the radar, the tinting of
+  the levels below, the shadow and the parallax. This also removes a state
+  leak: `levelView.markLayered()` was never reset, so after a layered map a
+  flat one kept showing a badge with a permanent "0".
+
+### Fixed
+
+- A wide ramp is driven through whole: the core cuts a rectangular block of
+  ramp tiles into parallel lane runs, and a lane change mid-climb used to be
+  judged as a fresh entry — the climb broke on every lane border and the
+  tank ran into its own lane's guard. `is_lane_change` carries the verdict
+  across lanes of one ramp — identified by the crate's own `RampRun::block`,
+  the same field the engine fences a block of lanes by, so the physics and
+  the rules can no longer disagree about what one hill is; lanes of
+  different length fall into different blocks and stay different ramps. The
+  picture merges the lanes back into one run. Off-centre entry works too:
+  the guards no longer turn a wide ramp into tile-wide troughs.
+- The skirt of the ramp wedge is textured from INSIDE the run: the far edge
+  of a run is already the next cell, which holds no ramp tile, so the face
+  that stretched those pixels came out transparent and the embankment read
+  as hollow from one side.
+- A ramp is drawn as a solid embankment: every run gets a skirt — the two
+  sides along the axis and the end face at the top, down to the run's base
+  plane. The wedge used to be a single surface mesh with the ground showing
+  under it, so the map read as "empty, I can drive through" where the
+  engine's guards actually hold the tank. Under a high run (`1 → 2`) the
+  gap remains, and there driving through really is allowed.
+- A tank no longer climbs onto a volumetric wall: a layer's volume now
+  lives in an occluder container on the stage whose `zIndex` is above the
+  dynamics of its own level, so a tank behind a wall is drawn behind it.
+  The wall stays solid: the hole around the player opens only when the
+  volume actually covers the tank on screen (the source cell of the slice
+  under the player is computed back from the projection), and a volume
+  above the player still fades together with its own layer.
+- Map teardown releases shared texture references before freeing the GPU
+  source: every extrusion slice gets `Texture.EMPTY` first, so a mesh that
+  outlives the part (a frame started before a map change) draws an empty
+  texture instead of a destroyed source — the `BindGroup.setResource`
+  crash class.
+- The tank shadow is a silhouette of the hull instead of a blurred circle
+  a third of its size: the circle was normalised by the model `size` rather
+  than by the hull, so its halo stuck out from under the corners of a
+  turning tank as a grey dot.
+- The bridge is drawn ABOVE the ground instead of in the ground's own
+  coordinates: a level-N layer is shifted away from the camera centre by
+  its own height, so its walls no longer read as a dead wall across the
+  level-0 passage, and they open up as the camera moves.
+- A layer's volume takes part in see-through: the railings of the bridge
+  now fade with the slab they belong to (the part declared `levelView` as a
+  dependency and never read it), so a player under the bridge sees a hole
+  in the slab instead of a solid block of railings over it.
+- The 2.5D projection was inside out: the SHADOW was shifted away from the
+  camera while the hull stayed in the world point, which read as a shadow
+  hovering above the tank. Now the hull moves — by the same number as the
+  slab under it — and the shadow stays on the ground.
+- A ramp has a visible volume: each run is drawn as a wedge of
+  `volume.slices` steps whose height grows along the run, so a tank driving
+  under a ramp is hidden by it and the ramp reads as an obstacle from the
+  side (which it now is physically, too).
+- Track marks read `levelView`: marks left on a slab above the player fade
+  like everything else, and marks on an upper level hang at its height
+  instead of lying on the ground.
+- The centre of the see-through hole follows the tank it belongs to: it is
+  computed from the player's projected point, not from the world one, so it
+  no longer drifts off the tank the further the tank is from the centre of
+  the screen.
+- A crate on the bridge is drawn at the bridge's height instead of on the
+  asphalt under it.
+- Bots drive onto a bridge instead of grinding at the foot of a ramp. Two
+  things stood in the way: the nav graph routed paths through the cells of a
+  run, straight into the guard colliders it cannot see (fixed in the engine,
+  which also moved the ramp edge to the centre line of the run), and the
+  bot's obstacle-avoidance rays saw the guards themselves — a run is one
+  tile wide, so the side rays hit its rails on every approach and turned the
+  bot away. The rays now cast with `map::levels_interaction_on_ramp`, which
+  drops the guard bit; entry from the side is still held by the guards and
+  by the nav graph.
+- A tank driving under a ramp's cells (a `1 → 2` run lies in the level-1
+  grid with ground beneath it) keeps the collision mask of its OWN level.
+  It used to take the mask of every level of the run above it: it drove
+  through the walls of its own level, ignored ground tanks and crates, and
+  could not be hit by ground fire.
+- The ramp entry gate judges each run on its own: `Transit::Ramp` now
+  carries the run's number, so moving into an adjacent run is a new entry
+  instead of inheriting the neighbour's verdict (a free climb, or a
+  permanent refusal).
+- A bomb dropped by the client lands where the host lands it: both sides
+  call one `level::bomb_level()` — over a gap, and for a falling tank, the
+  bomb settles on the nearest support below instead of on the ground.
+- The level state takes part in reconciliation: the predictor snapshots
+  `LevelState` per step and rewinds it to the frame's step before the
+  replay, so the ramp entry gate can no longer fire on the client alone.
+- The landing level is recomputed from the cell of touchdown rather than
+  frozen at the moment of the drop, so drifting past the lower slab no
+  longer lands the tank on a floor that is not under it. The fall height of
+  `LevelEvent::Landed` is a saturating subtraction.
+
+- Changing the map no longer takes the client down. A map part unloaded the
+  shared tile sheet (`Assets.unload`) as soon as the first layer was torn
+  down; PixiJS 8 does not refcount there, so the destroyed `TextureSource`
+  nulled a live `BindGroup` and the next filter pass threw in `setResource`.
+  Game assets now stay in the `Assets` cache across map changes.
+- A part's async constructors (`Map.createStatic`, `Map.createDynamic`,
+  `Map._createExtrusion`) check `destroyed` after every `await`, so a bake
+  that finishes after a map change no longer builds onto a torn-down part —
+  and its baked texture is released instead of leaking.
+- GPU resources are freed only after the object leaves the scene, and
+  `bakeTileLayer` destroys the temporary `Spritesheet`, so a map change no
+  longer leaks one frame texture per tile.
+- The webm sounds went through no filter at all: `-af` is an OUTPUT option
+  in ffmpeg, so the single occurrence in `scripts/process-audio.js` applied
+  to the mp3 that followed it and nothing else. Only Safari's branch was
+  normalized, while the webm that Chrome, Firefox and Edge pick was raw and
+  spread over 11 LU — the engine loop was the quietest file in the set and
+  the explosion 11 LU above it. The filter chain is now stated for both
+  outputs and every sound sits at `I = -16` LUFS.
+- A looped sample no longer goes through `silenceremove` and is normalized
+  in two passes (`loudnorm` with measured values and `linear=true`):
+  a single pass normalizes dynamically, and a gain drifting inside the
+  0.65 s engine loop is heard as an uneven idle and as a step at the loop
+  seam, while `silenceremove` cuts at a threshold rather than at a zero
+  crossing. `scripts/process-audio.js` reads which sounds loop from
+  `src/config/sounds.js`, and `-application audio` is now explicit for
+  libopus.
+- `Tank.update` guards `engineLoad` with `|| 0`, as the constructor already
+  did: a short `m1` row left it `undefined`, `clamp` turned that into `NaN`,
+  and since `NaN !== NaN` the engine pushed a non-finite `rate` into Web
+  Audio on every single frame.
+- The local player's own tank and own shot are no longer panned: both
+  register with `spatial: false`. The listener is the camera centre, i.e.
+  the local tank itself, so its engine source lay exactly on the listener,
+  where HRTF gives comb colouring — a hum instead of an engine — and a
+  two-pixel gap between camera and tank threw the same source fully into one
+  ear, since the Web Audio azimuth follows direction rather than distance.
+  Other tanks and every world sound still pan.
+
 ## [0.18.0] - 2026-09-04
 
 ### ⚠️ Breaking

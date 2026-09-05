@@ -195,3 +195,31 @@ describe('ShotEffectController: попадание в динамику карт�
     expect(controller.impact.y).toBe(10);
   });
 });
+
+// Д9: позиция звука выстрела — корпус стрелка на момент выстрела, а
+// слушатель — центр камеры, то есть предсказанный свой танк. Предсказанный
+// локальный выстрел и его авторитетное эхо по позиции не совпадают: один и
+// тот же выстрел звучал то по центру, то целиком в одно ухо. Свой выстрел
+// принадлежит игроку, а не миру.
+describe('ShotEffectController: свой выстрел непространственный', () => {
+  // shooterId — восьмой элемент строки w1
+  const row = shooterId => [0, 0, 100, 0, 0, 0, false, shooterId, 0, 0];
+
+  it('свой выстрел регистрируется с spatial: false', () => {
+    makeController(row(1), { localPlayer: { is: id => String(id) === '1' } });
+
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(false);
+  });
+
+  it('чужой выстрел остаётся пространственным', () => {
+    makeController(row(2), { localPlayer: { is: id => String(id) === '1' } });
+
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(true);
+  });
+
+  it('без сервиса localPlayer (спектатор) звук пространственный', () => {
+    makeController(row(1));
+
+    expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(true);
+  });
+});

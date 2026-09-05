@@ -147,21 +147,74 @@ The consequences the parts implement themselves:
   gets a ring in its level's colour.
 - **Height reads as a shadow.** `Tank` keeps a shadow sprite as a **sibling
   on the stage** (its `zIndex` is that of the level the tank hangs over, and
-  the stage is flat), offset away from the camera centre proportionally to
-  `z`. The badge with the level number is drawn for the local tank only, and
-  only on a layered map; it is a separate sprite, so — like the hull — it is
-  brought down to world scale by `_scaleFactor` and is placed in screen axes
-  (the offset is counter-rotated with the hull), which keeps it clear of the
-  tank at any heading instead of orbiting it. The climb itself also compresses the hull along its
-  heading and kicks dust from under the tracks; the grade is recovered
-  client-side from `z` between frames (`src/client/grade.js`) — the `m1`
-  frame is not changed for a visual.
-- **Volumes shift with the camera.** A render layer with a height
-  (`volumes` in the map, `data.volume` in the part) is extruded by
-  `MapVolume`: `slices` copies of the layer's own baked picture, each
-  shifted further away from the camera centre, so walls open up as the
-  player moves. Slices rather than blocks: the effect costs `slices` draw
-  calls no matter how many walls the map has.
+  the stage is flat) drawn at the tank's **unshifted world point**, while
+  the hull itself is moved by the 2.5D projection below — height is the gap
+  that opens between the two. The shadow is a **silhouette of the hull**
+  (`src/client/bakers/tankShadowTexture.js`), not a circle: a blurred circle
+  normalised by the model `size` stuck out from under the corners of a
+  turning hull and read as a grey dot beside the tank. There is no level
+  number above the tank, and no hull tilt either: the level reads from the
+  radar ring, the tint of the levels below, the shadow, the parallax and the
+  height scale. The client no longer recovers a grade from `z` — the sums
+  decayed only in frames with motion, so a false value froze under a parked
+  tank for good — and there is no track dust.
+- **The 2.5D projection is one formula** (`src/client/parallax.js`). Anything
+  at height `h` **in levels** is drawn pushed AWAY from the camera centre:
+
+  ```
+  point:     p' = p + (p - cam) * k,   k = h * parallax.shear
+  container: the same result is a scale of (1 + k) about the camera centre
+  ```
+
+  The **scale is part of the same projection**: an object at height `z` is
+  drawn both shifted by `z * shear` and enlarged by `(1 + z * shear)` —
+  exactly like the slab it stands on. There is no separate height-scale
+  coefficient any more. Its consumers are the level-N layer and its volume
+  (`Map`), the ramp wedge, the tank hull and wreck, the track-mark
+  containers (`Tracks`), the engine smoke, bombs and the shot and explosion
+  effects. One number for the layer and for the tank is not a coincidence: a
+  tank standing on the level-1 slab has to move exactly with the slab or it
+  slides off it.
+  The shadow is the one thing that stays in the world point — that is what
+  makes the height visible. Nothing recomputes vertices: a container carries
+  the whole shift in its own transform.
+- **Volumes shift with the camera and occlude.** A render layer with a
+  height (`volumes` in the map, `data.volume` in the part) is extruded by
+  `Map` itself: `slices` sprites of the layer's own baked picture, each at a
+  larger `k` than the last, so walls open up as the player moves. Slices
+  rather than blocks: the effect costs `slices` draw calls no matter how
+  many walls the map has. They live in an **occluder container** — a sibling
+  of the part on the stage whose `zIndex` sits ABOVE the dynamics of its own
+  level (`OCCLUDER_BASE_Z`, still far below `parallax.levelZStride`), so a
+  tank standing behind a wall is drawn behind it instead of climbing onto
+  it. The extrusion goes away from the camera centre, that is, it covers the
+  area BEHIND the wall — where the tank is. The occluder keeps the wall solid: the
+  hole around the player opens only when the volume actually covers the
+  tank on screen (`Map._volumeHidesPlayer` computes, back through the
+  projection, the source cell of the slice that lands on the player), while
+  a volume ABOVE the player fades together with its own layer, as the slab
+  does.
+- **A ramp is a slope, not a flat sprite.** `Map` rebuilds the ramp runs
+  from the level grid the way the core does (`src/client/parts/rampRuns.js`
+  mirrors `MapLevels::build_runs`), bakes a texture out of the ramp tiles
+  only, and builds ONE mesh (`MeshSimple`) per run: a strip of
+  `volume.rampSegments` segments per cell whose every vertex carries its own
+  height, `level + rise * progress`. A container transform cannot express
+  that shift — it differs per vertex — so the vertices are recomputed every
+  frame with the same `offsetPoint` formula. The height now grows along the
+  run continuously (the wedge used to be a staircase of `slices` steps, and
+  the steps showed), and a tank driving under the wedge is hidden by it.
+  Each run also gets a second mesh — a **skirt**: the two sides along the
+  axis and the end face at the TOP end, pulled down to the run's base plane.
+  Without it the ground showed under the wedge and the map lied — the sides
+  of a run are closed by the engine's guard colliders. The lower end stays
+  open (that is the legal entry), and a `1 → 2` run keeps a visible gap
+  under it, where driving through really is allowed. The wedge stays a
+  child of the PART, unlike the volume: a tank climbing the ramp has to be
+  drawn on top of its surface. For the picture the lanes of one wide ramp
+  are merged into a single run (`rampRuns.js`) — the core keeps them
+  separate because the entry gate is judged per lane, and skirts on the lane
+  borders would draw partitions that do not exist in the physics.
 - **Tracks keep their level**: track marks live in a per-level container
   that is a sibling of the `Tracks` part on the stage, so a mark left on the
   overpass stays on the overpass after the tank drives down.
@@ -175,7 +228,25 @@ The consequences the parts implement themselves:
   exception is `Map.js`'s `mapSprite`, whose texture is generated per map
   instance via `renderer.generateTexture(...)` and is exclusively owned by
   it — its `destroy()` passes `textureSource: true` to release the GPU
-  source when the map changes.
+  source when the map changes. The order matters: take the object off the
+  scene first, free the GPU resource second — a source destroyed under a
+  live sprite or mesh breaks the frame that was already built.
+- **A part never unloads a game asset**: one tile sheet is shared by every
+  map layer, and `b1.png` by the dynamic bodies
+  of EVERY map. `Assets.unload` does not refcount in PixiJS 8: it destroys
+  the `TextureSource`, which emits `change`, which nulls the `BindGroup`
+  (`BindGroup.onResourceChange`), and the next filter pass throws in
+  `setResource`. The `Assets` cache survives a map change on its own.
+- **A layer is baked once.** The volume slices are sprites over the SAME
+  baked texture as the flat layer, and only its owner (`mapSprite`) frees
+  it. The ramp wedge has a second baked texture of its own (ramp tiles
+  only), shared by every run's mesh, so `destroy()` releases the source
+  exactly once and the meshes go with the container's children.
+- **Async part constructors** (`createStatic`, `createDynamic`,
+  `_createExtrusion`) check `this.destroyed` after EVERY `await`: a map change
+  tears down the old parts in the same tick that creates the new ones, and a
+  bake finishing later would otherwise build onto a destroyed part (and its
+  texture would never be freed).
 - **Particle systems**: `Smoke.js` and `SmokeEffect.js` render their
   particles through `ParticleContainer` + `Particle` (wrapped in a plain
   `Container` per part, since `ParticleContainer` only accepts particles,

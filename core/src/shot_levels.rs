@@ -238,7 +238,7 @@ mod tests {
             },
         );
 
-        MapLevels::build(&grid0, &[], &levels, &[], TILE)
+        MapLevels::build(&grid0, &[], &levels, &[], TILE, None)
     }
 
     /// Карта 8×8 на три уровня: плита уровня 1 — колонки 3..6, плита
@@ -285,11 +285,11 @@ mod tests {
             },
         );
 
-        MapLevels::build(&grid0, &[], &levels, &[], TILE)
+        MapLevels::build(&grid0, &[], &levels, &[], TILE, None)
     }
 
     fn flat() -> MapLevels {
-        MapLevels::build(&vec![vec![0; 8]; 8], &[], &IndexMap::new(), &[], TILE)
+        MapLevels::build(&vec![vec![0; 8]; 8], &[], &IndexMap::new(), &[], TILE, None)
     }
 
     #[test]

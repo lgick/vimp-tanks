@@ -20,8 +20,16 @@ pub enum Transit {
     /// Центр корпуса на клетке рампы: коллизии ВСЕХ уровней прогона.
     /// `climbing` — прошёл ли танк гейт входа (иначе прогон работает для
     /// него как плоская клетка его уровня, см. `entry_is_legal`);
-    /// `low`/`high` — границы прогона: они нужны и маске, и снапу уровня.
-    Ramp { climbing: bool, low: u8, high: u8 },
+    /// `low`/`high` — границы прогона: они нужны и маске, и снапу уровня;
+    /// `run` — номер прогона, по которому вердикт гейта отличается от
+    /// вердикта соседнего прогона.
+    Ramp {
+        climbing: bool,
+        low: u8,
+        high: u8,
+        #[serde(default)]
+        run: u16,
+    },
     /// Свободное падение с обрыва: остаются только стены, ввод заблокирован.
     /// `from` — уровень срыва, `to` — уровень приземления (он выбран в
     /// момент срыва: под танком может быть не земля, а нижняя плита).
@@ -80,13 +88,35 @@ impl LevelState {
     pub fn collision_mask(&self) -> Group {
         match self.transit {
             Transit::Falling { .. } => STATIC_LEVEL_GROUP,
-            // на рампе тело видит геометрию всех уровней, которые прогон
-            // соединяет: иначе на рампе 0 → 2 танк провалился бы сквозь
-            // промежуточную геометрию или упёрся в невидимую стену
-            Transit::Ramp { low, high, .. } => (low..=high)
-                .fold(Group::empty(), |acc, level| acc | level_group(level)),
+            Transit::Ramp {
+                climbing,
+                low,
+                high,
+                ..
+            } => {
+                if climbing {
+                    // на прогоне тело видит геометрию всех уровней, которые
+                    // прогон соединяет: иначе на рампе 0 → 2 танк
+                    // провалился бы сквозь промежуточную плиту или упёрся в
+                    // невидимую стену
+                    (low..=high).fold(Group::empty(), |acc, level| acc | level_group(level))
+                } else {
+                    // заехавшему сбоку прогон работает как плоская клетка
+                    // ЕГО уровня — и физика обязана видеть ровно этот
+                    // уровень, иначе танк под прогоном 1 → 2 проезжает
+                    // сквозь наземные стены своего уровня
+                    level_group(self.level)
+                }
+            }
             Transit::Grounded => level_group(self.level),
         }
+    }
+
+    /// Законно ли тело едет по прогону рампы. Только такому телу движок
+    /// открывает стражей прогона (`map::body_filter`): борта и верхний
+    /// торец обязаны держать всех, кроме поднимающегося.
+    pub fn on_ramp(&self) -> bool {
+        matches!(self.transit, Transit::Ramp { climbing: true, .. })
     }
 
     /// Продольный уклон под курсом `(heading_x, heading_y)`: положительный
@@ -118,6 +148,35 @@ pub fn fall_elapsed(z: f32, from: u8, to: u8, rules: &LevelRules) -> f32 {
     }
 
     fall.elapsed_at(from as f32, to as f32, z)
+}
+
+/// Уровень, на который ложится сброшенная бомба. Одно правило на хост
+/// (`TanksSim::create_weapon_action`) и на клиентскую реплику
+/// (`client::shot`): вторая копия разъехалась бы молча, и локальный взрыв
+/// рисовался бы этажом ниже урона.
+///
+/// Бомба, сброшенная в воздухе (`input_locked` — танк падает) или над
+/// разрывом плиты, ложится на ближайшую опору СНИЗУ, а не сразу на землю.
+/// `None` в `levels` — карта без геометрии уровней: судить не по чему,
+/// бомба идёт на землю.
+pub fn bomb_level(
+    levels: Option<&MapLevels>,
+    level: u8,
+    x: f32,
+    y: f32,
+    input_locked: bool,
+) -> u8 {
+    if level < 1 {
+        return level;
+    }
+
+    match levels {
+        Some(levels) if input_locked || !levels.has_floor(level, x, y) => {
+            levels.landing_level(level, x, y)
+        }
+        Some(_) => level,
+        None => 0,
+    }
 }
 
 /// Шаг правил уровня для точки `(x, y)`. Вызывается ДО применения ввода и
@@ -165,11 +224,25 @@ fn step_layered(
         state.z = fall.z_at(from as f32, to as f32, elapsed);
 
         if elapsed >= fall.duration(from as f32 - to as f32) {
-            state.level = to;
-            state.z = to as f32;
+            // цель падения выбрана в момент срыва, а тело всё это время
+            // летело горизонтально: на длинном сносе плиты `to` под ним уже
+            // может не быть. Приземление судит КЛЕТКА КАСАНИЯ, сохранённое
+            // `to` остаётся только траекторией
+            debug_assert!(from > to, "падение обязано идти вниз: {from} → {to}");
+
+            let landed = if levels.has_floor(to, x, y) {
+                to
+            } else {
+                levels.landing_level(to, x, y)
+            };
+
+            state.level = landed;
+            state.z = landed as f32;
             state.transit = Transit::Grounded;
 
-            return LevelEvent::Landed { height: from - to };
+            return LevelEvent::Landed {
+                height: from.saturating_sub(landed),
+            };
         }
 
         state.transit = Transit::Falling { elapsed, from, to };
@@ -187,8 +260,20 @@ fn step_layered(
         // гейт решается ОДИН раз, при входе на прогон: уровень танка по
         // дороге меняется, и пересчёт на каждом шаге отменял бы подъём на
         // его середине
+        // вердикт наследуется только внутри СВОЕГО прогона: переезд в
+        // смежный прогон — это новый вход, и судить его обязан новый гейт
         let climbing = match state.transit {
-            Transit::Ramp { climbing, .. } => climbing,
+            Transit::Ramp { climbing, run, .. } if run == ramp.run => climbing,
+            // перестроение между ПОЛОСАМИ одной широкой горки. Движок режет
+            // блок тайлов рампы на параллельные прогоны по строкам/колонкам
+            // (`MapLevels::build_runs`), поэтому широкая горка — это N
+            // прогонов, и без этого правила каждая межполосная граница
+            // судилась бы как новый вход и обрывала бы подъём на середине
+            Transit::Ramp { climbing, .. }
+                if is_lane_change(levels, state.prev_cell, cell, &ramp) =>
+            {
+                climbing
+            }
             _ => entry_is_legal(state, &ramp, cell, levels),
         };
 
@@ -196,6 +281,7 @@ fn step_layered(
             climbing,
             low,
             high,
+            run: ramp.run,
         };
 
         // заехавшему сбоку прогон работает как обычная плоская клетка его
@@ -257,6 +343,35 @@ fn run_at_cell(levels: &MapLevels, cell: (i32, i32)) -> Option<u16> {
     let y = (cell.1 as f32 + 0.5) * size;
 
     levels.ramp_at(x, y).map(|sample| sample.run)
+}
+
+// Полосы ОДНОЙ широкой горки: движок режет блок тайлов рампы на
+// параллельные прогоны и нумерует их блоками (`RampRun::block`), поэтому
+// признак один на всю экосистему — по нему же физика огораживает блок
+// целиком. Шаг обязан быть ровно на одну клетку ПОПЕРЁК оси: вход с торца
+// по-прежнему судит гейт.
+//
+// Полосы разной ДЛИНЫ (ступенчатый блок) остаются разными горками — у них
+// разные `block`, и переезд между ними судит гейт.
+fn is_lane_change(
+    levels: &MapLevels,
+    prev: (i32, i32),
+    cell: (i32, i32),
+    ramp: &RampSample,
+) -> bool {
+    let Some(prev_run) = run_at_cell(levels, prev) else {
+        return false;
+    };
+
+    let runs = levels.runs();
+    let (Some(a), Some(b)) = (runs.get(prev_run as usize), runs.get(ramp.run as usize)) else {
+        return false;
+    };
+
+    let (dx, dy) = (cell.0 - prev.0, cell.1 - prev.1);
+    let (along, across) = if ramp.axis == 0 { (dx, dy) } else { (dy, dx) };
+
+    along == 0 && across.abs() == 1 && a.block == b.block
 }
 
 // Законен ли заход на прогон: бок и торцы прогона открыты (в клетку у
@@ -350,7 +465,7 @@ mod tests {
             to: 1,
         }];
 
-        MapLevels::build(&grid0, &[], &levels, &ramps, TILE)
+        MapLevels::build(&grid0, &[], &levels, &ramps, TILE, None)
     }
 
     /// Карта 6×6 с тремя уровнями: рампа (тайл 3) занимает клетки (1, 1) и
@@ -395,7 +510,142 @@ mod tests {
             to: 2,
         }];
 
-        MapLevels::build(&grid0, &[], &levels, &ramps, TILE)
+        MapLevels::build(&grid0, &[], &levels, &ramps, TILE, None)
+    }
+
+    /// Карта 6×6, где прогон лежит в гриде УРОВНЯ 1 (`from: 1, to: 2`), а
+    /// под ним — проезжая земля уровня 0. Ею проверяется маска танка,
+    /// заехавшего ПОД прогон: он обязан видеть свой уровень, а не уровни
+    /// прогона.
+    fn overhead() -> MapLevels {
+        let grid0 = vec![vec![0; 6]; 6];
+        let mut grid1 = vec![vec![0; 6]; 6];
+        let mut grid2 = vec![vec![0; 6]; 6];
+
+        // плита уровня 1 — колонки 1..3 строки 1, из них (2, 1) — рампа
+        for x in 1..4 {
+            grid1[1][x] = 2;
+        }
+
+        grid1[1][2] = 3;
+
+        // плита уровня 2 — колонка 3: вершина прогона
+        grid2[1][3] = 2;
+
+        let mut levels: IndexMap<String, MapLevelConfig> = IndexMap::new();
+
+        for (key, map) in [("1", grid1), ("2", grid2)] {
+            levels.insert(
+                key.to_string(),
+                MapLevelConfig {
+                    map,
+                    floor: vec![2, 3],
+                    walls: Vec::new(),
+                    layers: IndexMap::new(),
+                    volumes: IndexMap::new(),
+                },
+            );
+        }
+
+        let ramps = vec![RampConfig {
+            tile: 3,
+            dir: RampDir::East,
+            from: 1,
+            to: 2,
+        }];
+
+        MapLevels::build(&grid0, &[], &levels, &ramps, TILE, None)
+    }
+
+    /// Карта 8×4: два СМЕЖНЫХ прогона подряд в строке 1, оба поднимают на
+    /// восток с 0 на 1 (тайлы 3 и 4). Второй прогон обязан судить вход
+    /// собственным гейтом: танк подходит к нему уже уровнем 1, а его
+    /// нижний торец ждёт уровень 0.
+    fn two_runs() -> MapLevels {
+        let mut grid0 = vec![vec![0; 8]; 4];
+        let mut grid1 = vec![vec![0; 8]; 4];
+
+        grid0[1][1] = 3;
+        grid0[1][2] = 3;
+        grid0[1][3] = 4;
+        grid0[1][4] = 4;
+
+        // плита уровня 1 — за вторым прогоном
+        grid1[1][5] = 2;
+
+        let mut levels: IndexMap<String, MapLevelConfig> = IndexMap::new();
+
+        levels.insert(
+            "1".to_string(),
+            MapLevelConfig {
+                map: grid1,
+                floor: vec![2],
+                walls: Vec::new(),
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+
+        let ramps = vec![
+            RampConfig {
+                tile: 3,
+                dir: RampDir::East,
+                from: 0,
+                to: 1,
+            },
+            RampConfig {
+                tile: 4,
+                dir: RampDir::East,
+                from: 0,
+                to: 1,
+            },
+        ];
+
+        MapLevels::build(&grid0, &[], &levels, &ramps, TILE, None)
+    }
+
+    /// Карта 6×6 с ШИРОКОЙ горкой: тайл рампы (3) занимает блок из трёх
+    /// строк (y = 1..3) по три клетки (x = 1..3), поднимающий с 0 на 1.
+    /// Движок режет такой блок на три параллельных прогона (по прогону на
+    /// строку), поэтому ею проверяется перестроение между полосами.
+    /// `narrow_lane` укорачивает СРЕДНЮЮ полосу на клетку — тогда полосы
+    /// перестают быть одной горкой.
+    fn wide(narrow_lane: bool) -> MapLevels {
+        let mut grid0 = vec![vec![0; 6]; 6];
+        let mut grid1 = vec![vec![0; 6]; 6];
+
+        for y in 1..4 {
+            let last = if narrow_lane && y == 2 { 3 } else { 4 };
+
+            for x in 1..last {
+                grid0[y][x] = 3;
+            }
+
+            // плита уровня 1 у вершины прогона
+            grid1[y][4] = 2;
+        }
+
+        let mut levels: IndexMap<String, MapLevelConfig> = IndexMap::new();
+
+        levels.insert(
+            "1".to_string(),
+            MapLevelConfig {
+                map: grid1,
+                floor: vec![2],
+                walls: Vec::new(),
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+
+        let ramps = vec![RampConfig {
+            tile: 3,
+            dir: RampDir::East,
+            from: 0,
+            to: 1,
+        }];
+
+        MapLevels::build(&grid0, &[], &levels, &ramps, TILE, None)
     }
 
     fn flat() -> MapLevels {
@@ -405,6 +655,7 @@ mod tests {
             &IndexMap::new(),
             &[],
             TILE,
+            None,
         )
     }
 
@@ -413,8 +664,8 @@ mod tests {
             fall_time: 0.35,
             fall_damage: 15.0,
             max_fall_damage: 100.0,
-            climb_gravity: 220.0,
-            climb_max_speed_factor: 0.55,
+            climb_gravity: 500.0,
+            climb_max_speed_factor: 0.5,
         }
     }
 
@@ -435,6 +686,7 @@ mod tests {
                 climbing: true,
                 low: 0,
                 high: 1,
+                run: 0,
             },
             prev_cell: (1, 1),
             slope_vec: [0.1, 0.0],
@@ -463,7 +715,8 @@ mod tests {
                 Transit::Ramp {
                     climbing: true,
                     low: 0,
-                    high: 1
+                    high: 1,
+                    ..
                 }
             ),
             "{:?}",
@@ -541,6 +794,212 @@ mod tests {
     }
 
     #[test]
+    fn mask_under_a_high_ramp_stays_on_the_ground_level() {
+        let levels = overhead();
+        let mut state = LevelState::default();
+
+        // танк уровня 0 катится под прогоном 1 → 2: клетка (1, 1) → (2, 1)
+        step_level(&mut state, 15.0, 15.0, &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: false, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert_eq!(state.level, 0);
+        // маска обязана остаться земной: иначе танк проезжает сквозь стены
+        // своего уровня и не ловится наземными выстрелами
+        assert_eq!(state.collision_mask(), level_group(0));
+        assert!(!state.on_ramp());
+    }
+
+    #[test]
+    fn mask_on_a_ramp_covers_the_whole_run() {
+        let levels = overhead();
+        let mut state = LevelState {
+            level: 1,
+            z: 1.0,
+            ..LevelState::default()
+        };
+
+        // законный вход с нижнего торца прогона: клетка (1, 1) → (2, 1)
+        step_level(&mut state, 15.0, 15.0, &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert_eq!(state.collision_mask(), level_group(1) | level_group(2));
+        assert!(state.on_ramp());
+    }
+
+    #[test]
+    fn lane_change_on_a_wide_ramp_keeps_climbing() {
+        let levels = wide(false);
+        let mut state = LevelState::default();
+
+        // законный вход с подножия в полосу y = 1: клетка (0, 1) → (1, 1)
+        step_level(&mut state, 5.0, 15.0, &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+
+        let entry_z = state.z;
+
+        // перестроение ПОПЕРЁК оси в полосу y = 2 и дальше вверх по ней
+        step_level(&mut state, 15.0, 25.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+
+        step_level(&mut state, 25.0, 25.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert!(state.on_ramp());
+        assert!(state.z > entry_z, "z = {}, вход = {entry_z}", state.z);
+    }
+
+    #[test]
+    fn lane_change_between_runs_of_different_length_is_a_new_entry() {
+        let levels = wide(true);
+        let mut state = LevelState::default();
+
+        step_level(&mut state, 5.0, 15.0, &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+
+        // средняя полоса короче — это уже другая горка, вход судит гейт
+        step_level(&mut state, 15.0, 25.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: false, .. }),
+            "{:?}",
+            state.transit
+        );
+    }
+
+    #[test]
+    fn side_entry_is_still_refused() {
+        let levels = wide(false);
+        let mut state = LevelState::default();
+
+        // с земли ВБОК на полосу: клетка (2, 0) → (2, 1)
+        step_level(&mut state, 25.0, 5.0, &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: false, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert_eq!(state.level, 0);
+        assert_eq!(state.z, 0.0);
+    }
+
+    #[test]
+    fn drift_during_a_fall_moves_the_landing_level() {
+        let levels = tall();
+        let mut state = LevelState {
+            level: 2,
+            z: 2.0,
+            ..LevelState::default()
+        };
+
+        // срыв с плиты уровня 2 над колонкой x=4: под ней плита уровня 1
+        step_level(&mut state, 45.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Falling { to: 1, .. }),
+            "{:?}",
+            state.transit
+        );
+
+        // но летит тело на колонку x=5, где плиты нет вовсе
+        let mut event = LevelEvent::None;
+
+        for _ in 0..200 {
+            event = step_level(&mut state, 55.0, 15.0, &levels, &rules(), DT);
+
+            if event != LevelEvent::None {
+                break;
+            }
+        }
+
+        assert_eq!(state.level, 0, "снос за плиту обязан ронять на землю");
+        assert_eq!(state.z, 0.0);
+        assert_eq!(event, LevelEvent::Landed { height: 2 });
+    }
+
+    #[test]
+    fn bomb_falls_to_the_nearest_support_below() {
+        let levels = tall();
+
+        // колонка x=3 несёт плиты обоих уровней: бомба остаётся на своём
+        assert_eq!(bomb_level(Some(&levels), 2, 35.0, 15.0, false), 2);
+        // колонка x=4 — плита только уровня 1: разрыв над ней роняет бомбу
+        // на неё, а не на землю
+        assert_eq!(bomb_level(Some(&levels), 2, 45.0, 15.0, false), 1);
+        // падающий роняет бомбу вниз даже над своей плитой
+        assert_eq!(bomb_level(Some(&levels), 2, 35.0, 15.0, true), 1);
+        // земля и карта без геометрии уровней
+        assert_eq!(bomb_level(Some(&levels), 0, 45.0, 15.0, true), 0);
+        assert_eq!(bomb_level(None, 2, 45.0, 15.0, false), 0);
+    }
+
+    #[test]
+    fn gate_verdict_does_not_leak_into_the_next_run() {
+        let levels = two_runs();
+        let mut state = LevelState::default();
+
+        // законный вход в первый прогон: клетка (0, 1) → (1, 1)
+        step_level(&mut state, 5.0, 15.0, &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+
+        // проезд первого прогона до конца: наверху уровень 1
+        step_level(&mut state, 25.0, 15.0, &levels, &rules(), DT);
+
+        assert_eq!(state.level, 1);
+
+        // въезд во ВТОРОЙ прогон: его нижний торец ждёт уровень 0, поэтому
+        // подъём обязан быть отказан. До правки вердикт наследовался от
+        // первого прогона, и подъём продолжался бесплатно
+        step_level(&mut state, 35.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: false, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert_eq!(state.level, 1);
+        assert_eq!(state.z, 1.0);
+    }
+
+    #[test]
     fn ramp_is_not_entered_diagonally() {
         let levels = layered();
         let mut state = LevelState::default();
@@ -603,8 +1062,8 @@ mod tests {
         assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
         assert_eq!(state.level, 0);
 
-        // уклон: два уровня на 20 мировых единиц
-        assert!((state.slope_vec[0] - 0.1).abs() < 1e-6, "{:?}", state.slope_vec);
+        // уклон безразмерный: два уровня по TILE на 20 мировых единиц = 1.0
+        assert!((state.slope_vec[0] - 1.0).abs() < 1e-6, "{:?}", state.slope_vec);
         assert_eq!(state.slope_vec[1], 0.0);
 
         // маска прогона 0 → 2 обязана нести все три уровня

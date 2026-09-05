@@ -18,14 +18,14 @@ use indexmap::IndexMap;
 use crate::config::{KeyConfig, LevelRules, ModelConfig};
 use crate::level::{self, LevelState, Transit};
 use crate::motion::{self, TurretInput};
-use vimp_engine_core::client::collision::{Contact, collect_tile_contacts, obb_vs_obb};
+use vimp_engine_core::client::collision::{Contact, collect_block_contacts, obb_vs_obb};
 use vimp_engine_core::client::raycast::Box2;
 use vimp_engine_core::client::rigid_body::{
     Body, MAP_SURFACE, Surface, apply_contact_impulse, box_mass_properties, combine_surfaces,
     separate_bodies,
 };
 use vimp_engine_core::config::PLAYER_STATE_LEN;
-use vimp_engine_core::map::{MapLevels, STATIC_LEVEL_GROUP, level_group};
+use vimp_engine_core::map::{MapLevels, RampRun, STATIC_LEVEL_GROUP, level_group};
 use vimp_engine_core::physics::normalize_angle;
 
 use super::map_dynamics::MapDynamics;
@@ -120,6 +120,9 @@ pub struct RenderState {
     /// предсказанные теми же правилами, что считает хост
     pub z: f32,
     pub level: u8,
+    /// танк падает (ввод заблокирован): правило уровня сброшенной бомбы
+    /// (`level::bomb_level`) обязано видеть его так же, как хост
+    pub falling: bool,
 }
 
 struct HistoryEntry {
@@ -186,6 +189,16 @@ pub struct Predictor {
     history: VecDeque<HistoryEntry>,
     base_keys_mask: u32,
 
+    /// История состояния уровня по шагам (локальное время шага). Реплей
+    /// начинается с авторитетной ПОЗИЦИИ, а `LevelState` — не позиция: его
+    /// `prev_cell` и вердикт гейта продолжались с конца прошлого реплея, и
+    /// на клетке входа в прогон гейт щёлкал только у клиента. Снапшот
+    /// откатывает состояние уровня туда же, куда откатывается позиция
+    level_history: VecDeque<(f64, LevelState)>,
+    /// Локальное время шага, который сейчас считается (живого или
+    /// переигранного): им подписываются снапшоты уровня
+    step_time: f64,
+
     visual_error: [f32; 3], // x, y, angle
 
     // окно локального времени истории ввода, переигранное последним
@@ -247,6 +260,8 @@ impl Predictor {
             keys_mask: 0,
             one_shot_pending: 0,
             history: VecDeque::new(),
+            level_history: VecDeque::new(),
+            step_time: 0.0,
             base_keys_mask: 0,
             visual_error: [0.0; 3],
             replayed: None,
@@ -396,6 +411,7 @@ impl Predictor {
         // дорисовывает актора в позиции уже несуществующего мира
         self.has_state = false;
         self.history.clear();
+        self.level_history.clear();
         self.base_keys_mask = 0;
         self.keys_mask = 0; // сервер сбрасывает клавиши при респауне (resetKeys)
         self.one_shot_pending = 0;
@@ -497,8 +513,11 @@ impl Predictor {
             let keys = self.keys_mask | self.one_shot_pending;
 
             self.one_shot_pending = 0;
-            self.step(keys);
             self.accumulator -= self.step_ms;
+            // остаток аккумулятора — это время ПОСЛЕ шага, поэтому шаг
+            // подписывается им же: реконсиль ищет снапшот по этому времени
+            self.step_time = local_now - self.accumulator;
+            self.step(keys);
         }
     }
 
@@ -523,20 +542,22 @@ impl Predictor {
         self.centering = centering;
         self.has_state = true;
 
-        // реплей начинается с авторитетной позиции, поэтому фаза падения
-        // берётся из того же кадра (`z` ниже своего уровня = танк в
+        // состояние уровня откатывается туда же, куда позиция: `prev_cell`
+        // и вердикт гейта обязаны отвечать шагу, на котором снят кадр, а не
+        // концу прошлого реплея — иначе на клетке входа в прогон гейт
+        // щёлкает только у клиента
+        self.rewind_level_state(server_time - offset);
+
+        // фаза падения берётся из кадра (`z` ниже своего уровня = танк в
         // воздухе), а не из прошлой ветки предсказания: иначе высота своего
         // танка определялась бы длиной реплея — при скачке RTT она дёргалась
         // бы, а на длинном реплее падение доигрывалось бы раньше времени.
         //
-        // Но на прогоне рампы `z` тоже ниже своего уровня (level = z.round()),
-        // поэтому «z ниже уровня» читается как падение только ВНЕ прогона:
-        // иначе на половине каждой рампы реплика принимала бы подъём за
-        // падение, а падение глушит ввод — тяга уезжала бы от хоста
-        let on_ramp = self
-            .levels
-            .as_ref()
-            .is_some_and(|levels| levels.ramp_at(self.state.x, self.state.y).is_some());
+        // На прогоне рампы `z` тоже ниже своего уровня (level = z.round()),
+        // но теперь об этом спрашивают не карту под авторитетной позицией, а
+        // откаченное состояние: поднимающийся по прогону не падает по
+        // определению — тот же вопрос, на который отвечает хост
+        let climbing = self.level_state.on_ramp();
         // и ровно так же, как у хоста, падение начинается только там, где
         // под телом нет плиты своего уровня: кадр, снятый на прогоне, может
         // приехать к реплике, уже съехавшей с него, и «z ниже уровня» тогда
@@ -547,7 +568,7 @@ impl Predictor {
                 .is_some_and(|levels| levels.has_floor(z_level, self.state.x, self.state.y))
         };
         let airborne = self.authoritative_level.filter(|&(z, level)| {
-            !on_ramp && level >= 1 && z < level as f32 && !has_floor(level)
+            !climbing && level >= 1 && z < level as f32 && !has_floor(level)
         });
 
         if let Some((z, level)) = airborne {
@@ -565,9 +586,11 @@ impl Predictor {
                 from: level,
                 to,
             };
-        } else if !on_ramp
+        } else if !climbing
             && let Transit::Falling { .. } = self.level_state.transit
         {
+            // кадр говорит, что танк уже на опоре: доигрывать своё падение
+            // реплике нечего
             self.level_state.transit = Transit::Grounded;
         }
 
@@ -601,6 +624,7 @@ impl Predictor {
                 history_index += 1;
             }
 
+            self.step_time = t - offset;
             self.step(replay_keys | one_shot);
         }
 
@@ -653,6 +677,7 @@ impl Predictor {
             angvel: self.state.angvel,
             z: self.level_state.z,
             level: self.level_state.level,
+            falling: self.level_state.input_locked(),
         })
     }
 
@@ -673,6 +698,13 @@ impl Predictor {
     // один фикс-шаг реплики движения: формулы тика общие с Tank::update
     // (crate::motion), интеграция — эмпирический порядок Rapier
     fn step(&mut self, keys: u32) {
+        self.step_inner(keys);
+        // снапшот пишется ВСЕГДА, включая ранние выходы шага (нет модели):
+        // дыра в истории означала бы откат к состоянию другого шага
+        self.push_level_snapshot();
+    }
+
+    fn step_inner(&mut self, keys: u32) {
         let dt = (self.step_ms / 1000.0) as f32;
 
         self.step_level(dt);
@@ -743,6 +775,34 @@ impl Predictor {
         self.state.angvel *= 1.0 / (1.0 + dt * model.damping.angular);
 
         self.resolve_world(dt);
+    }
+
+    // снапшот состояния уровня после шага; хранится столько же, сколько
+    // история ввода — реплей длиннее неё невозможен
+    fn push_level_snapshot(&mut self) {
+        let min_time = self.step_time - HISTORY_MAX_AGE;
+
+        while self.level_history.front().is_some_and(|(t, _)| *t < min_time) {
+            self.level_history.pop_front();
+        }
+
+        self.level_history.push_back((self.step_time, self.level_state));
+    }
+
+    // откатывает состояние уровня к шагу, на котором снят кадр: всё, что
+    // было предсказано позже, реплей посчитает заново
+    fn rewind_level_state(&mut self, local_time: f64) {
+        while self
+            .level_history
+            .back()
+            .is_some_and(|(t, _)| *t > local_time)
+        {
+            self.level_history.pop_back();
+        }
+
+        if let Some((_, state)) = self.level_history.back() {
+            self.level_state = *state;
+        }
     }
 
     /// Правила уровня одного шага — до применения ввода, ровно как в
@@ -865,16 +925,13 @@ impl Predictor {
                         continue;
                     }
 
-                    let Some(grid) = levels.grid(level) else {
-                        continue;
-                    };
-
-                    let hits = collect_tile_contacts(
-                        &obb,
-                        grid,
-                        levels.solid(level),
-                        levels.tile_size(),
-                    );
+                    // стены берутся СКЛЕЕННЫМИ блоками — той же геометрией,
+                    // по которой хост поставил коллайдеры
+                    // (`GameMap::create_static`). Поклеточный сбор давал
+                    // корпусу на длинной стене несколько контактов там, где у
+                    // хоста один, и касательный удар об угол разрешался по
+                    // другой оси — предсказание расходилось молча
+                    let hits = collect_block_contacts(&obb, levels.static_blocks(level));
 
                     for hit in hits {
                         let partner = sim.len();
@@ -886,6 +943,96 @@ impl Predictor {
                             index,
                             partner,
                             hit.contact,
+                            combine_surfaces(&surfaces[index], &MAP_SURFACE),
+                        ));
+                    }
+                }
+            }
+
+            // стражи прогонов рампы: борта и «неправильный» торец. Их
+            // геометрии нет ни в одном гриде — хост ставит их отдельными
+            // коллайдерами (`GameMap::create_ramp_guards`), поэтому реплика
+            // обязана собрать их теми же формулами: иначе предсказание
+            // въезжает на прогон сбоку там, где хост держит
+            let climbing = self.level_state.on_ramp();
+            let thickness = levels.tile_size() * 0.1;
+            // огораживается БЛОК полос широкой горки, а не каждая полоса:
+            // борта ставятся по внешним границам блока, торец — один во всю
+            // его ширину (`GameMap::create_ramp_guards`)
+            let mut blocks: Vec<RampRun> = Vec::new();
+
+            for run in levels.runs() {
+                if let Some(block) = blocks.iter_mut().find(|block| block.block == run.block) {
+                    block.cross_min = block.cross_min.min(run.cross_min);
+                    block.cross_max = block.cross_max.max(run.cross_max);
+                } else {
+                    blocks.push(run.clone());
+                }
+            }
+
+            for run in &blocks {
+                let low = run.from.min(run.to);
+                let half_main = (run.max - run.min) / 2.0;
+                let half_cross = (run.cross_max - run.cross_min) / 2.0;
+                let main = (run.min + run.max) / 2.0;
+                let cross = (run.cross_min + run.cross_max) / 2.0;
+                // «неправильный» торец — дальний по ходу подъёма
+                let far = if run.sign > 0 { run.max } else { run.min };
+                let guard = |main: f32, cross: f32, half_main: f32, half_cross: f32| {
+                    let (x, y) = if run.axis == 0 {
+                        (main, cross)
+                    } else {
+                        (cross, main)
+                    };
+                    let (half_w, half_h) = if run.axis == 0 {
+                        (half_main, half_cross)
+                    } else {
+                        (half_cross, half_main)
+                    };
+
+                    Box2 {
+                        x,
+                        y,
+                        angle: 0.0,
+                        half_w,
+                        half_h,
+                    }
+                };
+                let guards = [
+                    guard(main, run.cross_min, half_main, thickness / 2.0),
+                    guard(main, run.cross_max, half_main, thickness / 2.0),
+                    guard(far, cross, thickness / 2.0, half_cross),
+                ];
+
+                for index in 0..movable {
+                    // страж существует только для тел уровня, с которого
+                    // прогон начинается, и законно поднимающийся проходит
+                    // его насквозь (`map::body_filter`)
+                    if !masks[index].intersects(level_group(low)) || (index == 0 && climbing) {
+                        continue;
+                    }
+
+                    let obb = Box2 {
+                        x: sim[index].x,
+                        y: sim[index].y,
+                        angle: sim[index].angle,
+                        half_w: geometry[index].0,
+                        half_h: geometry[index].1,
+                    };
+
+                    for box2 in &guards {
+                        let Some(contact) = obb_vs_obb(&obb, box2) else {
+                            continue;
+                        };
+                        let partner = sim.len();
+
+                        sim.push(static_body(box2.x, box2.y));
+                        geometry.push((0.0, 0.0));
+                        surfaces.push(MAP_SURFACE);
+                        contacts.push((
+                            index,
+                            partner,
+                            contact,
                             combine_surfaces(&surfaces[index], &MAP_SURFACE),
                         ));
                     }
@@ -1592,6 +1739,87 @@ mod tests {
         state
     }
 
+    // ШИРОКАЯ горка: блок тайлов рампы 2 клетки в длину и 3 в ширину.
+    // Движок режет его на три полосы-прогона, и КАЖДЫЙ прогон получает
+    // борта-стражи по обеим своим поперечным границам — то есть внутренние
+    // границы блока тоже огорожены. Этой картой проверяется, что заезд с
+    // подножия широкой горки реплика не блокирует.
+    fn wide_ramp_map() -> String {
+        let mut grid = vec![vec![0, 0, 0, 0, 0, 0]; 6];
+
+        for row in grid.iter_mut().take(4).skip(1) {
+            row[2] = 3;
+            row[3] = 3;
+        }
+
+        serde_json::json!({
+            "step": 40,
+            "scale": 1,
+            "map": grid,
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "levels": {
+                "1": {
+                    "map": vec![vec![0, 0, 0, 0, 2, 2]; 6],
+                    "floor": [2],
+                    "walls": [],
+                },
+            },
+            "ramps": [{ "tile": 3, "dir": "east", "from": 0, "to": 1 }],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn replica_drives_onto_a_wide_ramp() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        // подножие средней полосы: клетка (1, 2), центр (60, 100)
+        p.state.x = 60.0;
+        p.state.y = 100.0;
+        p.state.vx = 300.0;
+
+        for _ in 0..60 {
+            p.step(0);
+        }
+
+        assert!(
+            p.state.x > 90.0,
+            "реплика не пустила танк на широкую горку: x = {}",
+            p.state.x
+        );
+        assert!(
+            p.level_state().z > 0.0,
+            "подъём не начался: {:?}",
+            p.level_state()
+        );
+    }
+
+    // заезд по ГРАНИЦЕ полос широкой горки: стражи огораживают блок полос
+    // целиком, поэтому внутренних бортов нет и танк входит на клин с любой
+    // точки подножия, а не только по центру полосы
+    #[test]
+    fn replica_drives_onto_a_wide_ramp_off_centre() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        // ровно на границе полос 1 и 2: корпус лежит в обеих
+        p.state.x = 60.0;
+        p.state.y = 80.0;
+        p.state.vx = 300.0;
+
+        for _ in 0..60 {
+            p.step(0);
+        }
+
+        assert!(
+            p.state.x > 90.0,
+            "танк упёрся во внутренний борт блока: x = {}",
+            p.state.x
+        );
+    }
+
     #[test]
     fn replica_climbs_the_ramp() {
         let mut p = make_predictor();
@@ -2040,6 +2268,57 @@ mod tests {
         p.step(0);
 
         assert_eq!(p.level_state().level, 1);
+    }
+
+    #[test]
+    fn reconcile_does_not_carry_a_stale_gate_verdict_onto_the_run() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // шаг у подножия прогона (колонка 1, строка 2)
+        p.step_time = 0.0;
+        p.state.x = 60.0;
+        p.state.y = 100.0;
+        p.step(0);
+
+        // предсказание убежало вперёд и заехало на прогон ПО ДИАГОНАЛИ
+        // (колонка 2, строка 1): гейт такой вход не пускает
+        p.step_time = STEP_MS;
+        p.state.x = 90.0;
+        p.state.y = 60.0;
+        p.step(0);
+
+        assert!(
+            matches!(
+                p.level_state().transit,
+                Transit::Ramp { climbing: false, .. }
+            ),
+            "{:?}",
+            p.level_state().transit
+        );
+
+        // кадр снят на шаге у подножия и везёт законный вход с торца.
+        // Реплей обязан судить его гейтом ЭТОГО шага: без отката состояния
+        // уровня отказ диагонального входа наследовался бы прогоном
+        p.correct_level(0.0, 0);
+        p.on_server_state(
+            [90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            false,
+            0.0,
+            0.0,
+            STEP_MS,
+        );
+
+        assert!(
+            matches!(
+                p.level_state().transit,
+                Transit::Ramp { climbing: true, .. }
+            ),
+            "{:?}",
+            p.level_state().transit
+        );
+        assert_eq!(p.level_state().prev_cell, (2, 2));
     }
 
     #[test]

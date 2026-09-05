@@ -3,6 +3,9 @@ import ExplosionEffect from './ExplosionEffect.js';
 import FunnelEffect from './FunnelEffect.js';
 import { REFERENCE_BLAST_RADIUS } from './SmokeEffect.js';
 import { levelZ } from '../../../levelZ.js';
+import { cameraCenter } from '../../../camera.js';
+import { offsetPoint } from '../../../parallax.js';
+import { parallax as parallaxConfig } from '../../../../config/render.js';
 import {
   W2E_X,
   W2E_Y,
@@ -30,12 +33,19 @@ export default class ExplosionEffectController extends Container {
     this._assets = assets;
     this._soundManager = dependencies.soundManager;
     this._levelView = dependencies.levelView || null;
+    this._renderer = dependencies.renderer || null;
 
     // вспышка и воронка живут СИБЛИНГАМИ на сцене (у них свои zIndex),
     // поэтому прозрачность ставится им, а не контроллеру.
     // `onRender` — аксессор Container, назначается свойством
-    if (this._levelView) {
-      this.onRender = () => this._updateSeeThrough();
+    if (this._levelView || this._renderer) {
+      this.onRender = () => {
+        if (this._levelView) {
+          this._updateSeeThrough();
+        }
+
+        this._applyHeight();
+      };
     }
 
     this.x = this.originX;
@@ -70,6 +80,23 @@ export default class ExplosionEffectController extends Container {
     if (this.funnel) {
       this.funnel.alpha = alpha;
       this.funnel.tint = tint;
+    }
+  }
+
+  // Проекция высоты: взрыв на мосту стоит на мосту, а не на земле под ним —
+  // тот же сдвиг и тот же масштаб, что у плиты (`src/client/parallax.js`).
+  // Вспышка и воронка живут сиблингами на сцене, поэтому проекция ставится
+  // каждой из них, а не контроллеру
+  _applyHeight() {
+    const k = this._level * parallaxConfig.shear;
+    const camera = cameraCenter(this.parent, this._renderer);
+    const view = offsetPoint(this.originX, this.originY, camera, k);
+
+    for (const target of [this.explosion, this.funnel]) {
+      if (target) {
+        target.position.set(view.x, view.y);
+        target.scale.set(1 + k);
+      }
     }
   }
 

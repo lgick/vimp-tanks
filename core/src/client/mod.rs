@@ -57,6 +57,11 @@ pub(crate) struct ClientMapConfig {
     /// Переходы между уровнями (направленные рампы).
     #[serde(default)]
     pub(crate) ramps: Vec<vimp_engine_core::map::RampConfig>,
+    /// Высота ОДНОГО уровня в единицах карты (до `scale`). None — размер
+    /// тайла. Реплика обязана видеть её так же, как хост: от неё зависит
+    /// уклон рампы, а значит и предсказанная скорость на подъёме.
+    #[serde(default)]
+    pub(crate) level_height: Option<f32>,
 }
 
 pub(crate) fn default_scale() -> f32 {
@@ -104,6 +109,7 @@ impl ClientMapConfig {
             &self.levels,
             &self.ramps,
             self.step * self.scale,
+            self.level_height.map(|height| height * self.scale),
         )
     }
 }
@@ -432,6 +438,7 @@ impl GameClientDef for TanksClient {
             &cfg.volumes,
             &cfg.levels,
             &cfg.ramps,
+            cfg.level_height,
         )?;
 
         let levels = Rc::new(cfg.take_levels());

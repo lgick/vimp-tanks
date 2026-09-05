@@ -365,16 +365,16 @@ impl ShotPredictor {
                 // экстраполировать её вперёд нечем — клиент своей латентности
                 // не знает, а расхождение с хостом закрывает авторитетная
                 // коррекция при подтверждении (см. filter_frame_game)
-                // бомба, сброшенная над пустотой, оказывается внизу — то же
-                // правило, что на хосте (`create_weapon_action`)
-                let mut level = render.level;
-
-                if let Some(levels) = &self.levels
-                    && level >= 1
-                    && !levels.has_floor(level, render.x, render.y)
-                {
-                    level = 0;
-                }
+                // бомба, сброшенная над пустотой или в падении, ложится на
+                // ближайшую опору снизу — ОДНА функция с хостом
+                // (`create_weapon_action` зовёт её же)
+                let level = crate::level::bomb_level(
+                    self.levels.as_deref(),
+                    render.level,
+                    render.x,
+                    render.y,
+                    render.falling,
+                );
 
                 Some(json!({
                     weapon_name: {
@@ -914,6 +914,7 @@ mod tests {
             angvel: 0.0,
             z: 0.0,
             level: 0,
+            falling: false,
         }
     }
 
@@ -1473,6 +1474,70 @@ mod tests {
         let row = spawn["w2"]["L2"].as_array().unwrap();
 
         assert_eq!(row[6].as_u64(), Some(0));
+    }
+
+    /// Карта на три уровня 10×3: плита уровня 1 — колонки 3..6, плита
+    /// уровня 2 — колонки 3..4. Над колонкой 5 у верхней плиты разрыв, а
+    /// под ним — плита уровня 1.
+    fn two_slab_shot_map() -> String {
+        let mut grid1 = vec![vec![0; 10]; 3];
+        let mut grid2 = vec![vec![0; 10]; 3];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().take(7).skip(3) {
+                *cell = 2;
+            }
+        }
+
+        for row in grid2.iter_mut() {
+            for cell in row.iter_mut().take(5).skip(3) {
+                *cell = 2;
+            }
+        }
+
+        serde_json::json!({
+            "step": 10,
+            "scale": 1,
+            "map": vec![vec![0; 10]; 3],
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "levels": {
+                "1": { "map": grid1, "floor": [2], "walls": [] },
+                "2": { "map": grid2, "floor": [2], "walls": [] }
+            },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn local_bomb_lands_where_the_host_lands_it() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &two_slab_shot_map());
+        shot.cycle_weapon(false); // w1 → w2 (explosive)
+
+        // разрыв верхней плиты над плитой уровня 1: бомба обязана лечь на
+        // неё, а не на землю — то же правило, что у хоста
+        // (`level::bomb_level`)
+        let spawn = shot
+            .try_fire(&render_at_level(55.0, 5.0, 2), 1, 0.0, ShotWorld::default())
+            .unwrap();
+
+        assert_eq!(spawn["w2"]["L1"].as_array().unwrap()[6].as_u64(), Some(1));
+
+        // падающий роняет бомбу вниз даже над своей плитой
+        shot.reset_local();
+        shot.cycle_weapon(false);
+
+        let falling = RenderState {
+            falling: true,
+            ..render_at_level(35.0, 5.0, 2)
+        };
+        let spawn = shot
+            .try_fire(&falling, 1, 100.0, ShotWorld::default())
+            .unwrap();
+
+        assert_eq!(spawn["w2"]["L2"].as_array().unwrap()[6].as_u64(), Some(1));
     }
 
     #[test]

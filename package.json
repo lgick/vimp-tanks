@@ -1,6 +1,6 @@
 {
   "name": "@vimp-games/tanks",
-  "version": "0.18.1",
+  "version": "0.19.0",
   "description": "VIMP Tanks — игра-плагин для движка VIMP",
   "homepage": "https://github.com/lgick/vimp-tanks#readme",
   "bugs": {
@@ -27,6 +27,7 @@
     "check:pack": "node ./scripts/check-pack.js",
     "prepack": "node ./scripts/check-pack.js",
     "audio:process": "node ./scripts/process-audio.js",
+    "audio:check": "node ./scripts/check-audio-levels.js",
     "core:build": "npm run core:build:web && npm run core:build:node",
     "core:build:web": "wasm-pack build core --release --target web --out-dir pkg-web",
     "core:build:node": "wasm-pack build core --release --target nodejs --out-dir pkg-node",
@@ -49,7 +50,7 @@
     "globals": "^16.2.0",
     "happy-dom": "^20.10.6",
     "pixi.js": "8.19.0",
-    "vimp-engine": "^0.31.0",
+    "vimp-engine": "^0.32.1",
     "vite": "^7.1.11",
     "vitest": "^4.1.9"
   }

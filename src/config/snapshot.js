@@ -103,8 +103,8 @@ export default {
       { name: 'angle', ty: 'f32', interp: 'lerpAngle' },
       // 2.5D: высота и уровень тела карты. Обязательная голова, а не хвост:
       // покоящееся тело хвост не шлёт, и уровень читался бы нулём
-      { name: 'z', ty: 'f32', interp: 'lerp' },
-      { name: 'level', ty: 'u8' },
+      { name: 'z', ty: 'f32', interp: 'lerp', role: 'z' },
+      { name: 'level', ty: 'u8', role: 'level' },
       { name: 'vx', ty: 'f32', interp: 'lerp' },
       { name: 'vy', ty: 'f32', interp: 'lerp' },
       { name: 'angvel', ty: 'f32', interp: 'lerp' },
@@ -121,8 +121,8 @@ export default {
       { name: 'angle', ty: 'f32', interp: 'lerpAngle' },
       // 2.5D: высота и уровень тела карты. Обязательная голова, а не хвост:
       // покоящееся тело хвост не шлёт, и уровень читался бы нулём
-      { name: 'z', ty: 'f32', interp: 'lerp' },
-      { name: 'level', ty: 'u8' },
+      { name: 'z', ty: 'f32', interp: 'lerp', role: 'z' },
+      { name: 'level', ty: 'u8', role: 'level' },
       { name: 'vx', ty: 'f32', interp: 'lerp' },
       { name: 'vy', ty: 'f32', interp: 'lerp' },
       { name: 'angvel', ty: 'f32', interp: 'lerp' },

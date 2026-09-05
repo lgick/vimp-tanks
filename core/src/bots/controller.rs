@@ -5,7 +5,7 @@ use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::tanks::BotView;
-use vimp_engine_core::map::level_interaction;
+use vimp_engine_core::map::{level_group, levels_interaction_on_ramp};
 use vimp_engine_core::nav::navigation::PathPoint;
 
 // константы поведения бота (из src/server/modules/bots/BotController.js)
@@ -786,9 +786,14 @@ fn avoid_obstacles(
 
         // объезжаем препятствия СВОЕГО уровня: перила моста над головой
         // бота на земле — не препятствие. На одноуровневой карте фильтра
-        // по группам нет вовсе — прежний путь бит-в-бит
+        // по группам нет вовсе — прежний путь бит-в-бит.
+        // Стражи прогона рампы (`RAMP_GUARD_GROUP`) лучами НЕ видны: прогон
+        // шириной в тайл — коридор, и боковые лучи упирались бы в его борта
+        // на каждом подъезде, разворачивая бота от подножия. Заезд сбоку
+        // держат сами стражи и нав-граф, который через клетки прогона путь
+        // не прокладывает
         if layered {
-            filter = filter.groups(level_interaction(my_level));
+            filter = filter.groups(levels_interaction_on_ramp(level_group(my_level)));
         }
 
         if game.world.cast_ray(&ray, 1.0, true, filter).is_some() {
@@ -835,7 +840,14 @@ mod tests {
             serde_json::from_str(include_str!("../../../tests/core/fixtures/layered.json"))
                 .unwrap();
 
-        MapLevels::build(&cfg.map, &cfg.physics_static, &cfg.levels, &cfg.ramps, TILE)
+        MapLevels::build(
+            &cfg.map,
+            &cfg.physics_static,
+            &cfg.levels,
+            &cfg.ramps,
+            TILE,
+            None,
+        )
     }
 
     fn model() -> ModelConfig {

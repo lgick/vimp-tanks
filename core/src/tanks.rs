@@ -863,7 +863,12 @@ impl TanksSim {
             let event =
                 level::step_level(&mut tank.level_state, pos.x, pos.y, levels, level_rules, dt);
 
-            if dirty || tank.level_state.collision_mask() != before.collision_mask() {
+            // не только маска уровней: смена «еду по прогону» открывает и
+            // закрывает стражей прогона при неизменной маске
+            if dirty
+                || tank.level_state.collision_mask() != before.collision_mask()
+                || tank.level_state.on_ramp() != before.on_ramp()
+            {
                 tank.sync_collision_groups(ctx.world);
             }
 
@@ -1066,26 +1071,15 @@ impl TanksSim {
         let team_id = self.tanks[&owner_id].team_id;
 
         let owner = &self.tanks[&owner_id];
-        let mut level = owner.level_state.level;
-
-        // бомба, сброшенная в воздухе или над пустотой, оказывается на
-        // ближайшей опоре СНИЗУ, а не сразу на земле: над разрывом плиты
-        // уровня 2 она обязана лечь на плиту уровня 1. Держать её на своём
-        // уровне там, где плиты нет, значило бы взрывать «в воздухе»
-        if level >= 1 {
-            let (x, y) = (shot.body_position.x, shot.body_position.y);
-
-            level = match self.levels.as_ref() {
-                Some(levels)
-                    if owner.level_state.input_locked() || !levels.has_floor(level, x, y) =>
-                {
-                    levels.landing_level(level, x, y)
-                }
-                Some(_) => level,
-                // уровень без геометрии судить не по чему — бомба идёт на землю
-                None => 0,
-            };
-        }
+        // правило уровня бомбы — общее с клиентской репликой
+        // (`level::bomb_level`)
+        let level = level::bomb_level(
+            self.levels.as_ref(),
+            owner.level_state.level,
+            shot.body_position.x,
+            shot.body_position.y,
+            owner.level_state.input_locked(),
+        );
 
         let bomb = Bomb::new(
             ctx.world,
