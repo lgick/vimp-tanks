@@ -166,29 +166,31 @@
       "who": "p2",
       "action": "down",
       "name": "fire"
+    },
+    {
+      "tick": 1000,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "nextWeapon"
+    },
+    {
+      "tick": 1040,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "fire"
     }
   ],
   "unusedSnapshotKeys": [
-    "w2",
-    "w2e",
     "c2"
   ],
-  "divergence": {
-    "thresholds": [
-      3,
-      3,
-      0.06,
-      25,
-      25,
-      1.5,
-      0.15,
-      0.06
-    ]
-  },
+  "divergence": null,
   "ticks": 1400,
   "dumpTicks": [
     700,
     940,
+    1075,
     1400
   ]
 }
