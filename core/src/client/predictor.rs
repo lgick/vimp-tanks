@@ -18,11 +18,13 @@ use indexmap::IndexMap;
 use crate::config::{KeyConfig, LevelRules, ModelConfig};
 use crate::level::{self, LevelState, Transit};
 use crate::motion::{self, TurretInput};
-use vimp_engine_core::client::collision::{Contact, collect_block_contacts, obb_vs_obb};
+use vimp_engine_core::client::collision::{
+    Contact, Manifold, collect_block_contacts, obb_manifold,
+};
 use vimp_engine_core::client::raycast::Box2;
 use vimp_engine_core::client::rigid_body::{
-    Body, MAP_SURFACE, Surface, apply_contact_impulse, box_mass_properties, combine_surfaces,
-    separate_bodies,
+    Body, ContactImpulses, MAP_SURFACE, Surface, apply_contact_impulse, box_mass_properties,
+    combine_surfaces, separate_bodies,
 };
 use vimp_engine_core::config::PLAYER_STATE_LEN;
 use vimp_engine_core::map::{MapLevels, RampRun, STATIC_LEVEL_GROUP, level_group};
@@ -63,6 +65,9 @@ struct Shape {
     half_h: f32,
     inv_mass: f32,
     inv_inertia: f32,
+    /// дистанция спекулятивного контакта — та же, что хост отдаёт Rapier
+    /// (`motion::contact_prediction`)
+    prediction: f32,
 }
 
 /// Состояние реплики (порядок полей — как player-блок кадра).
@@ -277,8 +282,7 @@ impl Predictor {
         // игру не меняется, а шагов симуляции (живых плюс replay) сотни
         // в секунду
         self.shape = self.model.as_ref().map(|model| {
-            let width = model.size * 4.0;
-            let height = model.size * 3.0;
+            let (width, height) = motion::body_size(model);
             // размер танка, в отличие от динамики карты, картой не масштабируется
             let mass = box_mass_properties(width, height, model.fixture.density);
 
@@ -287,6 +291,7 @@ impl Predictor {
                 half_h: height / 2.0,
                 inv_mass: mass.inv_mass,
                 inv_inertia: mass.inv_inertia,
+                prediction: motion::contact_prediction(width, height),
             }
         });
     }
@@ -557,7 +562,19 @@ impl Predictor {
         // но теперь об этом спрашивают не карту под авторитетной позицией, а
         // откаченное состояние: поднимающийся по прогону не падает по
         // определению — тот же вопрос, на который отвечает хост
+        // вердикт гейта («поднимаюсь законно») — из откаченного состояния,
+        // а сам факт «стою на прогоне» — из КАРТЫ под авторитетной позицией:
+        // хост не начинает падение на клетке прогона вовсе
+        // (`level::step_layered` спрашивает `ramp_at` раньше любых проверок
+        // опоры), а на крутом прогоне 0 → 2 высота дробная по определению.
+        // Без карты реплика читала бы эту дробную высоту как «танк в
+        // воздухе», запирала ввод и на каждом кадре теряла газ, который хост
+        // в это время набирал
         let climbing = self.level_state.on_ramp();
+        let on_ramp = climbing
+            || self.levels.as_ref().is_some_and(|levels| {
+                levels.ramp_at(self.state.x, self.state.y).is_some()
+            });
         // и ровно так же, как у хоста, падение начинается только там, где
         // под телом нет плиты своего уровня: кадр, снятый на прогоне, может
         // приехать к реплике, уже съехавшей с него, и «z ниже уровня» тогда
@@ -568,7 +585,7 @@ impl Predictor {
                 .is_some_and(|levels| levels.has_floor(z_level, self.state.x, self.state.y))
         };
         let airborne = self.authoritative_level.filter(|&(z, level)| {
-            !climbing && level >= 1 && z < level as f32 && !has_floor(level)
+            !on_ramp && level >= 1 && z < level as f32 && !has_floor(level)
         });
 
         if let Some((z, level)) = airborne {
@@ -709,12 +726,25 @@ impl Predictor {
 
         self.step_level(dt);
 
-        // падение: ввод игнорируется целиком (зеркало Tank::update)
-        let keys = if self.level_state.input_locked() { 0 } else { keys };
-
         let Some(model) = &self.model else {
             return;
         };
+
+        // падение: ввод игнорируется ЦЕЛИКОМ — зеркало раннего выхода
+        // `Tank::update`. Хост в падении не двигает ни башню, ни газ, ни
+        // тягу: клавиши остаются нажатыми и подхватятся при приземлении.
+        // Реплика с обнулённой маской вместо раннего выхода доводила
+        // центрирование башни, спускала газ и тормозила тягой — все три
+        // расхождения тихо копились на каждом падении
+        let damping = (model.damping.linear, model.damping.angular);
+
+        if self.level_state.input_locked() {
+            self.engine_load = 0.0;
+            self.resolve_world(dt);
+            self.integrate(damping.0, damping.1, dt);
+
+            return;
+        }
 
         let forward = keys & self.forward_bit != 0;
         let back = keys & self.back_bit != 0;
@@ -763,18 +793,34 @@ impl Predictor {
 
         self.state.angvel += motion::turn_delta(left, right, forward_speed, model, dt);
 
-        // интеграция и затухание (эмпирический порядок Rapier, зафиксирован
-        // паритет-тестом: позиция интегрируется скоростью до демпфирования,
-        // хранится задемпфированная скорость)
+        // контакты решаются ДО интеграции позиции — тот же порядок, что у
+        // Rapier: контакт строится на позе НАЧАЛА шага с запасом
+        // `soft_ccd_prediction`, скорости правятся импульсами, и только
+        // потом тело едет. Обратный порядок уводил реплику внутрь стены на
+        // целый шаг (до 1.24 юнита на полном ходу): плечо единственной
+        // точки контакта получалось другим, чем у хоста, и предсказание
+        // молча расходилось с сервером на касательных ударах
+        self.resolve_world(dt);
+
+        self.integrate(damping.0, damping.1, dt);
+    }
+
+    // интеграция и затухание (эмпирический порядок Rapier, зафиксирован
+    // паритет-тестом: позиция интегрируется скоростью до демпфирования,
+    // хранится задемпфированная скорость). Тела предсказанных подсистем
+    // едут тем же шагом и в том же порядке: импульсы уже решены выше
+    fn integrate(&mut self, linear: f32, angular: f32, dt: f32) {
         self.state.x += self.state.vx * dt;
         self.state.y += self.state.vy * dt;
         self.state.angle = normalize_angle(self.state.angle + self.state.angvel * dt);
 
-        self.state.vx *= 1.0 / (1.0 + dt * model.damping.linear);
-        self.state.vy *= 1.0 / (1.0 + dt * model.damping.linear);
-        self.state.angvel *= 1.0 / (1.0 + dt * model.damping.angular);
+        self.state.vx *= 1.0 / (1.0 + dt * linear);
+        self.state.vy *= 1.0 / (1.0 + dt * linear);
+        self.state.angvel *= 1.0 / (1.0 + dt * angular);
 
-        self.resolve_world(dt);
+        for set in &mut self.sets {
+            set.integrate_predicted(dt);
+        }
     }
 
     // снапшот состояния уровня после шага; хранится столько же, сколько
@@ -842,6 +888,9 @@ impl Predictor {
         };
 
         let local_now = self.local_now;
+        // дистанция спекулятивного контакта — одна на все пары шага, как у
+        // хоста: `soft_ccd_prediction` стоит на теле танка
+        let prediction = shape.prediction;
         let tank_obb = Box2 {
             x: self.state.x,
             y: self.state.y,
@@ -881,7 +930,6 @@ impl Predictor {
 
         for set in &mut self.sets {
             set.capture(&tank_obb, local_now);
-            set.integrate_predicted(dt);
 
             for body in set.predicted_bodies_mut() {
                 sim.push(body.body);
@@ -892,7 +940,11 @@ impl Predictor {
         }
 
         let movable = sim.len();
-        let mut contacts: Vec<(usize, usize, Contact, Surface)> = Vec::new();
+        // импульсы идут по КАЖДОЙ точке манифольда, а позиционная коррекция —
+        // по одной (самой глубокой) точке пары: развод по обеим точкам
+        // растолкал бы тела вдвое
+        let mut contacts: Vec<(usize, usize, Contact, Surface, ContactImpulses)> = Vec::new();
+        let mut separations: Vec<(usize, usize, Contact)> = Vec::new();
 
         // маска тела шага: индекс 0 — свой танк (переход по рампе даёт все
         // уровни прогона), остальные — правило движка
@@ -931,20 +983,23 @@ impl Predictor {
                     // корпусу на длинной стене несколько контактов там, где у
                     // хоста один, и касательный удар об угол разрешался по
                     // другой оси — предсказание расходилось молча
-                    let hits = collect_block_contacts(&obb, levels.static_blocks(level));
+                    let hits =
+                        collect_block_contacts(&obb, levels.static_blocks(level), prediction);
 
                     for hit in hits {
                         let partner = sim.len();
 
-                        sim.push(static_body(hit.tile_x, hit.tile_y));
+                        sim.push(static_body(hit.block_x, hit.block_y));
                         geometry.push((0.0, 0.0));
                         surfaces.push(MAP_SURFACE);
-                        contacts.push((
+                        push_manifold(
+                            &mut contacts,
+                            &mut separations,
                             index,
                             partner,
-                            hit.contact,
+                            &hit.manifold,
                             combine_surfaces(&surfaces[index], &MAP_SURFACE),
-                        ));
+                        );
                     }
                 }
             }
@@ -1021,7 +1076,10 @@ impl Predictor {
                     };
 
                     for box2 in &guards {
-                        let Some(contact) = obb_vs_obb(&obb, box2) else {
+                        // стражи собираются тем же манифольдом с зазором, что
+                        // и стены: иначе они держали бы не на том шаге и не
+                        // тем плечом
+                        let Some(manifold) = obb_manifold(&obb, box2, prediction) else {
                             continue;
                         };
                         let partner = sim.len();
@@ -1029,12 +1087,14 @@ impl Predictor {
                         sim.push(static_body(box2.x, box2.y));
                         geometry.push((0.0, 0.0));
                         surfaces.push(MAP_SURFACE);
-                        contacts.push((
+                        push_manifold(
+                            &mut contacts,
+                            &mut separations,
                             index,
                             partner,
-                            contact,
+                            &manifold,
                             combine_surfaces(&surfaces[index], &MAP_SURFACE),
-                        ));
+                        );
                     }
                 }
             }
@@ -1063,16 +1123,24 @@ impl Predictor {
                     half_h: geometry[b].1,
                 };
 
-                if let Some(contact) = obb_vs_obb(&obb_a, &obb_b) {
-                    contacts.push((a, b, contact, combine_surfaces(&surfaces[a], &surfaces[b])));
+                if let Some(manifold) = obb_manifold(&obb_a, &obb_b, prediction) {
+                    push_manifold(
+                        &mut contacts,
+                        &mut separations,
+                        a,
+                        b,
+                        &manifold,
+                        combine_surfaces(&surfaces[a], &surfaces[b]),
+                    );
                 }
             }
         }
 
         if !contacts.is_empty() {
-            // развод по глубине — ровно один раз на контакт: повтор на каждой
-            // итерации расталкивал бы тела кратно числу итераций
-            for (a, b, contact, _) in &contacts {
+            // развод по глубине — ровно один раз на ПАРУ: повтор на каждой
+            // итерации (или на каждой точке манифольда) расталкивал бы тела
+            // кратно их числу
+            for (a, b, contact) in &separations {
                 let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
 
                 separate_bodies(body_a, body_b, contact);
@@ -1082,10 +1150,10 @@ impl Predictor {
             // раз — это же заменяет внутренние итерации выталкивания из
             // тайловой сетки
             for _ in 0..SOLVER_ITERATIONS {
-                for (a, b, contact, surface) in &contacts {
+                for (a, b, contact, surface, acc) in &mut contacts {
                     let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
 
-                    apply_contact_impulse(body_a, body_b, contact, surface);
+                    apply_contact_impulse(body_a, body_b, contact, surface, dt, acc);
                 }
             }
 
@@ -1103,7 +1171,7 @@ impl Predictor {
 
         // тела, реально участвовавшие в контакте, держатся предсказанными
         // дольше
-        for (a, b, _, _) in &contacts {
+        for (a, b, ..) in &contacts {
             for index in [*a, *b] {
                 if index > 0 && index < movable {
                     bodies[index - 1].note_contact(local_now);
@@ -1114,6 +1182,23 @@ impl Predictor {
         for set in &mut self.sets {
             set.demote_idle(local_now);
         }
+    }
+}
+
+// точки манифольда пары в списки шага: импульсы получает каждая точка,
+// позиционную коррекцию — только самая глубокая
+fn push_manifold(
+    contacts: &mut Vec<(usize, usize, Contact, Surface, ContactImpulses)>,
+    separations: &mut Vec<(usize, usize, Contact)>,
+    a: usize,
+    b: usize,
+    manifold: &Manifold,
+    surface: Surface,
+) {
+    separations.push((a, b, manifold.deepest()));
+
+    for point in manifold.as_slice() {
+        contacts.push((a, b, *point, surface, ContactImpulses::default()));
     }
 }
 
@@ -1483,7 +1568,7 @@ mod tests {
 
     // карта подаётся так же, как её подаёт TanksClient::set_map: разбор
     // один, сетка одна на все подсистемы
-    fn apply_map(p: &mut Predictor, json: &str) {
+    pub fn apply_map(p: &mut Predictor, json: &str) {
         let mut cfg: super::super::ClientMapConfig = serde_json::from_str(json).unwrap();
         let levels = Rc::new(cfg.take_levels());
 
@@ -1859,6 +1944,30 @@ mod tests {
         assert_eq!(p.level_state().transit, Transit::Grounded);
         assert_eq!(p.level_state().level, 1);
         assert_eq!(p.level_state().z, 1.0);
+    }
+
+    #[test]
+    fn a_falling_replica_freezes_the_input_exactly_like_the_host() {
+        // `Tank::update` в падении выходит РАНЬШЕ башни, газа и тяги:
+        // клавиши остаются нажатыми и подхватятся при приземлении. Реплика
+        // с одной лишь обнулённой маской доводила центрирование, спускала
+        // газ и тормозила тягой — расхождение копилось на каждом падении
+        let mut p = make_predictor();
+
+        p.state.throttle = 1.0;
+        p.state.gun_rotation = 0.5;
+        p.centering = true;
+        p.level_state.transit = Transit::Falling {
+            elapsed: 0.0,
+            from: 1,
+            to: 0,
+        };
+
+        p.step(0);
+
+        assert_eq!(p.state.throttle, 1.0, "газ в падении не спускается");
+        assert_eq!(p.state.gun_rotation, 0.5, "башня в падении не едет");
+        assert_eq!(p.engine_load, 0.0, "нагрузка двигателя обнулена");
     }
 
     #[test]
@@ -2347,9 +2456,10 @@ mod tests {
 // (ручная против Rapier). Сценарии и допуски — из JS-оригинала.
 #[cfg(test)]
 mod parity {
-    use super::tests::{core_config, engine_config};
+    use super::tests::{apply_map, core_config, engine_config};
     use super::*;
     use crate::tanks::GameState;
+    use rapier2d::prelude::*;
 
     const DT: f32 = 1.0 / 120.0;
     const STEP_MS: f64 = 1000.0 / 120.0;
@@ -2415,6 +2525,172 @@ mod parity {
         let (state, _) = tank.prediction_state(body);
 
         (state, predictor.state)
+    }
+
+    /// Карта-фикстура «длинная стена вдоль строки 31» — та же геометрия, по
+    /// которой хост склеивает перила `overpass`: тайл 12.8 (`step` 32 ×
+    /// `scale` 0.4), колонки 6..48 строки 31 дают ОДИН блок с центром
+    /// (345.6, 403.2) и полуразмерами (268.8, 6.4).
+    fn long_wall_map() -> String {
+        let rows = 34;
+        let cols = 48;
+        let grid: Vec<Vec<i32>> = (0..rows)
+            .map(|y| {
+                (0..cols)
+                    .map(|x| i32::from(y == 31 && (6..cols).contains(&x)))
+                    .collect()
+            })
+            .collect();
+
+        serde_json::json!({
+            "setId": "c1",
+            "step": 32,
+            "scale": 0.4,
+            "map": grid,
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "respawns": {
+                "team1": [[100.0, 100.0, 0.0]],
+                "team2": [[200.0, 100.0, 0.0]]
+            }
+        })
+        .to_string()
+    }
+
+    /// Стартовая поза шага: позиция, угол и скорости, одинаковые у хоста и
+    /// реплики бит в бит.
+    #[derive(Clone, Copy)]
+    struct Pose {
+        x: f32,
+        y: f32,
+        angle: f32,
+        vx: f32,
+        vy: f32,
+        angvel: f32,
+    }
+
+    // Прогон core+replica на карте: хост получает карту через
+    // `EngineSim::load_map`, реплика — ту же строку через `set_map`, обе
+    // стороны стартуют из ОДНОЙ позы (реплика сеется авторитетным
+    // состоянием хоста, offset 0 → реплей пуст).
+    fn simulate_on_map(
+        map_json: &str,
+        pose: Pose,
+        steps: usize,
+        schedule: &[(usize, u32)],
+    ) -> ([f32; PLAYER_STATE_LEN], TankState) {
+        let cfg = core_config();
+        let mut game = GameState::new(engine_config(), &cfg);
+
+        game.load_map(map_json).unwrap();
+        game.spawn_actor(1, "m1", 1, pose.x, pose.y, 0.0).unwrap();
+
+        {
+            let handle = game.sim.tanks[&1].body;
+            let body = &mut game.world.bodies[handle];
+
+            body.set_rotation(Rotation::new(pose.angle), true);
+            body.set_linvel(Vector::new(pose.vx, pose.vy), true);
+            body.set_angvel(pose.angvel, true);
+        }
+
+        let seed = {
+            let tank = &game.sim.tanks[&1];
+            let (state, _) = tank.prediction_state(&game.world.bodies[tank.body]);
+
+            state
+        };
+
+        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels);
+
+        predictor.set_model("m1");
+        predictor.set_active(true);
+        apply_map(&mut predictor, map_json);
+        predictor.on_server_state(seed, false, 0.0, 0.0, 0.0);
+
+        let mut current_mask = 0u32;
+
+        for i in 0..steps {
+            if let Some((_, mask)) = schedule.iter().find(|(step, _)| *step == i) {
+                current_mask = *mask;
+            }
+
+            game.step(DT);
+            predictor.step(current_mask);
+        }
+
+        let tank = &game.sim.tanks[&1];
+        let (state, _) = tank.prediction_state(&game.world.bodies[tank.body]);
+
+        (state, predictor.state)
+    }
+
+    // покомпонентная разница с допусками сценария `bridge.json`
+    // (`divergence.thresholds`): пороги и есть определение «предсказание
+    // совпало с сервером», ослаблять их нельзя
+    fn expect_scenario_thresholds(core: [f32; PLAYER_STATE_LEN], replica: TankState) {
+        let got = replica.to_array();
+        let names = ["x", "y", "angle", "vx", "vy", "angvel"];
+        let thresholds = [3.0, 3.0, 0.06, 25.0, 25.0, 1.5];
+        let mut broken = Vec::new();
+
+        for (index, threshold) in thresholds.iter().enumerate() {
+            let delta = (got[index] - core[index]).abs();
+
+            if delta > *threshold {
+                broken.push(format!(
+                    "{}: Δ{:.4} > {} (replica {:.4}, core {:.4})",
+                    names[index], delta, threshold, got[index], core[index]
+                ));
+            }
+        }
+
+        assert!(broken.is_empty(), "расхождение с хостом: {}", broken.join("; "));
+    }
+
+    // поза кадра `bridge.json` (serverTime 1700000003500), с которой
+    // касательный удар об угол перил разводил предсказание с сервером
+    fn grazing_pose() -> Pose {
+        Pose {
+            x: 72.61,
+            y: 395.07,
+            angle: 0.0,
+            vx: 148.85,
+            vy: 0.87,
+            angvel: 0.0,
+        }
+    }
+
+    // Касательный удар об угол длинной стены на полном ходу. Хост видит
+    // СПЕКУЛЯТИВНЫЙ контакт до перекрытия (`soft_ccd_prediction` =
+    // min(width, height)) и ведёт по паре манифольд из двух точек; реплика
+    // раньше интегрировала позицию внутрь стены, реагировала уже изнутри и
+    // ставила ЕДИНСТВЕННУЮ точку в середину грани — плеча не было вовсе,
+    // и корпус не разворачивался там, где сервер его разворачивал.
+    //
+    // Горизонт прогона — 4 шага: ровно столько реплика идёт свободно между
+    // авторитетными кадрами (снапшот 30 Гц при шаге 120 Гц), и на этом же
+    // горизонте контракт `predictionDrift` сравнивает её с сервером.
+    #[test]
+    fn grazing_corner_hit_matches_the_host() {
+        let (core, replica) = simulate_on_map(&long_wall_map(), grazing_pose(), 4, &[]);
+
+        expect_scenario_thresholds(core, replica);
+    }
+
+    // Кадр самого удара: до правки реплика на нём не разворачивалась совсем
+    // (замер: `angvel` 0.000 против 5.521 у хоста).
+    #[test]
+    fn the_hit_frame_spins_the_hull_like_the_host() {
+        let (core, replica) = simulate_on_map(&long_wall_map(), grazing_pose(), 1, &[]);
+
+        expect_scenario_thresholds(core, replica);
+        assert!(
+            replica.angvel > core[5] / 2.0,
+            "реплика обязана развернуться вместе с хостом: {} против {}",
+            replica.angvel,
+            core[5]
+        );
     }
 
     fn expect_close(core: [f32; PLAYER_STATE_LEN], replica: TankState, tolerance: f32) {

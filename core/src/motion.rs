@@ -8,6 +8,22 @@
 use crate::config::{LevelRules, ModelConfig};
 use vimp_engine_core::physics::{clamp, lerp};
 
+/// Габариты корпуса модели: ширина и высота коллайдера.
+/// Одна формула на обе стороны — хост ставит `cuboid(width/2, height/2)`
+/// (`Tank::new`), реплика строит по ним свой OBB.
+pub fn body_size(model: &ModelConfig) -> (f32, f32) {
+    (model.size * 4.0, model.size * 3.0)
+}
+
+/// Дистанция предсказания контактов корпуса. Хост отдаёт её Rapier как
+/// `soft_ccd_prediction` (`Tank::new`), реплика — в `obb_vs_obb_within` /
+/// `collect_block_contacts`. Число ОБЯЗАНО быть одно на обе стороны: иначе
+/// стороны видят контакт на разных шагах и предсказание молча расходится с
+/// сервером на касательных ударах.
+pub fn contact_prediction(width: f32, height: f32) -> f32 {
+    width.min(height)
+}
+
 /// Клавиши башни на тике.
 #[derive(Clone, Copy)]
 pub struct TurretInput {

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### ⚠️ Breaking
 
-- Requires `vimp-engine-core` 0.14.1 and `vimp-engine` 0.32.1: the map's
+- Requires `vimp-engine-core` 0.15.0 and `vimp-engine` 0.32.1: the map's
   `levelHeight`, the ramp guards, the glued wall blocks
   (`MapLevels::static_blocks`), the ramp block number (`RampRun::block`) and
   the `role`-tagged dynamic map row all come from there.
@@ -113,6 +113,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Client prediction now matches the server on a tangential hit.** Grazing
+  a railing with the corner of the hull at full speed cost a frame of jerk:
+  the replica resolved contacts *after* integrating the position, so at
+  148 u/s it was already 1.24 units inside the wall before it reacted, and
+  it put the single contact point in the middle of the hull's face — no
+  lever, so the hull did not turn where the server turned it (`angle` off by
+  0.21 rad against a threshold of 0.06, `angvel` by 2.8 rad/s against 1.5).
+  The step now follows Rapier's order — contacts on the pose at the start of
+  the step, collected with the same `soft_ccd_prediction` gap the host uses
+  (`motion::contact_prediction`, one formula for both sides), impulses, then
+  the integration — and the engine's new two-point manifolds and accumulated
+  impulses carry the lever. `tests/scenarios/bridge.json` and `fall.json`
+  are green.
+- **Climbing a steep ramp no longer eats the throttle.** On a run that
+  crosses a whole level the authoritative height is fractional by design,
+  and reconciliation read that as "the tank is in the air": the replica
+  armed a fall, locked the input and lost 0.15 of throttle on every frame of
+  the climb while the server was building it up. The verdict now asks the
+  map under the authoritative position, exactly as the host does — the host
+  never starts a fall on a ramp tile. `tests/scenarios/terraces_climb.json`
+  is green.
+- A falling tank freezes its input instead of zeroing it, mirroring
+  `Tank::update`'s early return: the replica used to keep centring the
+  turret, bleed the throttle off and brake with the thrust for the whole
+  fall, while the server did none of it.
 - A wide ramp is driven through whole: the core cuts a rectangular block of
   ramp tiles into parallel lane runs, and a lane change mid-climb used to be
   judged as a fresh entry — the climb broke on every lane border and the

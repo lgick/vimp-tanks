@@ -151,8 +151,7 @@ impl Tank {
         y: f32,
         angle_deg: f32,
     ) -> Self {
-        let width = model.size * 4.0;
-        let height = model.size * 3.0;
+        let (width, height) = crate::motion::body_size(model);
 
         let tag = BodyTag::Player { game_id, team_id };
 
@@ -167,7 +166,7 @@ impl Tank {
                 // 1/120 проходит до 2.2, поэтому контакт рождался уже по
                 // факту перекрытия (замер: пик 1.26 юнита в кадр удара
                 // против 0.03 с предсказанием)
-                .soft_ccd_prediction(width.min(height))
+                .soft_ccd_prediction(crate::motion::contact_prediction(width, height))
                 .user_data(tag.encode()),
         );
 

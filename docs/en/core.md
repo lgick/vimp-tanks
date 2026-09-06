@@ -310,12 +310,31 @@ The set keeps no clock of its own: it is stepped by `Predictor`
 (`integrate_predicted`, `decay_error`), so a contact with the local tank is
 resolved within a single step and the reconciliation replay replays the
 set's bodies too. `Predictor::resolve_world` is that step's contact pass —
-the tank, the captured bodies and the wall tiles are separated once by
-penetration depth and then run through `SOLVER_ITERATIONS` (4) impulse
-passes over the same contact set, using the engine's
-`client::collision`/`client::rigid_body` primitives. Without a map and
-without subsystems the pass is a full no-op, and the motion replica stays
-bit-for-bit what it was — the invariant the parity tests rest on.
+the tank, the captured bodies and the wall blocks are separated once **per
+pair** by the deepest point of their manifold and then run through
+`SOLVER_ITERATIONS` (4) impulse passes over every point of every manifold,
+using the engine's `client::collision`/`client::rigid_body` primitives.
+Without a map and without subsystems the pass is a full no-op, and the
+motion replica stays bit-for-bit what it was — the invariant the parity
+tests rest on.
+
+**The order of a step is Rapier's, not the obvious one.** Contacts are
+solved **before** the position is integrated: `step_inner` applies the
+input, calls `resolve_world(dt)` on the pose at the start of the step, and
+only then moves the body and damps it. The contacts themselves are
+collected with a gap — `motion::contact_prediction(width, height)`, the
+very number `Tank::new` hands Rapier as `soft_ccd_prediction`, so the two
+sides see a contact on the same step. Resolving after the integration let
+the replica travel up to 1.24 units into a wall in one step at full speed
+and react from the inside, with a lever the host never had; the manifold
+and the accumulated impulses of the engine primitives do the rest.
+
+**A falling tank is frozen input, not zero input.** `Tank::update` returns
+early while `level_state.input_locked()`, before the turret, the throttle
+and the thrust — the keys stay pressed and are picked up on landing. The
+replica mirrors that early return exactly. Merely zeroing the key mask
+would keep centring the turret, bleed the throttle off and brake with the
+thrust, and the drift would accumulate on every fall.
 
 `TanksClient` implements the three
 `GameClientDef` hooks for bodies a game predicts itself and forwards them to
