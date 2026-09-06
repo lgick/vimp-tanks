@@ -374,16 +374,19 @@ block_y }`; предиктор кладёт в импульсы КАЖДУЮ т�
 1. ✅ **E:** `cargo test --workspace` (194 теста), `cargo clippy --workspace`
    (новых предупреждений нет — единственное, `the loop variable y`, было и
    до правок), `npx eslint .`, `npx vitest run` (2332 теста) — зелёные.
-2. ⏳ **Релиз E:** остаётся пользователю. Правки меняют публичные сигнатуры
-   `client::collision` и `client::rigid_body`, значит крейт идёт МИНОРОМ
-   (`0.15.0`); секции `### ⚠️ Breaking` / `### Migration` / `### Added` /
-   `### Fixed` в `packages/engine/core/CHANGELOG.md` уже написаны под
-   `## [Unreleased]`.
-3. ⏳ **T:** после публикации крейта — `core/Cargo.toml` →
-   `vimp-engine-core = "0.15.0"`, `[patch.crates-io]` из корневого
-   `Cargo.toml` СНЯТЬ (он там помечен как временный), `npm run core:build`,
-   `npm run build`, `npx vimp-contract --strict`, `npm run sim:scenarios`.
-   Пока патч на месте, всё собирается и тестируется от локального движка.
+2. ✅ **Релиз E:** `vimp-engine-core 0.15.0` опубликован (минор — правки
+   меняют публичные сигнатуры `client::collision` и `client::rigid_body`).
+   Релиз шёл ДВУМЯ проходами: `npm run release -- --only=crate` сперва,
+   потому что preflight не пускает `[patch.crates-io]` в выбранной игре, а
+   снять патч до публикации крейта нельзя — танки собирались от него.
+   Игры выбираются только при `--only`, включающем `games`
+   (`scripts/release.js:438`), поэтому первый проход про них не спрашивает.
+3. ✅ **T:** `[patch.crates-io]` снят, `core/Cargo.toml` →
+   `vimp-engine-core = "0.15.0"`, `Cargo.lock` перезаписан на реестровую
+   версию (`cargo fetch`; `cargo update -p` на пропатченном имени не
+   работает). Прогон от опубликованного крейта: `core:test` 238 + 45,
+   `eslint`, `npm test` 303, `npm run build`, `npx vimp-contract --strict`
+   36/36, `npm run sim:scenarios` — 10 из 11.
 4. ✅ **Документация:** E `docs/en|ru/core.md` — спекулятивные контакты,
    манифольд, накопленные импульсы, почему `prediction` обязан совпадать с
    `soft_ccd_prediction`; T `docs/en|ru/core.md` — порядок шага реплики и
@@ -437,8 +440,8 @@ block_y }`; предиктор кладёт в импульсы КАЖДУЮ т�
       `vitest` зелёные.
 - [x] `docs/en` и `docs/ru` синхронны, журналы обоих репозиториев
       оформлены.
-- [ ] Релиз крейта `0.15.0` — за пользователем; после него снять
-      `[patch.crates-io]` и поднять версию в `core/Cargo.toml`.
+- [x] Крейт `0.15.0` опубликован, `[patch.crates-io]` снят, танки зависят
+      от него по версии.
 
 ## Что оказалось не тем, чем считал план
 

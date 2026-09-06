@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### ⚠️ Breaking
 
-- Requires `vimp-engine-core` 0.15.0 and `vimp-engine` 0.32.1: the map's
+- Requires `vimp-engine-core` 0.15.0 and `vimp-engine` 0.32.2: the map's
   `levelHeight`, the ramp guards, the glued wall blocks
   (`MapLevels::static_blocks`), the ramp block number (`RampRun::block`) and
   the `role`-tagged dynamic map row all come from there.
