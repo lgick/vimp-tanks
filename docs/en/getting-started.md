@@ -246,28 +246,37 @@ the snapshot schema or the panel. The scenarios:
 | `bridge.json` | `overpass`: up the west ramp, across the bridge in the middle lane (the outer ones hold boxes), coasting down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
 | `fall.json` | `overpass`: off a gap in the railings — `Falling`, `z` down to 0, landing at level 0 |
 | `crosslevel.json` | `overpass`: two players on different levels, hitscan across the levels and a bomb on the slab that does not touch the tank underneath |
+| `selfblast.json` | the same run carried on: the player switches to `w2` and drops a bomb under himself — the blast throws him ~50 units |
 | `bots_bridge.json` | `overpass`: a player plus `/bot 2` over a long run — bots use the ramp and do not get stuck (invariants 10/11) |
 | `terraces_climb.json` | `terraces`: up the steep 0 → 2 run in one drive and back down in reverse — `z` runs 0 → 2 in the dumps |
 | `terraces_backside.json` | `terraces`: two players enter the same run through the wrong side — from the passage under the slab and from the flank; neither is lifted |
 | `terraces_crate.json` | `terraces`: a crate pushed through a gap in the railings of level 2 lands on the slab of level 1, while the second player climbs the steep run |
 
 A scenario asserts **nothing about the game rules**: the runner checks the
-engine's invariants and the prediction drift, and the four 2.5D scenarios
+engine's invariants and the prediction drift, and the 2.5D scenarios
 above prove only that the loop survives a bridge, a fall and a cross-level
 shot, and the three `terraces_*` ones only that it survives three levels. That the level really went 0 → 1 → 0, that a bot drove onto the
 bridge, that the slab screened an explosion — those are asserted in
 `core/tests/sim.rs` (`npm run core:test`); the scenarios stay a debugging
 tool with dumps to read by eye.
 
-Three of them run with the same drift thresholds as `movement.json`;
-`bots_bridge.json` sets `divergence: null` on purpose — over 1800 ticks the
-bots ram the player and blow him up, and neither an authoritative contact
-impulse nor an explosion is something the client replica predicts. Both
-kinds of divergence are also worth knowing when writing a new scenario: a
-tank ramming a wall at speed and a state transition that depends on the
-position (the edge of a ledge, the end of a ramp) legitimately break the
-tight thresholds for a few ticks — steer around walls and coast over the
-ledge instead of loosening the thresholds.
+Most of them run with the same drift thresholds as `movement.json`. Two set
+`divergence: null` on purpose, and for the same reason: **an explosion is
+not something the client replica predicts.** `bots_bridge.json` — over 1800
+ticks the bots ram the player and blow him up. `selfblast.json` — the player
+drops a bomb under himself, and 300 ms later the host throws him with an
+impulse of its own; the client predicts only the bomb's *visual* spawn
+(`client/shot.rs`), while the detonation, the damage and the impulses are
+authoritative. `crosslevel.json` is that same run **without** the last
+bomb, so its 696 reconciliations stay under the detector; the bomb itself
+kept its coverage in `selfblast.json`. Splitting the two beats loosening a
+threshold: a threshold is the definition of "the prediction matched the
+server", and one frame of an authoritative impulse is not a reason to
+redefine it. Both kinds of divergence are also worth knowing when writing a
+new scenario: a tank ramming a wall at speed and a state transition that
+depends on the position (the edge of a ledge, the end of a ramp)
+legitimately break the tight thresholds for a few ticks — steer around walls
+and coast over the ledge instead of loosening the thresholds.
 
 Threshold calibration and the scenario format live in the engine's
 [debugging.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/debugging.md).
