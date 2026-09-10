@@ -306,6 +306,23 @@ above). At idle the pitch also wobbles slightly (`IDLE_WOBBLE_DEPTH`,
 pitch reads to the ear as a hum rather than as a running engine. `volume` is
 therefore set for the moving tank; the standing one is `0.6` of it.
 
+The `spatial` block overrides the engine's spatial-sound geometry, and only
+what this game has to override: `mode: 'topDown'`, `virtualElevation: 108`,
+`innerRadius: 5`. The engine's own defaults (`180` / `40`) are calculated
+for a 1:1 scale, and here a **world unit is not a screen pixel**:
+`mapScale: 0.3` (`src/config/game.js`) with `baseScale: '5:1'`
+(`src/config/client.js`) makes one world unit five screen pixels, so the
+defaults would spread the stereo base over five screen widths and treat a
+radius of five tank hulls as "inside the player". `108` is half the visible
+screen height in world units (`1080 / 2 / 5`); at the edge of the screen
+(`192` units sideways) that is an angle of about 60°, next to the hull — a
+few degrees. `5` is the half-diagonal of the `m1` hull, which is `8 x 6`
+world units (`size * 4 x size * 3` at `size: 2` in `src/data/models.js`), so
+an explosion inside the hull is split evenly between both ears.
+`refDistance` / `maxDistance` / `rolloffFactor` are deliberately left to the
+engine. What the keys mean and how the position is computed —
+[client.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/client.md#soundmanager).
+
 The local player's own tank is registered with `spatial: false`
 (`src/client/parts/Tank.js`), and so is the local player's own shot
 (`ShotEffectController`). The listener is the camera centre, i.e. the local
