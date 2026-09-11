@@ -12,9 +12,3 @@ wasm-bindgen = "0.2.126"
 [profile.release]
 opt-level = 3
 lto = true
-
-# Временная связка с локальным движком на время работ плана
-# plan/replica-deep-overlap.md — снимается после публикации 0.18.0.
-# Патч обязан жить в корне воркспейса: в core/Cargo.toml cargo его игнорирует.
-[patch.crates-io]
-vimp-engine-core = { path = "/Users/dmitry/Sites/my/vimp/packages/engine/core" }

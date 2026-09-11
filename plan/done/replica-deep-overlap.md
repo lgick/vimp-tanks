@@ -78,9 +78,11 @@
    `0.17.0`). В T контракт не менялся, но поведение предсказания — да,
    поэтому запись в `T CHANGELOG.md` под `## [Unreleased] → Fixed`.
 
-### Осталось за пользователем
+### Связка с движком ✅ снята
 
-- `[patch.crates-io]` в корневом `T Cargo.toml` ОСТАВЛЕН: без него танки не
-  соберутся, пока `vimp-engine-core 0.18.0` не опубликован (0.17.0 уже на
-  crates.io). Снять сразу после публикации и перепрогнать `cargo fetch` +
-  полный набор.
+- `vimp-engine-core 0.18.0` опубликован (2026-09-11), `[patch.crates-io]`
+  из корневого `T Cargo.toml` убран, `cargo fetch` взял крейт из реестра
+  (`Cargo.lock` → `source = registry`). Полный набор перепрогнан уже
+  против опубликованного крейта: `core:test` 251 + 46, `core:build`,
+  `eslint`, `npm test` 330, `build`, `vimp-contract --strict`,
+  `sim:scenarios` — 12/12.
