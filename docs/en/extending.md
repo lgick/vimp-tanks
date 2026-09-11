@@ -54,7 +54,11 @@ holds the transitions). Each level brings its own `layers`, over its own
   puts its guards on) and draws each of them as a slope whose every vertex
   carries its own height, plus a **skirt** — the two
   sides along the axis and the end face at the top, pulled down to the
-  run's base plane. So a ramp reads as a solid embankment from the side,
+  run's base plane. The sides are drawn exactly where the physics puts its
+  rails, and by the core's own formula (`map::ramp_rail_span`): they start
+  ONE CELL past the run's foot, and a run one cell long gets no sides at
+  all — only the end face. Otherwise the picture would show a wall where a
+  tank drives through. So a ramp reads as a solid embankment from the side,
   a tank driving under it (a `rampSide` passage) is hidden by it, and where
   a gap is visible under a high run (`1 → 2`) driving through really is
   allowed. The wedge is drawn by the render layer that draws the ramp tiles

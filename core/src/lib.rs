@@ -21,7 +21,7 @@ use client::ClientState;
 use config::{RootClientConfig, RootConfig};
 use serde::Serialize;
 use tanks::GameState;
-use vimp_engine_core::map::RampRun;
+use vimp_engine_core::map::{RampRun, ramp_rail_span};
 use vimp_engine_core::snapshot::SnapshotPacker;
 
 /// Публичный ABI ядра для JS-оболочки (Worker хоста / тестовый харнесс).
@@ -125,12 +125,20 @@ impl ClientCore {
             .unwrap_or_default()
     }
 
+    /// Поколение карты: дешёвый признак «геометрия сменилась». По нему
+    /// рендер держит разбор `ramp_runs` в кеше и не гоняет через
+    /// WASM-границу все прогоны карты на каждый слой.
+    pub fn map_generation(&self) -> u32 {
+        self.state.game().map_generation()
+    }
+
     /// Прогоны рамп текущей карты для РЕНДЕРА клина: тот же
     /// `MapLevels::runs`, по которому физика ставит стражей. Второй обход
     /// грида на JS расходился бы с ядром молча — горка, которую видно и
     /// нельзя проехать.
     /// Формат: JSON-массив
-    /// `{ axis, sign, from, to, min, max, crossMin, crossMax, block }`,
+    /// `{ axis, sign, from, to, min, max, crossMin, crossMax, block,
+    /// railMin, railMax }`,
     /// координаты — МИРОВЫЕ (уже масштабированные), как в `RampRun`.
     /// Пустой массив — карты нет или она одноуровневая.
     pub fn ramp_runs(&self) -> String {
@@ -138,7 +146,15 @@ impl ClientCore {
             .state
             .game()
             .levels()
-            .map(|levels| levels.runs().iter().map(RampRunView::from).collect())
+            .map(|levels| {
+                let tile = levels.tile_size();
+
+                levels
+                    .runs()
+                    .iter()
+                    .map(|run| RampRunView::new(run, tile))
+                    .collect()
+            })
             .unwrap_or_default();
 
         serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string())
@@ -159,10 +175,20 @@ struct RampRunView {
     cross_min: f32,
     cross_max: f32,
     block: u16,
+    /// Границы БОРТОВ прогона по его оси (`map::ramp_rail_span`), `null` —
+    /// бортов нет вовсе (прогон длиной в одну клетку). Юбка клина обязана
+    /// рисовать борта ровно там, где стоят коллайдеры-стражи: своя формула
+    /// на JS показывала бы стену там, где физика пускает.
+    rail_min: Option<f32>,
+    rail_max: Option<f32>,
 }
 
-impl From<&RampRun> for RampRunView {
-    fn from(run: &RampRun) -> Self {
+impl RampRunView {
+    fn new(run: &RampRun, tile: f32) -> Self {
+        // границы бортов — из движка (`map::ramp_rail_span`): по этой же
+        // формуле он ставит коллайдеры-стражи
+        let rails = ramp_rail_span(run, tile);
+
         RampRunView {
             axis: run.axis,
             sign: run.sign,
@@ -173,6 +199,8 @@ impl From<&RampRun> for RampRunView {
             cross_min: run.cross_min,
             cross_max: run.cross_max,
             block: run.block,
+            rail_min: rails.map(|(min, _)| min),
+            rail_max: rails.map(|(_, max)| max),
         }
     }
 }

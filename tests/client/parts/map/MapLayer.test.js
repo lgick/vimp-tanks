@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Assets, Container, Sprite, Texture, TextureSource } from 'pixi.js';
+import {
+  Assets,
+  Container,
+  Sprite,
+  Texture,
+  TextureSource,
+  Ticker,
+} from 'pixi.js';
 import Map from '../../../../src/client/parts/Map.js';
 import { bakeTileLayer } from '../../../../src/client/parts/bakeTileLayer.js';
 import { createLevelView } from '../../../../src/client/levelView.js';
@@ -25,6 +32,16 @@ import { seeThrough, parallax, volume } from '../../../../src/config/render.js';
 vi.mock('../../../../src/client/parts/bakeTileLayer.js', () => ({
   bakeTileLayer: vi.fn(async () => ({ destroy: vi.fn() })),
 }));
+
+// Кадр: шаг общего тикера плюс отрисовка. Сглаживание прозрачности шагает
+// РОВНО раз на тик (`layerSeeThrough`): за один тик движок рисует полотно
+// несколько раз, и без шага тикера цикл отрисовок никуда плиту не двигает
+const drawFrames = (part, count) => {
+  for (let i = 0; i < count; i += 1) {
+    Ticker.shared.lastTime += 16;
+    part.onRender();
+  }
+};
 
 const renderer = {};
 
@@ -146,9 +163,7 @@ describe('Map: слои 2.5D', () => {
       // игрок на уровне 0 в тайле (col 1, row 0) — это тайл пола моста
       const bridge = readyBridge(levelView('layer', 0, 15, 5));
 
-      for (let i = 0; i < 200; i += 1) {
-        bridge.onRender();
-      }
+      drawFrames(bridge, 200);
 
       expect(bridge.alpha).toBeLessThan(0.5);
     });
@@ -157,9 +172,7 @@ describe('Map: слои 2.5D', () => {
       // тот же уровень 0, но тайл (col 0, row 0) — не пол моста
       const bridge = readyBridge(levelView('layer', 0, 5, 5));
 
-      for (let i = 0; i < 200; i += 1) {
-        bridge.onRender();
-      }
+      drawFrames(bridge, 200);
 
       expect(bridge.alpha).toBe(1);
     });
@@ -167,11 +180,37 @@ describe('Map: слои 2.5D', () => {
     it('игрок на самом мосту плиту не гасит', () => {
       const bridge = readyBridge(levelView('layer', 1, 15, 5));
 
-      for (let i = 0; i < 200; i += 1) {
-        bridge.onRender();
-      }
+      drawFrames(bridge, 200);
 
       expect(bridge.alpha).toBe(1);
+    });
+
+    // за ОДИН тик движок рисует полотно несколько раз (`app.render()` из
+    // `updateCoords` на каждый кадр камеры), а `deltaMS` у всех этих
+    // отрисовок один и тот же: без отсечки плита гасла бы тем быстрее, чем
+    // больше кадров пришло в тик, то есть `fadeRate` значил бы разное на
+    // разном пинге
+    it('за один тик прозрачность шагает один раз', () => {
+      const bridge = readyBridge(levelView('layer', 0, 15, 5));
+
+      Ticker.shared.lastTime += 16;
+      bridge.onRender();
+
+      const first = bridge.alpha;
+
+      expect(first).toBeLessThan(1);
+
+      // ещё две отрисовки того же тика
+      bridge.onRender();
+      bridge.onRender();
+
+      expect(bridge.alpha).toBe(first);
+
+      // следующий тик шаг возвращает
+      Ticker.shared.lastTime += 16;
+      bridge.onRender();
+
+      expect(bridge.alpha).toBeLessThan(first);
     });
   });
 
@@ -182,9 +221,7 @@ describe('Map: слои 2.5D', () => {
 
       parent.position.set(100, 50);
 
-      for (let i = 0; i < 200; i += 1) {
-        bridge.onRender();
-      }
+      drawFrames(bridge, 200);
 
       expect(bridge.filters.length).toBe(1);
 
@@ -202,9 +239,7 @@ describe('Map: слои 2.5D', () => {
 
       stage(bridge);
 
-      for (let i = 0; i < 200; i += 1) {
-        bridge.onRender();
-      }
+      drawFrames(bridge, 200);
 
       expect(bridge._mode._hole.attached).toBe(false);
       expect(bridge._mode._hole.filter).toBe(null);
@@ -217,9 +252,7 @@ describe('Map: слои 2.5D', () => {
 
       stage(bridge);
 
-      for (let i = 0; i < 200; i += 1) {
-        bridge.onRender();
-      }
+      drawFrames(bridge, 200);
 
       expect(bridge.filters.length).toBe(1);
     });
@@ -363,6 +396,9 @@ describe('Map: параллакс и объём слоя', () => {
   // тестах парта нет — сервис отдаёт готовую фикстуру
   const TILE = 10 * 0.5;
 
+  // прогон ядра: границы бортов оно считает само (`map::ramp_rail_span`)
+  // — борт начинается НА КЛЕТКУ дальше подножия, а у прогона длиной в одну
+  // клетку бортов нет вовсе (`railMin`/`railMax` равны null)
   const coreRun = (over = {}) => ({
     axis: 0,
     sign: 1,
@@ -373,6 +409,8 @@ describe('Map: параллакс и объём слоя', () => {
     max: 2 * TILE,
     crossMin: 0,
     crossMax: TILE,
+    railMin: TILE,
+    railMax: 2 * TILE,
     ...over,
   });
 
@@ -431,9 +469,7 @@ describe('Map: параллакс и объём слоя', () => {
 
     const stage = makeStage(bridge);
 
-    for (let i = 0; i < 200; i += 1) {
-      bridge.onRender();
-    }
+    drawFrames(bridge, 200);
 
     const k = 2 * parallax.shear;
     const uniforms = bridge._mode._hole.filter.resources.holeUniforms.uniforms;
@@ -552,9 +588,7 @@ describe('Map: параллакс и объём слоя', () => {
 
         makeStage(map);
 
-        for (let i = 0; i < 200; i += 1) {
-          map.onRender();
-        }
+        drawFrames(map, 200);
 
         return map;
       };
@@ -680,19 +714,22 @@ describe('Map: параллакс и объём слоя', () => {
 
       const skirt = map._mode._slices[0];
       const surface = map._mode._slices[1];
-      const points = 2 * volume.rampSegments + 1;
+      // борта идут не во всю длину прогона: клетка подножия открыта, и
+      // борт начинается со ВТОРОЙ клетки (`map::ramp_rail_span`)
+      const railPoints = volume.rampSegments + 1;
+      const railFirst = volume.rampSegments;
 
       // два борта вдоль оси плюс торцевая пара, по верхней и нижней кромке
-      expect(skirt.heights).toHaveLength((points * 2 + 2) * 2);
+      expect(skirt.heights).toHaveLength((railPoints * 2 + 2) * 2);
 
       let previousTop = -1;
 
-      for (let i = 0; i < points; i += 1) {
+      for (let i = 0; i < railPoints; i += 1) {
         const top = skirt.heights[i * 2];
         const bottom = skirt.heights[i * 2 + 1];
 
         // верхняя кромка идёт по поверхности, нижняя — по базовой плоскости
-        expect(top).toBeCloseTo(surface.heights[i * 2], 6);
+        expect(top).toBeCloseTo(surface.heights[(railFirst + i) * 2], 6);
         expect(bottom).toBeCloseTo(0, 6);
         expect(top).toBeGreaterThan(previousTop);
 
@@ -705,6 +742,20 @@ describe('Map: параллакс и объём слоя', () => {
 
       // боковая грань темнее поверхности
       expect(skirt.target.tint).toBe(volume.sideTint);
+    });
+
+    // юбка и коллайдеры-стражи строятся по ОДНОЙ формуле: у прогона длиной
+    // в одну клетку бортов нет ни в физике, ни на картинке
+    it('у прогона в одну клетку юбка состоит только из торца', async () => {
+      const map = await ready(rampData, null, [
+        coreRun({ max: TILE, railMin: null, railMax: null }),
+      ]);
+
+      const skirt = map._mode._slices[0];
+
+      // одна торцевая пара: ни одного борта
+      expect(skirt.heights).toHaveLength(2 * 2);
+      expect(skirt.heights[1]).toBeCloseTo(0, 6);
     });
 
     // ради этого клин и стал мешем: высота растёт вдоль прогона непрерывно,

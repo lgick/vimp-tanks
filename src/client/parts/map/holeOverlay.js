@@ -10,7 +10,10 @@ const HOLE_EPSILON = 0.01;
 // перекрыватель считают дыру ОДНИМ кодом, но своими экземплярами состояния —
 // у Pixi фильтр несёт свои uniform'ы, одним на две цели не обойтись.
 export function createHole() {
-  return { strength: 0, filter: null, attached: false };
+  // `tick` — тик, на котором сила дыры уже двигалась: за один тик полотно
+  // рисуется несколько раз, а сглаживание по времени обязано шагать один
+  // раз (см. `layerSeeThrough.updateSeeThrough`)
+  return { strength: 0, filter: null, attached: false, tick: null };
 }
 
 // сила дыры тянется к желаемой (0 — игрок не под слоем) с шагом тикера:

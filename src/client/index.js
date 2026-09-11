@@ -64,6 +64,9 @@ export default {
       // VirtualClient, и общее на модуль состояние «где игрок» перезаписывал
       // бы тот из них, кто обновился последним
       const levelView = createLevelView();
+      // разбор прогонов рамп: общий на все слои карты, живёт до её смены
+      let runsCache = [];
+      let runsGeneration = null;
 
       return {
         levelView,
@@ -80,11 +83,21 @@ export default {
           // прогоны рамп этого уровня в МИРОВЫХ единицах; [] — карты нет,
           // она одноуровневая или рамп на уровне нет. Клин строит слой, в
           // чьём гриде лежат тайлы рампы, то есть уровень `from` — так же
-          // движок раздаёт партам сами конфиги рамп
+          // движок раздаёт партам сами конфиги рамп.
+          //
+          // Разбор держится в кеше до смены карты: `core.ramp_runs()`
+          // сериализует ВСЕ прогоны карты в строку через WASM-границу, а
+          // спрашивает его каждый слой. Протухание ловит поколение карты
+          // (`core.map_generation()` растёт на каждом `set_map`)
           forLevel(level) {
-            return JSON.parse(core.ramp_runs()).filter(
-              run => run.from === level,
-            );
+            const generation = core.map_generation();
+
+            if (generation !== runsGeneration) {
+              runsGeneration = generation;
+              runsCache = JSON.parse(core.ramp_runs());
+            }
+
+            return runsCache.filter(run => run.from === level);
           },
         },
       };

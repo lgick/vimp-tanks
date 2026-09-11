@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Two level rules moved into `coreParams.levels`.** `levelAdoptFrames`
+  (new, see below) and `maxSideEntryRise` (was a core constant) are game
+  rules, so they belong to the config rather than to a recompile. The side
+  entry bound now EXCLUDES its own value: a jump of exactly half a level is
+  refused, which on a run one cell long — one with no side rails at all —
+  used to click the hull and its shadow up by half a level at once.
+
+### Fixed
+
+- **The 2.5D projection jittered on the upper levels.** `levelView` cached
+  the camera centre per tick of the shared ticker, but the canvas is drawn
+  several times per tick: `vimp-engine` up to 0.34 calls `app.render()`
+  straight from `updateCoords` (`CanvasManagerView`), that is on every
+  camera frame, and a tick carries at least two — the discrete frame's camera (interpolation)
+  first, the predicted one after it. Every draw but the first got the centre
+  of the FIRST, while the stage already stood on the last, so the height
+  shift of everything above ground was measured from a foreign centre and
+  swung by the interpolation-to-prediction gap each frame — the faster the
+  local tank drove, the wider it swung, and parts that read the scene
+  themselves (`Tracks`, `Smoke`, the effects) drifted away from the hull and
+  the slab in those same frames. The cache is now keyed on the scene's
+  transform, which does not change while a draw is in flight — how many
+  draws a tick brings is the engine's business, and the plugin no longer
+  depends on that number.
+- **`fadeRate` meant different things at different pings.** The slab's
+  see-through alpha was smoothed once per DRAW with the ticker's `deltaMS`,
+  and a tick can carry several draws (see above), so the slab faded two or
+  three times faster than the config says — and the factor depended on how
+  many camera frames the tick brought. The smoothing now steps once per
+  tick; applying it (the hole rides the camera) still happens on every draw.
+- **A descent threw the tank back onto the bridge every 0.4 s.** The level
+  a frame reports is only adopted upwards on a PERSISTENT disagreement, but
+  the counter was fed by every frame that read "above the replica" — and for
+  the whole duration of a fall the host holds `level` at the level the body
+  fell from while leading `z` down fractionally, so every frame in flight
+  reads exactly that way. Under a slab the `airborne` branch does not catch
+  them either (support at the upper level is right overhead), so a single
+  descent collected `levelAdoptFrames` frames on its own and snapped the
+  already-landed replica back up: the wrong collision mask banged the hull
+  against railings that do not exist for it, and the hull jumped away from
+  its shadow into the overpass projection. Only a frame taken ON SUPPORT —
+  `z` exactly on its own level (`level::LEVEL_EPSILON`) — now counts.
+
+- **The replica no longer lets everyone through the ramp guards.** The flag
+  "am I driving up a run" was read off the map under the body, so ANY body
+  standing on a run cell passed the rails — while the host opens them only
+  for a body that legally climbs. A crate shoved onto a run went through the
+  rail for the viewer and stopped at it on the host; a remote tank that
+  entered a run from the side drove up for the viewer and stood at the rail
+  on the host, jerking on every frame. The rule is now a single function
+  (`level::body_on_ramp`): map bodies never climb, and a remote tank is
+  judged by the height in its snapshot row — the host puts `z` exactly on
+  the level when it refuses the gate and leads it fractionally when it does
+  not.
+- **A replica below the host is pulled back up.** Since the descent fix the
+  frame could only correct the level DOWNWARDS, and the only ways back up
+  were the very first frame carrying the local tank and an empty level
+  history. A replica that ended up below the host — a gate verdict that
+  drifted, a respawn on a slab without `camera.forceReset`, a level snap on
+  the host — stayed there for the rest of the round, with the wrong
+  collision mask, layer, tint and hull scale. A level above the replica is
+  now adopted once the frame has held it for `levelAdoptFrames` frames in a
+  row (`coreParams.levels`, 8 by default — about 0.4 s, far longer than the
+  interpolation buffer a late frame can lag by); any agreement, a ramp run
+  or a fall resets the counter. A respawn (`condition` 0 → alive) now takes
+  the level from the frame as well, not only the first frame does.
+- **A diagonal lane change no longer breaks a climb.** Moving between the
+  lanes of one wide hill only carried the gate's verdict over when the cell
+  index ALONG the axis stayed put, so a diagonal step — which changes both
+  cells at once — was judged as a fresh entry, by the cell in the MIDDLE of
+  a run, and refused: the climb stopped halfway up, `z` snapped to the
+  level and the collision mask collapsed to a single level. The rule is now
+  the block number alone, which is what "the same hill" means everywhere
+  else (the physics fences a block by the same field).
+- **A falling crate is drawn by its height, not by its level.** `MapObject`
+  never read `z` at all: the parallax shift followed the level, so a crate
+  pushed off a slab did not visibly descend and teleported onto the lower
+  layer the moment it landed, while its alpha was computed at the height of
+  the slab it fell from. It now follows the same rule as the tank's hull —
+  `renderLevel(level, z)`, shared by both parts.
+- **The wedge's skirt draws the rails the physics actually has.** The skirt
+  ran the full length of a run and was built even for a run one cell long,
+  where the engine puts no rails at all (`vimp-engine-core`
+  `map::ramp_rail_span`, now handed to the client in `rampRuns` as
+  `railMin`/`railMax`) — a picture showing a wall where a tank drives
+  through, the very gap the wedge was pulled out of the core to close.
+- **A map change clears the replica's level state.** `Predictor::set_map`
+  refreshed the guards and the geometry but left `level_state` and the level
+  history behind: the entry cell and the gate verdict of the PREVIOUS map
+  judged the first entry onto a run of the new one, and a rewind restored a
+  snapshot taken on the old tiles. Only a `camera.forceReset` arriving with
+  the map change used to hide this.
+- **The authoritative level is dropped when the frame has no row of ours.**
+  A frame without the local tank's row (destroyed, a partial CLEAR, a `null`
+  marker) left the previous frame's level and height in place, and the
+  `airborne` and "lower level" branches of the reconciliation kept acting on
+  them.
+- **The camera centre belongs to the frame, not to the local tank.**
+  `levelView` used to be handed the centre by the one part that had it — the
+  local `Tank` — so with no local tank (a spectator, the gap between death
+  and respawn, frames before `localPlayer.id`) there was no camera at all,
+  while `Map` computed its own: the hole in the slab rode the fresh
+  projection and the entities' alpha the previous one. A part whose
+  `onRender` ran before the tank's used the previous frame's centre too. The
+  service now takes the scene (`attachStage`) from the first part of the
+  game canvas that renders and computes the centre itself, once per tick.
+
 ## [0.20.0] - 2026-09-11
 
 ### Changed
@@ -67,7 +176,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A falling tank is drawn by its height: the host keeps `level` at the level
   the tank fell from, so the hull kept the layer, tint and transparency of
   the overpass until it touched the ground.
-
 - A point entity's transparency and the hole in the slab above the player
   were measured in different coordinate systems. The hole is centred on the
   player's **drawn** point — offset by his own height — while

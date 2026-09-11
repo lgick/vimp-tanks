@@ -200,7 +200,7 @@ impl RemoteTanks {
     /// корпуса: и то и другое живёт в одной строке, поэтому кадр обходится
     /// один раз (реконсиляция зовёт `begin_reconcile`, контракт подсистемы —
     /// `snapshot_bodies`).
-    fn snapshot_rows(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState, u8)> {
+    fn snapshot_rows(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState, u8, f32)> {
         let mut entries = Vec::new();
 
         for model_key in self.models.keys() {
@@ -229,6 +229,7 @@ impl RemoteTanks {
                         angvel: field_f32(fields, FIELD_ANGVEL),
                     },
                     field_u8(fields, FIELD_LEVEL),
+                    field_f32(fields, FIELD_Z),
                 ));
             }
         }
@@ -310,6 +311,9 @@ impl PredictedBodies for RemoteTanks {
                 }
 
                 body.level = field_u8(&row.fields, FIELD_LEVEL);
+                // высота корпуса: по ней реплика судит, поднимается ли
+                // чужой танк по прогону законно (`level::body_on_ramp`)
+                body.z = field_f32(&row.fields, FIELD_Z);
 
                 self.meta.insert(
                     key.clone(),
@@ -345,7 +349,7 @@ impl PredictedBodies for RemoteTanks {
     fn snapshot_bodies(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState)> {
         self.snapshot_rows(snapshot)
             .into_iter()
-            .map(|(key, state, _)| (key, state))
+            .map(|(key, state, _, _)| (key, state))
             .collect()
     }
 
@@ -356,17 +360,19 @@ impl PredictedBodies for RemoteTanks {
     fn begin_reconcile(&mut self, snapshot: &DecodedSnapshot) {
         let rows = self.snapshot_rows(snapshot);
 
-        // уровень пишется до реконсиляции: переигранные шаги обязаны видеть
-        // авторитетную маску с первого же шага
-        for (key, _, level) in &rows {
+        // уровень и высота пишутся до реконсиляции: переигранные шаги
+        // обязаны видеть авторитетную маску с первого же шага, а по высоте
+        // судится вердикт гейта чужого танка (`level::body_on_ramp`)
+        for (key, _, level, z) in &rows {
             if let Some(body) = self.set.bodies_mut().get_mut(key) {
                 body.level = *level;
+                body.z = *z;
             }
         }
 
         let entries: Vec<(String, ServerState)> = rows
             .into_iter()
-            .map(|(key, state, _)| (key, state))
+            .map(|(key, state, _, _)| (key, state))
             .collect();
 
         self.set.begin_reconcile(&entries);
@@ -396,6 +402,13 @@ impl PredictedBodies for RemoteTanks {
                 predicted += 1;
             }
         }
+    }
+
+    /// Чужой танк по прогону подняться может — в отличие от тела карты,
+    /// которое хост сквозь стражей не пускает никогда. Сам вердикт даёт
+    /// `level::body_on_ramp` по высоте строки кадра.
+    fn climbs_ramps(&self) -> bool {
+        true
     }
 
     /// Строки предсказанных танков для рендер-тика — та же форма блока

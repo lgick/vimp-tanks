@@ -3,7 +3,8 @@ import { Container, Texture } from 'pixi.js';
 import Tank, {
   calculateEngineSoundParams,
 } from '../../../src/client/parts/Tank.js';
-import { shadow, parallax } from '../../../src/config/render.js';
+import { shadow, parallax, seeThrough } from '../../../src/config/render.js';
+import { createLevelView } from '../../../src/client/levelView.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
 // (регистрация/обновление/снятие) — визуал рендером не трогаем.
@@ -279,15 +280,23 @@ describe('Tank: признаки уровня и высоты', () => {
   // при пустом трансформе её центр — середина полотна
   const renderer = { screen: { width: 800, height: 600 } };
 
-  const makeView = () => ({
-    level: 0,
-    x: 0,
-    y: 0,
-    set() {},
-    setCamera() {},
-    alphaFor: () => 1,
-    tintFor: () => 0xffffff,
-  });
+  // двойник сервиса: центр камеры он добывает сам, как настоящий
+  // (`src/client/levelView.js`), — парт его больше не публикует
+  const makeView = () => {
+    const view = createLevelView(seeThrough);
+
+    return {
+      level: 0,
+      x: 0,
+      y: 0,
+      set() {},
+      attachStage: (stage, viewRenderer) =>
+        view.attachStage(stage, viewRenderer),
+      camera: () => view.camera(),
+      alphaFor: () => 1,
+      tintFor: () => 0xffffff,
+    };
+  };
 
   const onStage = (dependencies, id = '1') => {
     const tank = new Tank(
@@ -412,7 +421,10 @@ describe('Tank: признаки уровня и высоты', () => {
   it('в levelView уходит мировая, а не нарисованная точка', () => {
     const set = vi.fn();
     const localPlayer = { is: () => true };
-    const { tank } = onStage({ levelView: { ...makeView(), set }, localPlayer });
+    const { tank } = onStage({
+      levelView: { ...makeView(), set },
+      localPlayer,
+    });
 
     tank.update(row(1, 1, 100, 250));
     tank.onRender();
@@ -421,36 +433,39 @@ describe('Tank: признаки уровня и высоты', () => {
     expect(tank.x).not.toBeCloseTo(100);
   });
 
-  // центр камеры считает один владелец за кадр — свой танк: сервис
-  // проецирует по нему и игрока, и сущность, когда считает alpha
-  it('свой танк публикует центр камеры в levelView', () => {
-    const setCamera = vi.fn();
+  // центр камеры — свойство КАДРА, а не парта: танк лишь привязывает к
+  // сервису сцену, а считает центр сервис — один раз на тик и для всех
+  it('танк привязывает сцену к сервису камеры', () => {
+    const view = makeView();
+    const attachStage = vi.fn(view.attachStage);
     const localPlayer = { is: () => true };
-    const { tank } = onStage({
-      levelView: { ...makeView(), setCamera },
+    const { tank, stage } = onStage({
+      levelView: { ...view, attachStage },
       localPlayer,
     });
 
     tank.update(row(1, 1, 100, 250));
     tank.onRender();
 
-    expect(setCamera).toHaveBeenLastCalledWith(
-      expect.objectContaining({ x: 400, y: 300 }),
-    );
+    expect(attachStage).toHaveBeenLastCalledWith(stage, renderer);
+    expect(view.camera()).toEqual(expect.objectContaining({ x: 400, y: 300 }));
   });
 
-  it('чужой танк центр камеры не публикует', () => {
-    const setCamera = vi.fn();
+  // и ЧУЖОЙ танк тоже: без локального (наблюдатель, промежуток до
+  // респауна) камеры иначе не было бы вовсе
+  it('чужой танк тоже привязывает сцену', () => {
+    const view = makeView();
+    const attachStage = vi.fn(view.attachStage);
     const localPlayer = { is: () => false };
     const { tank } = onStage({
-      levelView: { ...makeView(), setCamera },
+      levelView: { ...view, attachStage },
       localPlayer,
     });
 
     tank.update(row(1, 1, 100, 250));
     tank.onRender();
 
-    expect(setCamera).not.toHaveBeenCalled();
+    expect(attachStage).toHaveBeenCalled();
   });
 
   // тень лежит на слое, НАД которым висит танк: по ней и видно, что танк

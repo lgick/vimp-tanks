@@ -1,10 +1,11 @@
 import { Sprite, Assets } from 'pixi.js';
 import { degToRad } from 'vimp-engine/lib/math.js';
-import { levelZ } from '../../levelZ.js';
+import { levelZ, renderLevel } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
 import { parallax as parallaxConfig } from '../../../config/render.js';
-import { C_X, C_Y, C_ANGLE, C_LEVEL } from '../../snapshotFields.js';
+import { baseScale } from './tileGrid.js';
+import { C_X, C_Y, C_ANGLE, C_Z, C_LEVEL } from '../../snapshotFields.js';
 
 // Динамическое тело карты (ящик): точечная сущность со своим спрайтом,
 // своим `update` и одной alpha на всё тело. Стратегия рисует В КОНТЕЙНЕР
@@ -20,11 +21,7 @@ export default class MapObject {
     // масштаб карты держим числами: у тела сам контейнер несёт `data.scale`,
     // а в мир переводит базовый масштаб, а не текущий (его каждый кадр
     // пересчитывает параллакс)
-    const scale = data.scale;
-
-    this._baseScaleX = typeof scale === 'number' ? scale : scale.x;
-    this._baseScaleY = typeof scale === 'number' ? scale : scale.y;
-    this._baseScale = { x: this._baseScaleX, y: this._baseScaleY };
+    this._baseScale = baseScale(data.scale);
 
     // тело живёт в мировых координатах: масштаб носит сам контейнер, а
     // параллакс своего уровня добавляется к нему тем же трансформом
@@ -33,6 +30,9 @@ export default class MapObject {
     this._assetUrl = `${imageBase}${data.img}`;
     this._baseTexturePromise = Assets.load(this._assetUrl);
 
+    // высота тела: пока ящик падает, уровень отрисовки ведёт она, а не
+    // `level` строки (`renderLevel`)
+    this._z = data.level || 0;
     this._level = data.level || 0;
     this._layer = Number(data.layer) || 2;
     container.zIndex = levelZ(this._layer, this._level);
@@ -44,8 +44,8 @@ export default class MapObject {
 
     // мировая позиция тела: alpha ящика считается по ней, а sprite.x живёт
     // в НЕмасштабированных координатах контейнера
-    this._worldX = this._x * this._baseScaleX;
-    this._worldY = this._y * this._baseScaleY;
+    this._worldX = this._x * this._baseScale.x;
+    this._worldY = this._y * this._baseScale.y;
 
     this.sprite = null;
 
@@ -99,17 +99,24 @@ export default class MapObject {
       this._level,
       this._worldX,
       this._worldY,
+      this._z,
     );
     container.tint = this._levelView.tintFor(this._level);
 
-    if (!this._level) {
+    // ящик на земле сдвига не имеет, но падающий — имеет: у него уровень
+    // уже нулевой, а высота ещё нет
+    if (!this._level && !this._z) {
       return;
     }
 
+    // параллакс ведёт ВЫСОТА, а не уровень: иначе падающий ящик не
+    // опускался бы вовсе и «телепортировался» на нижний слой в момент
+    // касания — то же правило, что у корпуса танка
     applyParallax(
       container,
-      cameraCenter(container.parent, this._renderer),
-      this._level * parallaxConfig.shear,
+      this._levelView.camera() ??
+        cameraCenter(container.parent, this._renderer),
+      this._z * parallaxConfig.shear,
       this._baseScale,
     );
   }
@@ -118,17 +125,21 @@ export default class MapObject {
     if (this.sprite) {
       // `scale` у динамики пересчитывается параллаксом каждый кадр,
       // поэтому в мир переводит базовый масштаб карты, а не текущий
-      this.sprite.x = data[C_X] / this._baseScaleX;
-      this.sprite.y = data[C_Y] / this._baseScaleY;
+      this.sprite.x = data[C_X] / this._baseScale.x;
+      this.sprite.y = data[C_Y] / this._baseScale.y;
       this.sprite.rotation = data[C_ANGLE];
     }
 
     this._worldX = data[C_X];
     this._worldY = data[C_Y];
 
+    this._z = data[C_Z] || 0;
+
     // ящик может уехать на мост и упасть с него: уровень едет строкой
-    // кадра, и порядок отрисовки обязан ехать за ним
-    const level = data[C_LEVEL] || 0;
+    // кадра, и порядок отрисовки обязан ехать за ним. Уровень ОТРИСОВКИ
+    // ведёт высота (`renderLevel`): пока тело падает, хост держит `level`
+    // тем уровнем, с которого оно сорвалось (`map::step_body_level`)
+    const level = renderLevel(data[C_LEVEL], this._z);
 
     if (level !== this._level) {
       this._level = level;
@@ -136,7 +147,7 @@ export default class MapObject {
 
       // тело вернулось на землю: сдвиг высоты обязан сняться, иначе ящик
       // так и останется висеть в проекции уровня, с которого упал
-      if (!level) {
+      if (!level && !this._z) {
         applyParallax(this._container, null, 0, this._baseScale);
       }
     }

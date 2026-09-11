@@ -1,6 +1,6 @@
 import { Container, Sprite } from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
-import { levelZ } from '../levelZ.js';
+import { levelZ, renderLevel } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
 import { offsetPoint } from '../parallax.js';
 import {
@@ -135,7 +135,7 @@ export default class Tank extends Container {
     // 2.5D: непрерывная высота (рампа/падение) и дискретный уровень
     // ОТРИСОВКИ (о нём — в update)
     this._z = data[M1_Z] || 0;
-    this._level = Math.min(data[M1_LEVEL] || 0, Math.round(this._z));
+    this._level = renderLevel(data[M1_LEVEL], this._z);
     this.zIndex = levelZ(TANK_BASE_Z, this._level);
 
     // свой танк — единственный, кто вправе писать в levelView: по нему
@@ -274,12 +274,10 @@ export default class Tank extends Container {
 
     this._z = data[M1_Z] || 0;
 
-    // уровень ОТРИСОВКИ, а не физический: пока тело падает, хост держит
-    // `level` тем уровнем, с которого оно сорвалось (crate::level), и танк
-    // рисовался бы слоем, тинтом и прозрачностью эстакады до самого
-    // касания. По высоте он переходит на нижний слой на середине падения.
-    // Подъём правило не трогает: на рампе `level` и есть `round(z)`
-    const level = Math.min(data[M1_LEVEL] || 0, Math.round(this._z));
+    // уровень ОТРИСОВКИ, а не физический (`renderLevel`): падающий танк
+    // иначе рисовался бы слоем, тинтом и прозрачностью эстакады до самого
+    // касания
+    const level = renderLevel(data[M1_LEVEL], this._z);
 
     if (level !== this._level) {
       this._level = level;
@@ -339,15 +337,16 @@ export default class Tank extends Container {
     // смещается плита уровня, поэтому танк с неё не съезжает.
     // Раньше сдвигалась тень, а корпус стоял в мировой точке — проекция
     // была вывернута наизнанку, и тень выглядела выше танка
-    const camera = cameraCenter(this.parent, this._renderer);
-
-    // свой танк — владелец центра камеры на кадр: по нему сервис проецирует
-    // и игрока, и сущность, когда считает alpha (src/client/levelView.js).
-    // Считается ДО alphaFor: иначе первый кадр после смены камеры
-    // проецировался бы старым центром
-    if (this._levelView && this._isLocal()) {
-      this._levelView.setCamera(camera);
+    // центр камеры добывает сервис — один раз на кадр и для всех партов
+    // сразу (src/client/levelView.js): владельцем его был локальный танк, и
+    // без него (наблюдатель, промежуток до респауна) камеры не было вовсе
+    if (this._levelView) {
+      this._levelView.attachStage(this.parent, this._renderer);
     }
+
+    const camera = this._levelView
+      ? this._levelView.camera()
+      : cameraCenter(this.parent, this._renderer);
 
     if (this._levelView) {
       this.alpha = this._levelView.alphaFor(

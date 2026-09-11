@@ -1,4 +1,5 @@
 import { seeThrough, parallax } from '../config/render.js';
+import { cameraCenter } from './camera.js';
 import { offsetPoint } from './parallax.js';
 import { seeThroughAlpha, seeThroughTint } from './seeThrough.js';
 
@@ -22,10 +23,102 @@ import { seeThroughAlpha, seeThroughTint } from './seeThrough.js';
 // смещённой точке. Считать alpha по сырым мировым точкам значило бы
 // разводить круг прозрачности сущностей с нарисованной дырой тем сильнее,
 // чем дальше игрок от центра экрана и чем выше сущность.
-export function createLevelView(cfg = seeThrough) {
-  const state = { level: 0, x: 0, y: 0, z: 0, camera: null };
+// Центр камеры — свойство КАДРА, а не парта: его добывает сам сервис.
+// Раньше его публиковал ОДИН парт — локальный танк, — и без него
+// (наблюдатель, промежуток между смертью и респауном, кадры до появления
+// `localPlayer.id`) камеры не было вовсе, а слой карты считал её сам: дыра
+// в плите ехала по свежей проекции, а alpha сущностей — по прошлой.
+// Порядок `onRender` партов тоже не определён, и тот, кого вызвали раньше
+// танка, брал камеру прошлого кадра.
+export function createLevelView(cfg = seeThrough, deps = {}) {
+  const state = {
+    level: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+    camera: null,
+    // трансформ сцены, по которому посчитан центр; null — ещё ни разу
+    key: null,
+    stage: deps.stage || null,
+    renderer: deps.renderer || null,
+  };
+
+  // Кеш живёт на ОДНОМ состоянии сцены, а не на тике общего тикера. Ключ
+  // по тику был неверен: за один тик полотно может рисоваться НЕСКОЛЬКО
+  // раз — `vimp-engine` до 0.34 зовёт `app.render()` прямо из
+  // `updateCoords` (CanvasManagerView), то есть на каждый кадр камеры, а в
+  // тике их два и больше (сперва камера дискретного кадра — интерполяция,
+  // следом предсказанная своего танка) плюс отрисовка самого тикера.
+  // Сколько отрисовок придётся на тик — дело движка и его версии, и
+  // опираться на это число плагин не вправе. Всем
+  // отрисовкам после первой кеш отдавал камеру ПЕРВОЙ, тогда как сцена
+  // стояла уже на последней: проекция 2.5D считалась от чужого центра, и
+  // на верхних уровнях всё дрожало на разнице «интерполяция ↔
+  // предсказание» — тем сильнее, чем быстрее едет игрок. Парты, читающие
+  // сцену напрямую (`Tracks`, `Smoke`, эффекты), в тех же кадрах смещались
+  // по свежему центру и разъезжались с танком и плитой.
+  //
+  // Трансформ сцены во время отрисовки не меняется, поэтому ключ по нему
+  // даёт и единый центр на всю отрисовку, и свежесть между отрисовками.
+  const camera = () => {
+    if (!state.stage) {
+      return null;
+    }
+
+    const { position, scale } = state.stage;
+    const screen = state.renderer?.screen;
+    const width = screen ? screen.width : 0;
+    const height = screen ? screen.height : 0;
+    const key = state.key;
+
+    // `camera === null` — центра не было вовсе (сцена без масштаба до
+    // первого кадра): такой ответ не кешируется, иначе он остался бы
+    // навсегда
+    if (
+      state.camera === null ||
+      key === null ||
+      key.x !== position.x ||
+      key.y !== position.y ||
+      key.scaleX !== scale.x ||
+      key.scaleY !== scale.y ||
+      key.width !== width ||
+      key.height !== height
+    ) {
+      state.key = {
+        x: position.x,
+        y: position.y,
+        scaleX: scale.x,
+        scaleY: scale.y,
+        width,
+        height,
+      };
+      state.camera = cameraCenter(state.stage, state.renderer);
+    }
+
+    return state.camera;
+  };
 
   return {
+    // Ленивая привязка к сцене: сервис собирается ещё до полотна
+    // (`hooks.services(core)` зовётся один раз на ядро), а парт попадает на
+    // сцену позже своего конструктора. Привязывается ПЕРВЫЙ, кто позвал, и
+    // звать вправе только парты игрового полотна (`Tank`, `Map`): у радара
+    // своя сцена и своя проекция.
+    attachStage(stage, renderer) {
+      if (state.stage || !stage || !renderer) {
+        return;
+      }
+
+      state.stage = stage;
+      state.renderer = renderer;
+      state.key = null;
+    },
+
+    // центр камеры этого кадра в мировых единицах; null — сцены ещё нет
+    camera() {
+      return camera();
+    },
+
     set(level, x, y, z = 0) {
       state.level = level;
       state.x = x;
@@ -33,24 +126,17 @@ export function createLevelView(cfg = seeThrough) {
       state.z = z;
     },
 
-    // центр камеры в мировых единицах (`src/client/camera.js`): его считает
-    // тот же локальный `Tank`, который пишет сюда позицию, — один раз за
-    // кадр. null (до первого кадра) оставляет точки как есть
-    setCamera(camera) {
-      state.camera = camera;
-    },
-
     // `z` — высота сущности в уровнях; по умолчанию она равна уровню (тело
     // стоит на своей плите), а танк и дым передают свой дробный `z`
     alphaFor(level, worldX, worldY, z = level) {
-      const camera = state.camera;
+      const center = camera();
       const view = offsetPoint(
         state.x,
         state.y,
-        camera,
+        center,
         state.z * parallax.shear,
       );
-      const point = offsetPoint(worldX, worldY, camera, z * parallax.shear);
+      const point = offsetPoint(worldX, worldY, center, z * parallax.shear);
 
       return seeThroughAlpha({
         viewLevel: state.level,
@@ -84,9 +170,6 @@ export function createLevelView(cfg = seeThrough) {
     },
     get z() {
       return state.z;
-    },
-    get camera() {
-      return state.camera;
     },
   };
 }

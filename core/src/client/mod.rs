@@ -152,6 +152,11 @@ pub struct TanksClient {
     my_model_key_id: Option<u8>,
     my_tank_meta: Option<(u8, u8, u8)>, // condition, size, teamId
     my_game_id: Option<u32>,
+
+    /// Счётчик карт: растёт на каждом `set_map`. По нему рендер понимает,
+    /// что его разбор прогонов рамп протух, не спрашивая саму геометрию
+    /// (`ClientCore::ramp_runs` сериализует ВСЕ прогоны карты в строку)
+    map_generation: u32,
 }
 
 impl TanksClient {
@@ -166,6 +171,12 @@ impl TanksClient {
     /// клина горки (`ClientCore::ramp_runs`).
     pub fn levels(&self) -> Option<&Rc<MapLevels>> {
         self.predictor.levels()
+    }
+
+    /// Поколение карты: дешёвый признак «геометрия сменилась» для кеша на
+    /// стороне рендера (сервис `rampRuns`, `src/client/index.js`).
+    pub fn map_generation(&self) -> u32 {
+        self.map_generation
     }
 
     // чужие танки заводятся заново кадрами, поэтому их, в отличие от
@@ -216,6 +227,7 @@ impl GameClientDef for TanksClient {
             my_model_key_id: None,
             my_tank_meta: None,
             my_game_id: None,
+            map_generation: 0,
         }
     }
 
@@ -267,9 +279,9 @@ impl GameClientDef for TanksClient {
             _ => None,
         };
 
-        if let Some((z, level)) = authoritative {
-            self.predictor.correct_level(z, level);
-        }
+        // зовётся на КАЖДОМ кадре, в том числе без своей строки: иначе
+        // авторитетный уровень держал бы значение прошлого кадра
+        self.predictor.correct_level(authoritative);
     }
 
     fn finish_reconcile(&mut self) {
@@ -323,16 +335,23 @@ impl GameClientDef for TanksClient {
                         field_u8(row, TANK_FIELD_SIZE),
                         field_u8(row, TANK_FIELD_TEAM),
                     );
+                    // респаун: прошлый кадр держал танк уничтоженным
+                    // (`condition` 0), предсказания уровня за ним нет
+                    let respawned =
+                        self.my_tank_meta.is_some_and(|meta| meta.0 == 0) && condition != 0;
 
                     self.my_tank_meta = Some((condition, size, team));
                     self.predictor.freeze(condition == 0);
 
                     // уровень и высота своего танка идут из СЫРОГО кадра
-                    // (`begin_reconcile`), и только первый кадр берётся
-                    // отсюда: до него уровень остался бы нулевым, хотя
-                    // респаун бывает и на плите. Сэмпл здесь ещё не
-                    // отстаёт — интерполировать не с чем
-                    if known_id != Some(my_id) {
+                    // (`begin_reconcile`), и отсюда берутся только там, где
+                    // предсказания за ними нет: первый кадр со своим танком
+                    // и респаун — иначе уровень остался бы нулевым, хотя и
+                    // спавн, и респаун бывают на плите. Респаун ловится
+                    // здесь, а не по `camera.forceReset`: без него
+                    // `Predictor::reset` не зовётся, а `known_id` уже равен
+                    // своему, и уровень плиты не пришёл бы вовсе
+                    if known_id != Some(my_id) || respawned {
                         self.predictor.adopt_level(
                             field_f32(row, TANK_FIELD_Z),
                             field_u8(row, TANK_FIELD_LEVEL),
@@ -454,6 +473,7 @@ impl GameClientDef for TanksClient {
         self.reset_remote_tanks();
         self.predictor.set_map(&cfg, Rc::clone(&levels));
         self.shot.set_map(levels);
+        self.map_generation = self.map_generation.wrapping_add(1);
 
         Ok(())
     }

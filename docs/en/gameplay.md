@@ -155,8 +155,9 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   or from the side all count, so a hill can be taken on the diagonal. Two
   limits keep that from becoming a lift: a tank entering across the axis
   must be standing at its own level's height (not stuck halfway up another
-  run), and the ramp's height at the entry point may not be more than half
-  a level above it. A tank that drove into the MIDDLE of a run keeps its
+  run), and the ramp's height at the entry point must be LESS than half a
+  level above it (`coreParams.levels.maxSideEntryRise`; exactly half a
+  level is already refused). A tank that drove into the MIDDLE of a run keeps its
   level, and the run behaves as ordinary flat ground for it until it leaves
   and comes back through an end. The middle is closed off physically too:
   the run's side rails start one cell past the foot, and its "wrong" end is
@@ -164,8 +165,9 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   the top, stops the tank. A legal climber does not see those barriers at
   all — leaving a run sideways is always allowed. A **wide** ramp — a rectangular
   block of ramp tiles — is driven through whole: the core cuts such a block
-  into parallel lane runs, and changing lanes mid-climb keeps the climb
-  going instead of being judged as a fresh entry. Lanes of DIFFERENT length
+  into parallel lane runs, and changing lanes mid-climb — diagonally
+  included — keeps the climb going instead of being judged as a fresh
+  entry. Lanes of DIFFERENT length
   (a stepped block) count as different ramps, and moving between them is
   judged by the gate as usual. The same holds for a
   spawn point placed on a ramp: it starts on the level the map geometry

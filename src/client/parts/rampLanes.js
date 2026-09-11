@@ -35,6 +35,12 @@ export function buildRampLanes(runs, toCell) {
     const along1 = toCell(run.max, alongAxis);
     const cross0 = toCell(run.crossMin, crossAxis);
     const cross1 = toCell(run.crossMax, crossAxis);
+    // границы БОРТОВ вдоль оси приходят из ядра
+    // (`map::ramp_rail_span`): юбка клина обязана рисовать борта ровно
+    // там, где физика ставит стражей. `null` — бортов нет вовсе (прогон
+    // длиной в одну клетку)
+    const hasRails =
+      typeof run.railMin === 'number' && typeof run.railMax === 'number';
 
     lanes.push({
       axis: run.axis,
@@ -42,6 +48,8 @@ export function buildRampLanes(runs, toCell) {
       from: run.from,
       to: run.to,
       block: run.block,
+      rail0: hasRails ? toCell(run.railMin, alongAxis) : null,
+      rail1: hasRails ? toCell(run.railMax, alongAxis) : null,
       col0: alongAxis === 0 ? along0 : cross0,
       col1: alongAxis === 0 ? along1 : cross1,
       row0: alongAxis === 0 ? cross0 : along0,

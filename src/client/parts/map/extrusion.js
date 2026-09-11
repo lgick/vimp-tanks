@@ -64,6 +64,17 @@ export function buildRampMeshes({
     const alongAxis = run.axis === 0;
     const cells = alongAxis ? run.col1 - run.col0 : run.row1 - run.row0;
     const segments = Math.max(1, cells * perCell);
+    // борта юбки строятся ровно по границам стражей прогона: их отдаёт
+    // ядро (`map::ramp_rail_span`), а не считает эта функция — вторая
+    // копия отступа рисовала бы стену там, где физика пускает
+    const along0Cell = alongAxis ? run.col0 : run.row0;
+    const rails =
+      typeof run.rail0 === 'number' && typeof run.rail1 === 'number'
+        ? {
+            first: (run.rail0 - along0Cell) * perCell,
+            last: (run.rail1 - along0Cell) * perCell,
+          }
+        : null;
     const x0 = run.col0 * step;
     const x1 = run.col1 * step;
     const y0 = run.row0 * step;
@@ -168,6 +179,7 @@ export function buildRampMeshes({
         // «верх» прогона: там торец закрыт, у подножия он остаётся
         // открытым — это законный вход
         endIndex: run.sign > 0 ? points - 1 : 0,
+        rails,
       }),
     );
 
@@ -196,33 +208,54 @@ export function buildRampMeshes({
 // прогона 1 → 2 под юбкой остаётся видимый просвет — и проезд там
 // действительно есть.
 //
+// Борта идут не во всю длину прогона, а ровно между `rails.first` и
+// `rails.last` — вершинами, отвечающими границам коллайдеров-стражей
+// (`map::ramp_rail_span` в ядре движка): клетка подножия открыта со всех
+// сторон, а у прогона длиной в одну клетку бортов нет вовсе (`rails`
+// равен null) — тогда от юбки остаётся один торец.
+//
 // Ближняя к камере грань видна, дальняя всегда накрыта поверхностью,
 // поэтому выбирать сторону в рантайме не нужно.
 export function buildRampSkirt(surface) {
-  const { base, uvs, heights, points, texture, kBase, endIndex, sideTint } =
-    surface;
+  const {
+    base,
+    uvs,
+    heights,
+    points,
+    texture,
+    kBase,
+    endIndex,
+    sideTint,
+    rails,
+  } = surface;
+  // вершин в одном борту: у прогона без бортов их нет вовсе
+  const railFirst = rails ? Math.max(0, Math.min(rails.first, points - 1)) : 0;
+  const railLast = rails
+    ? Math.max(railFirst, Math.min(rails.last, points - 1))
+    : -1;
+  const railPoints = rails ? railLast - railFirst + 1 : 0;
   // колонки юбки: борт по одной поперечной границе, борт по другой и
   // две колонки торца
-  const columns = points * 2 + 2;
+  const columns = railPoints * 2 + 2;
   const skirtBase = new Float32Array(columns * 4);
   const skirtUvs = new Float32Array(columns * 4);
   const skirtHeights = new Float32Array(columns * 2);
-  // квадов: по (points - 1) на каждый борт плюс один торцевой
-  const quads = (points - 1) * 2 + 1;
+  // квадов: по (railPoints - 1) на каждый борт плюс один торцевой
+  const quads = Math.max(0, railPoints - 1) * 2 + 1;
   const indices = new Uint32Array(quads * 6);
 
   // источник вершины поверхности для колонки юбки: сперва борт A, затем
   // борт B, затем пара торца
   const sourceOf = column => {
-    if (column < points) {
-      return column * 2;
+    if (column < railPoints) {
+      return (railFirst + column) * 2;
     }
 
-    if (column < points * 2) {
-      return (column - points) * 2 + 1;
+    if (column < railPoints * 2) {
+      return (railFirst + column - railPoints) * 2 + 1;
     }
 
-    return endIndex * 2 + (column - points * 2);
+    return endIndex * 2 + (column - railPoints * 2);
   };
 
   for (let column = 0; column < columns; column += 1) {
@@ -252,8 +285,8 @@ export function buildRampSkirt(surface) {
   let quad = 0;
 
   for (let strip = 0; strip < 3; strip += 1) {
-    const first = strip === 2 ? points * 2 : strip * points;
-    const last = strip === 2 ? points * 2 + 1 : first + points - 1;
+    const first = strip === 2 ? railPoints * 2 : strip * railPoints;
+    const last = strip === 2 ? railPoints * 2 + 1 : first + railPoints - 1;
 
     for (let column = first; column < last; column += 1) {
       const v = column * 2;

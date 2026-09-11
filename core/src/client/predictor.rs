@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use rapier2d::prelude::Group;
 
 use crate::config::{KeyConfig, LevelRules, ModelConfig};
-use crate::level::{self, Footprint, LevelState, Transit};
+use crate::level::{self, Footprint, LevelState, Transit, LEVEL_EPSILON};
 use crate::motion::{self, TurretInput};
 use vimp_engine_core::client::collision::{
     BlockContact, Contact, Manifold, collect_block_contacts_into, obb_manifold,
@@ -182,6 +182,11 @@ pub struct Predictor {
     /// уровень и фаза падения принадлежат хосту, реплика их только
     /// доигрывает (см. `correct_level`)
     authoritative_level: Option<(f32, u8)>,
+    /// Сколько кадров подряд авторитетный уровень держится ВЫШЕ уровня
+    /// реплики. Подъём принимается только по стойкому несогласию
+    /// (`LevelRules::level_adopt_frames`): одиночный кадр выше — это
+    /// запаздывание, а не подъём (см. `correct_level`)
+    level_disagreement: u8,
     // часы симуляции, общие с предсказанным миром
     local_now: f64,
 
@@ -272,6 +277,7 @@ impl Predictor {
             level_state: LevelState::default(),
             level_rules,
             authoritative_level: None,
+            level_disagreement: 0,
             local_now: 0.0,
             forward_bit: bit("forward"),
             back_bit: bit("back"),
@@ -386,6 +392,16 @@ impl Predictor {
 
         self.guards = ramp_guards(&levels);
         self.levels = Some(levels);
+
+        // геометрия сменилась: клетка входа, вердикт гейта и вся история
+        // уровня относятся к СТАРОЙ карте. Оставить их — значит судить вход
+        // на прогон новой карты по клетке прежней (см. `entry_is_legal`), а
+        // `rewind_level_state` восстановил бы снимок, снятый на другой
+        // геометрии, обойдя ветку «истории нет, берём из кадра»
+        self.level_state = LevelState::default();
+        self.level_history.clear();
+        self.authoritative_level = None;
+        self.level_disagreement = 0;
     }
 
     /// Геометрия карты предикта: по ней же рендер берёт прогоны рамп
@@ -414,15 +430,34 @@ impl Predictor {
     /// чужим уровнем считалось всё: маска коллизий била танк о перила,
     /// которых для него у хоста нет, а рендер давал корпусу масштаб и тинт
     /// эстакады.
-    pub fn correct_level(&mut self, z: f32, level: u8) {
-        self.authoritative_level = Some((z, level));
+    pub fn correct_level(&mut self, authoritative: Option<(f32, u8)>) {
+        // `None` — своей строки в кадре нет (танк уничтожен, частичный
+        // CLEAR, null-маркер): прошлое значение обязано уйти, иначе ветки
+        // `airborne`, «понижение» и «истории нет» в `rewind_level_state`
+        // продолжали бы действовать по протухшим данным
+        self.authoritative_level = authoritative;
+
+        if authoritative.is_none() {
+            self.level_disagreement = 0;
+        }
     }
 
-    /// Взять уровень и высоту из кадра как есть. Зовётся ОДИН раз — на
-    /// первом кадре со своим танком (`TanksClient::track_frame`): предсказания
-    /// ещё нет, переигрывать нечего, а респаун бывает и на плите.
+    /// Взять уровень и высоту из кадра как есть. Зовётся там, где
+    /// предсказания уровня ещё нет и переигрывать нечего
+    /// (`TanksClient::track_frame`): первый кадр со своим танком и
+    /// респаун (`condition` 0 → живой) — уровень остался бы нулевым, хотя
+    /// и спавн, и респаун бывают на плите.
     pub fn adopt_level(&mut self, z: f32, level: u8) {
         self.authoritative_level = Some((z, level));
+        self.level_disagreement = 0;
+        self.set_grounded(z, level);
+    }
+
+    // «уровень из кадра как есть»: тело стоит на опоре, переход закончен.
+    // Одно тело на все три пути, которые это делают (`adopt_level`, ветки
+    // коррекции уровня в `on_server_state`, `rewind_level_state` с пустой
+    // историей) — три копии расходились бы молча
+    fn set_grounded(&mut self, z: f32, level: u8) {
         self.level_state.level = level;
         self.level_state.z = z;
         self.level_state.transit = Transit::Grounded;
@@ -458,6 +493,7 @@ impl Predictor {
         self.pending_reset = true;
         self.level_state = LevelState::default();
         self.authoritative_level = None;
+        self.level_disagreement = 0;
         // до прихода следующего player-блока рендерить нечего: иначе предикт
         // дорисовывает актора в позиции уже несуществующего мира
         self.has_state = false;
@@ -646,6 +682,7 @@ impl Predictor {
                 .as_ref()
                 .map_or(0, |levels| levels.landing_level(level, self.state.x, self.state.y));
 
+            self.level_disagreement = 0;
             self.level_state.level = level;
             self.level_state.z = z;
             self.level_state.transit = Transit::Falling {
@@ -673,16 +710,52 @@ impl Predictor {
             // подбрасывают приземлившуюся реплику обратно на мост), и
             // прогон рампы исключён: там кадр отстаёт как раз вниз —
             // и по состоянию реплики, и по карте под авторитетной позицией.
-            self.level_state.level = level;
-            self.level_state.z = z;
-            self.level_state.transit = Transit::Grounded;
-            self.level_state.slope_vec = [0.0, 0.0];
-        } else if !climbing
-            && let Transit::Falling { .. } = self.level_state.transit
-        {
-            // кадр говорит, что танк уже на опоре: доигрывать своё падение
-            // реплике нечего
-            self.level_state.transit = Transit::Grounded;
+            self.level_disagreement = 0;
+            self.set_grounded(z, level);
+        } else if let Some((z, level)) = self.authoritative_level.filter(|&(z, level)| {
+            // кадр обязан быть снят НА ОПОРЕ: `z` ровно на своём уровне.
+            // Пока хост падает, он держит `level` тем уровнем, с которого
+            // сорвался (`level::step_layered`), а `z` ведёт вниз дробным —
+            // и такой кадр «выше реплики» по определению, всё падение
+            // подряд. Считать его несогласием значит через
+            // `level_adopt_frames` кадров закинуть уже приземлившуюся
+            // реплику обратно на мост: под плитой опора уровня 1 ЕСТЬ,
+            // поэтому ветка `airborne` этот кадр не перехватывает. Тот же
+            // признак «стою, а не в переходе», что у `level::body_on_ramp`
+            (z - level as f32).abs() <= LEVEL_EPSILON
+                && !on_ramp
+                && level > self.level_state.level
+        }) {
+            // ПОДЪЁМ принимается только по СТОЙКОМУ несогласию. Запоздавший
+            // кадр врёт ровно в эту сторону («я ещё наверху»), и принимать
+            // его мгновенно нельзя — вернётся баг со спуском. Но и не
+            // принимать вовсе тоже нельзя: разошедшийся однажды вердикт
+            // гейта, респаун на плите без `camera.forceReset` или снап
+            // уровня на хосте оставляли реплику НИЖЕ хоста навсегда — с
+            // чужой маской коллизий, чужим слоем, тинтом и масштабом.
+            //
+            // Кадр запаздывает на буфер интерполяции (десятки мс), поэтому
+            // несогласие длиной `level_adopt_frames` (по умолчанию 8, около
+            // 0.4 с) запаздыванием быть уже не может. Любой другой исход —
+            // согласие и прогон рампы счётчик обнуляют, а кадр в переходе
+            // (падение) до счётчика не доходит вовсе — его отсекает фильтр
+            // «кадр снят на опоре» выше
+            self.level_disagreement = self.level_disagreement.saturating_add(1);
+
+            if self.level_disagreement >= self.level_rules.level_adopt_frames {
+                self.level_disagreement = 0;
+                self.set_grounded(z, level);
+            }
+        } else {
+            self.level_disagreement = 0;
+
+            if !climbing
+                && let Transit::Falling { .. } = self.level_state.transit
+            {
+                // кадр говорит, что танк уже на опоре: доигрывать своё
+                // падение реплике нечего
+                self.level_state.transit = Transit::Grounded;
+            }
         }
 
         // replay: от serverTime кадра до текущей оценки серверного времени
@@ -935,10 +1008,7 @@ impl Predictor {
             return;
         };
 
-        self.level_state.level = level;
-        self.level_state.z = z;
-        self.level_state.transit = Transit::Grounded;
-        self.level_state.slope_vec = [0.0, 0.0];
+        self.set_grounded(z, level);
     }
 
     /// Опора корпуса под текущим курсом — тот же прямоугольник, что у
@@ -1056,12 +1126,16 @@ impl Predictor {
         for set in &mut self.sets {
             set.capture(&tank_obb, local_now);
 
+            // стражей проходит насквозь только тело, ЗАКОННО едущее по
+            // прогону: у тел карты такого режима нет вовсе, а чужой танк
+            // судится одной функцией на все стороны (`level::body_on_ramp`)
+            let climbs = set.climbs_ramps();
+
             for body in set.predicted_bodies_mut() {
-                // признак «стою на прогоне» берётся по КАРТЕ под телом: так
-                // же пропускает тело хост (`map::body_filter`), а фазы рампы
-                // в `BodyLevelState` нет вовсе
-                body.on_ramp =
-                    map.is_some_and(|levels| levels.ramp_at(body.body.x, body.body.y).is_some());
+                body.on_ramp = climbs
+                    && map.is_some_and(|levels| {
+                        level::body_on_ramp(levels, body.body.x, body.body.y, body.z, body.level)
+                    });
                 sim.push(body.body);
                 geometry.push((body.half_w, body.half_h));
                 surfaces.push(body.surface);
@@ -1162,8 +1236,10 @@ impl Predictor {
 
                 for index in 0..movable {
                     // страж существует только для тел уровня, с которого
-                    // прогон начинается, и любое тело, законно едущее по
-                    // прогону, проходит его насквозь (`map::body_filter`)
+                    // прогон начинается, и тело, ЗАКОННО поднимающееся по
+                    // прогону, проходит его насквозь (`map::body_filter`):
+                    // ящик карты таким не бывает, а чужой танк, заехавший
+                    // сбоку, борт видит — как и на хосте
                     if !masks[index].intersects(level_group(guard.low)) || on_ramp(index) {
                         continue;
                     }
@@ -1689,9 +1765,21 @@ mod tests {
         set: PredictedSet,
         captures: Rc<Cell<usize>>,
         releases: Rc<Cell<usize>>,
+        // подсистема чужих танков (`climbs_ramps`): её телам прогон
+        // рампы доступен, телам карты — нет
+        climbs: bool,
     }
 
     impl BoxSet {
+        // двойник подсистемы ТАНКОВ: её тела по прогону поднимаются
+        fn climbing(x: f32) -> Self {
+            let mut set = Self::new(x);
+
+            set.climbs = true;
+
+            set
+        }
+
         fn new(x: f32) -> Self {
             let mut body = PredictedBody::new(Transform {
                 x,
@@ -1715,6 +1803,7 @@ mod tests {
                 set,
                 captures: Rc::new(Cell::new(0)),
                 releases: Rc::new(Cell::new(0)),
+                climbs: false,
             }
         }
     }
@@ -1746,6 +1835,10 @@ mod tests {
             self.captures.set(self.captures.get() + 1);
         }
 
+        fn climbs_ramps(&self) -> bool {
+            self.climbs
+        }
+
         fn render_data(&self) -> Vec<PredictedRow> {
             Vec::new()
         }
@@ -1762,6 +1855,19 @@ mod tests {
     // ящик подсистемы, добавленной предиктору
     fn box_body(p: &mut Predictor) -> &PredictedBody {
         &p.predicted_sets_mut()[0].set().bodies()["box"]
+    }
+
+    // уровень и высота тела двойника: по ним судится вердикт гейта чужого
+    // танка (`level::body_on_ramp`)
+    fn set_box_height(p: &mut Predictor, level: u8, z: f32) {
+        let body = p.predicted_sets_mut()[0]
+            .set_mut()
+            .bodies_mut()
+            .get_mut("box")
+            .unwrap();
+
+        body.level = level;
+        body.z = z;
     }
 
     // ящик подсистемы на заданной точке карты (стражи судят по клетке, а
@@ -1948,6 +2054,23 @@ mod tests {
         state
     }
 
+    // реплика на земле ПОД плитой моста (колонки 3–4: x от 120 до 200):
+    // отсюда проверяется приём подъёма из кадра
+    fn under_the_bridge(p: &mut Predictor) {
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.step_time = 0.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().level, 0);
+    }
+
+    // кадр, который держит танк на плите уровня 1
+    fn frame_above(p: &mut Predictor) {
+        p.correct_level(Some((1.0, 1)));
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+    }
+
     // ШИРОКАЯ горка: блок тайлов рампы 2 клетки в длину и 3 в ширину.
     // Движок режет его на три полосы-прогона, и КАЖДЫЙ прогон получает
     // борта-стражи по обеим своим поперечным границам — то есть внутренние
@@ -2070,12 +2193,13 @@ mod tests {
         assert_eq!(p.level_state().z, 1.0);
     }
 
-    // Д2: стражи прогона освобождают ЛЮБОЕ тело, стоящее на клетке
-    // прогона, а не только свой танк: хост снимает бит стража по факту
-    // клетки (`map::body_filter`), и чужой танк на горке обязан ехать, а не
-    // упираться в борт, которого у него на хосте нет
+    // Стражей прогона проходит насквозь только тело, ЗАКОННО едущее по
+    // прогону. Ящик карты таким не бывает: хост телам карты
+    // `levels_interaction_on_ramp` не ставит вовсе
+    // (`GameMap::step_dynamic_levels`), поэтому столкнутый на прогон ящик
+    // упирается в борт — и у хоста, и у реплики
     #[test]
-    fn a_predicted_body_on_the_run_passes_the_guard() {
+    fn a_predicted_map_body_on_the_run_is_held_by_the_guard() {
         let mut p = make_predictor();
 
         apply_map(&mut p, &wide_ramp_map());
@@ -2083,16 +2207,69 @@ mod tests {
         p.state.x = 400.0;
         p.state.y = 400.0;
         p.add_predicted_set(Box::new(BoxSet::new(0.0)));
-        // клетка прогона (1, 2): корпус лежит на нижнем борту блока полос
-        place_box(&mut p, 100.0, 50.0);
+        // клетка прогона (3, 1) — СЕРЕДИНА блока полос: корпус налезает на
+        // нижний борт (граница блока по y = 40)
+        place_box(&mut p, 140.0, 48.0);
         p.step(0);
 
         let body = box_body(&mut p);
 
-        assert!(body.on_ramp, "тело на клетке прогона не помечено");
+        assert!(!body.on_ramp, "ящик карты помечен как едущий по прогону");
         assert!(
-            (body.body.y - 50.0).abs() < 1e-5,
-            "страж вытолкнул тело с прогона: y = {}",
+            body.body.y > 48.0,
+            "борт прогона ящик не удержал: y = {}",
+            body.body.y
+        );
+    }
+
+    // чужой танк на клетке прогона, чья высота РОВНО на уровне: хост отказал
+    // ему гейту (`level::step_layered` кладёт `z = level` ровно), значит
+    // борта он видит — реплика обязана держать его так же
+    #[test]
+    fn a_remote_tank_on_the_run_at_level_height_is_held_by_the_guard() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        p.state.x = 400.0;
+        p.state.y = 400.0;
+        p.add_predicted_set(Box::new(BoxSet::climbing(0.0)));
+        place_box(&mut p, 140.0, 48.0);
+        set_box_height(&mut p, 0, 0.0);
+        p.step(0);
+
+        let body = box_body(&mut p);
+
+        assert!(
+            !body.on_ramp,
+            "танк с высотой ровно по уровню помечен как поднимающийся"
+        );
+        assert!(
+            body.body.y > 48.0,
+            "борт прогона чужой танк не удержал: y = {}",
+            body.body.y
+        );
+    }
+
+    // и обратное: дробная высота строки означает, что гейт хоста танк
+    // прошёл и поднимается законно, — борта он не видит
+    #[test]
+    fn a_remote_tank_climbing_the_run_passes_the_guard() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        p.state.x = 400.0;
+        p.state.y = 400.0;
+        p.add_predicted_set(Box::new(BoxSet::climbing(0.0)));
+        place_box(&mut p, 140.0, 48.0);
+        set_box_height(&mut p, 0, 0.25);
+        p.step(0);
+
+        let body = box_body(&mut p);
+
+        assert!(body.on_ramp, "поднимающийся чужой танк не помечен");
+        assert!(
+            (body.body.y - 48.0).abs() < 1e-5,
+            "страж вытолкнул поднимающийся танк с прогона: y = {}",
             body.body.y
         );
     }
@@ -2353,7 +2530,7 @@ mod tests {
 
         let flat = p.level_state();
 
-        p.correct_level(1.0, 1);
+        p.correct_level(Some((1.0, 1)));
         assert_eq!(p.level_state(), flat);
 
         p.state.x = 90.0;
@@ -2362,7 +2539,7 @@ mod tests {
 
         let on_ramp = p.level_state();
 
-        p.correct_level(1.0, 1);
+        p.correct_level(Some((1.0, 1)));
         assert_eq!(p.level_state(), on_ramp);
     }
 
@@ -2387,7 +2564,7 @@ mod tests {
             p.level_state().transit
         );
 
-        p.correct_level(0.6, 1);
+        p.correct_level(Some((0.6, 1)));
         p.on_server_state([90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert!(
@@ -2411,13 +2588,112 @@ mod tests {
         p.level_state.level = 1;
         p.level_state.z = 1.0;
 
-        p.correct_level(0.9, 1);
+        p.correct_level(Some((0.9, 1)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert!(
             !p.level_state().input_locked(),
             "запоздавший кадр принят за падение: {:?}",
             p.level_state().transit
+        );
+    }
+
+    #[test]
+    fn a_descent_does_not_lift_the_replica_back_onto_the_bridge() {
+        // Спуск с моста целиком, кадр за кадром. Реплика уже приземлилась и
+        // едет ПОД плитой; кадры приходят с запозданием: сперва снятые ещё
+        // на мосту (`z` ровно на уровне), потом снятые в полёте (`z`
+        // дробный, `level` ещё верхний — хост всё падение держит уровень
+        // срыва). Ветка `airborne` их не перехватывает: под плитой опора
+        // уровня 1 ЕСТЬ. Без проверки «кадр снят на опоре» счётчик
+        // несогласия добирал `level_adopt_frames` прямо на падении и
+        // забрасывал приземлившуюся реплику обратно на мост — тот самый
+        // баг, который чинил `plan/done/ramp-entry-descent.md`
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // уровень 0 под плитой моста (колонки 3 и 4: x от 120 до 200)
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.step_time = 0.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().level, 0);
+
+        // три кадра «ещё на мосту» (буфер интерполяции + RTT) и восемь
+        // кадров полёта — вместе заведомо больше `level_adopt_frames`
+        let mut frames: Vec<(f32, u8)> = vec![(1.0, 1); 3];
+
+        for i in 0..8 {
+            frames.push((1.0 - (i as f32 + 1.0) / 9.0, 1));
+        }
+
+        for &(z, level) in &frames {
+            for _ in 0..4 {
+                p.step_time += STEP_MS;
+                p.step(0);
+            }
+
+            let t = p.step_time;
+
+            p.correct_level(Some((z, level)));
+            p.on_server_state(
+                [140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                false,
+                t,
+                0.0,
+                t,
+            );
+
+            assert_eq!(
+                p.level_state().level,
+                0,
+                "реплику подняло на мост кадром спуска (z = {z})"
+            );
+        }
+    }
+
+    #[test]
+    fn persistent_disagreement_is_adopted_and_holds() {
+        // обратная половина: хост ДЕЙСТВИТЕЛЬНО стоит на плите (`z` ровно на
+        // своём уровне), и стойкое несогласие обязано приняться — иначе
+        // реплика, оказавшаяся ниже хоста, останется там навсегда
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.step_time = 0.0;
+        p.step(0);
+
+        let mut trace = Vec::new();
+
+        for _ in 0..16 {
+            // четыре шага предсказания между кадрами: 120 Гц против 30
+            for _ in 0..4 {
+                p.step_time += STEP_MS;
+                p.step(0);
+            }
+
+            let t = p.step_time;
+
+            p.correct_level(Some((1.0, 1)));
+            p.on_server_state(
+                [140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                false,
+                t,
+                0.0,
+                t,
+            );
+            trace.push(p.level_state().level);
+        }
+
+        // принят — и держится, а не мигает раз в `level_adopt_frames` кадров
+        assert!(
+            trace[trace.len() - 4..].iter().all(|&level| level == 1),
+            "уровень не принят или мигает: {trace:?}"
         );
     }
 
@@ -2440,7 +2716,7 @@ mod tests {
         assert_eq!(p.level_state().level, 0);
 
         // запоздавший кадр, снятый ещё на мосту
-        p.correct_level(1.0, 1);
+        p.correct_level(Some((1.0, 1)));
 
         assert_eq!(p.level_state().level, 0, "кадр перебил предсказание");
 
@@ -2476,12 +2752,138 @@ mod tests {
         assert_eq!(p.level_state().level, 1);
 
         // хост давно на земле
-        p.correct_level(0.0, 0);
+        p.correct_level(Some((0.0, 0)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().level, 0, "понижение из кадра не принято");
         assert_eq!(p.level_state().z, 0.0);
         assert_eq!(p.level_state().transit, Transit::Grounded);
+    }
+
+    // смена карты — это другая геометрия: клетка входа и вердикт гейта от
+    // прежней карты судили бы вход на прогон новой, а история уровня
+    // восстановила бы снимок, снятый на чужих тайлах
+    #[test]
+    fn set_map_clears_the_level_state() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        under_the_bridge(&mut p);
+
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Grounded,
+            prev_cell: (3, 2),
+            ..LevelState::default()
+        };
+        p.correct_level(Some((1.0, 1)));
+
+        apply_map(&mut p, &layered_map());
+
+        assert_eq!(p.level_state(), LevelState::default());
+        assert!(p.level_history.is_empty(), "история уровня старой карты");
+        assert_eq!(p.authoritative_level, None);
+    }
+
+    // кадр без своей строки (танк уничтожен, частичный CLEAR, null-маркер)
+    // обязан снимать авторитетный уровень: иначе ветки `airborne` и
+    // «понижение» продолжают судить по протухшим данным
+    #[test]
+    fn a_frame_without_our_row_clears_the_authoritative_level() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.correct_level(Some((1.0, 1)));
+
+        assert!(p.authoritative_level.is_some());
+
+        p.correct_level(None);
+
+        assert_eq!(p.authoritative_level, None);
+    }
+
+    // подъём принимается ТОЛЬКО по стойкому несогласию: один-два кадра
+    // выше реплики — это запаздывание, и принять их значит вернуть старый
+    // баг со спуском (кадры в полёте везут ещё верхний уровень)
+    #[test]
+    fn a_single_frame_above_the_replica_does_not_lift_it() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        under_the_bridge(&mut p);
+
+        for _ in 0..2 {
+            frame_above(&mut p);
+        }
+
+        assert_eq!(p.level_state().level, 0, "реплику подняло одним кадром");
+    }
+
+    // но и не принимать подъём вовсе нельзя: разошедшийся вердикт гейта,
+    // респаун на плите или снап уровня на хосте оставляли бы реплику НИЖЕ
+    // хоста навсегда
+    #[test]
+    fn a_persistent_frame_above_the_replica_lifts_it() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        under_the_bridge(&mut p);
+
+        for _ in 0..p.level_rules.level_adopt_frames {
+            frame_above(&mut p);
+        }
+
+        assert_eq!(p.level_state().level, 1, "стойкое несогласие не принято");
+        assert_eq!(p.level_state().z, 1.0);
+        assert_eq!(p.level_state().transit, Transit::Grounded);
+    }
+
+    // согласие обнуляет счётчик немедленно: «выше / согласие / выше» — это
+    // не несогласие, а чередование запаздывающих кадров
+    #[test]
+    fn alternating_disagreement_does_not_lift_the_replica() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        under_the_bridge(&mut p);
+
+        for _ in 0..p.level_rules.level_adopt_frames * 2 {
+            frame_above(&mut p);
+            // кадр согласен с репликой
+            p.correct_level(Some((0.0, 0)));
+            p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+        }
+
+        assert_eq!(p.level_state().level, 0, "чередование подняло реплику");
+    }
+
+    // на прогоне рампы подъём не принимается никогда — как и понижение:
+    // там кадр отстаёт по высоте по определению
+    #[test]
+    fn a_frame_above_the_replica_on_a_run_never_lifts_it() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // колонка 2 — прогон рампы (x от 80 до 120)
+        p.state.x = 90.0;
+        p.state.y = 100.0;
+        p.step_time = 0.0;
+        p.step(0);
+
+        assert!(matches!(p.level_state().transit, Transit::Ramp { .. }));
+
+        for _ in 0..p.level_rules.level_adopt_frames * 2 {
+            p.correct_level(Some((2.0, 2)));
+            p.on_server_state([90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+        }
+
+        assert!(
+            p.level_state().level < 2,
+            "кадр поднял реплику на прогоне: {:?}",
+            p.level_state()
+        );
     }
 
     #[test]
@@ -2506,7 +2908,7 @@ mod tests {
         // откат и так берёт состояние из кадра (`rewind_level_state`)
         p.step(0);
 
-        p.correct_level(0.0, 0);
+        p.correct_level(Some((0.0, 0)));
         p.on_server_state([110.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().level, 1, "кадр с прогона стянул реплику вниз");
@@ -2543,7 +2945,7 @@ mod tests {
         p.level_state.transit = Transit::Grounded;
         p.level_history.clear();
 
-        p.correct_level(0.0, 0);
+        p.correct_level(Some((0.0, 0)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().level, 0);
@@ -2567,7 +2969,7 @@ mod tests {
         };
 
         // кадр застал падение на половине высоты
-        p.correct_level(0.5, 1);
+        p.correct_level(Some((0.5, 1)));
         p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
 
         let expected = level::fall_elapsed(0.5, 1, 0, &p.level_rules);
@@ -2598,7 +3000,7 @@ mod tests {
             ..LevelState::default()
         };
 
-        p.correct_level(0.0, 0);
+        p.correct_level(Some((0.0, 0)));
         p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().transit, Transit::Grounded);
@@ -2652,7 +3054,7 @@ mod tests {
         };
 
         // кадр застал падение на половине высоты (3 → 1)
-        p.correct_level(2.0, 3);
+        p.correct_level(Some((2.0, 3)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         let expected = level::fall_elapsed(2.0, 3, 1, &p.level_rules);
@@ -2719,7 +3121,7 @@ mod tests {
 
         // реконсиляция с реплеем трёх шагов: кадр везёт уровень 0 — на
         // рампе он отстаёт, и подъём обязан пережить и его, и реплей
-        p.correct_level(0.0, 0);
+        p.correct_level(Some((0.0, 0)));
         p.on_server_state(
             [90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             false,
@@ -2773,7 +3175,7 @@ mod tests {
         // кадр снят на шаге у подножия и везёт законный вход с торца.
         // Реплей обязан судить его гейтом ЭТОГО шага: без отката состояния
         // уровня отказ диагонального входа наследовался бы прогоном
-        p.correct_level(0.0, 0);
+        p.correct_level(Some((0.0, 0)));
         p.on_server_state(
             [90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             false,

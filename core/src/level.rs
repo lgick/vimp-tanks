@@ -210,6 +210,28 @@ pub fn has_support(
         })
 }
 
+/// Допуск «высота ровно на своём уровне». Им реплика отличает стоящее тело
+/// от тела в переходе: отказав гейту рампы или держа уровень срыва на время
+/// падения, хост кладёт `z` РОВНО на целый уровень (`step_layered`), а
+/// поднимающемуся и падающему ведёт его дробным. Число одно на всех, кто
+/// задаёт этот вопрос, — иначе две копии правила разойдутся молча.
+pub const LEVEL_EPSILON: f32 = 1e-3;
+
+/// Видит ли тело стражей прогона рампы. Правило одно на хост и на
+/// реплику: стражей проходит насквозь только тело, законно поднимающееся
+/// по прогону (`map::body_filter`, `levels_interaction_on_ramp`).
+///
+/// У своего танка вердикт даёт гейт (`LevelState::on_ramp`), у тела карты
+/// подъёма нет вовсе (хост телам карты `levels_interaction_on_ramp` не
+/// ставит НИКОГДА), а про чужой танк реплика судит по высоте строки
+/// кадра: отказав гейту, хост кладёт `z` ровно на уровень
+/// (`step_layered`), а поднимающемуся ведёт его дробным. Поэтому «высота
+/// отличается от целого уровня» — это и есть `climbing`, и лишнего поля в
+/// снапшоте не нужно.
+pub fn body_on_ramp(levels: &MapLevels, x: f32, y: f32, z: f32, level: u8) -> bool {
+    levels.ramp_at(x, y).is_some() && (z - level as f32).abs() > LEVEL_EPSILON
+}
+
 /// Уровень, на который ложится сброшенная бомба. Одно правило на хост
 /// (`TanksSim::create_weapon_action`) и на клиентскую реплику
 /// (`client::shot`): вторая копия разъехалась бы молча, и локальный взрыв
@@ -333,11 +355,11 @@ fn step_layered(
             // прогонов, и без этого правила каждая межполосная граница
             // судилась бы как новый вход и обрывала бы подъём на середине
             Transit::Ramp { climbing, .. }
-                if is_lane_change(levels, state.prev_cell, cell, &ramp) =>
+                if is_lane_change(levels, state.prev_cell, &ramp) =>
             {
                 climbing
             }
-            _ => entry_is_legal(state, &ramp, cell, levels),
+            _ => entry_is_legal(state, &ramp, cell, levels, rules),
         };
 
         state.transit = Transit::Ramp {
@@ -414,17 +436,20 @@ fn run_at_cell(levels: &MapLevels, cell: (i32, i32)) -> Option<u16> {
 // Полосы ОДНОЙ широкой горки: движок режет блок тайлов рампы на
 // параллельные прогоны и нумерует их блоками (`RampRun::block`), поэтому
 // признак один на всю экосистему — по нему же физика огораживает блок
-// целиком. Шаг обязан быть ровно на одну клетку ПОПЕРЁК оси: вход с торца
-// по-прежнему судит гейт.
+// целиком. Признак перестроения — НОМЕР БЛОКА, а не направление шага:
+// диагональный шаг меняет обе клетки сразу, и требование «шаг строго
+// поперёк оси» обрывало подъём на середине широкой горки — вердикт гейта
+// не наследовался, а новый вход судился по клетке СЕРЕДИНЫ прогона и
+// отказывал. Соседство полос гарантировано построением
+// (`MapLevels::build_runs` режет сплошной прямоугольник тайлов), прыжок
+// через полосу за один шаг физически невозможен.
+//
+// Вход С ТОРЦА в соседнюю полосу правило не ловит: там прошлая клетка либо
+// не рампа вовсе (`prev_run == None`), либо принадлежит другому блоку.
 //
 // Полосы разной ДЛИНЫ (ступенчатый блок) остаются разными горками — у них
 // разные `block`, и переезд между ними судит гейт.
-fn is_lane_change(
-    levels: &MapLevels,
-    prev: (i32, i32),
-    cell: (i32, i32),
-    ramp: &RampSample,
-) -> bool {
+fn is_lane_change(levels: &MapLevels, prev: (i32, i32), ramp: &RampSample) -> bool {
     let Some(prev_run) = run_at_cell(levels, prev) else {
         return false;
     };
@@ -434,17 +459,8 @@ fn is_lane_change(
         return false;
     };
 
-    let (dx, dy) = (cell.0 - prev.0, cell.1 - prev.1);
-    let (along, across) = if ramp.axis == 0 { (dx, dy) } else { (dy, dx) };
-
-    along == 0 && across.abs() == 1 && a.block == b.block
+    a.block == b.block && prev_run != ramp.run
 }
-
-// Насколько высота прогона в точке входа может отстоять от высоты тела при
-// заходе сбоку или наискось (в уровнях). Заход в лоб начинается у самого
-// торца, а вход поперёк оси попадает в любую точку клетки — без потолка
-// крутая горка подкидывала бы танк на целый уровень.
-const MAX_SIDE_ENTRY_RISE: f32 = 0.5;
 
 // Законен ли заход на прогон: бок и торцы прогона открыты (в клетку у
 // вершины на `overpass` можно въехать прямо с земли), и без гейта это
@@ -463,6 +479,7 @@ fn entry_is_legal(
     ramp: &RampSample,
     cell: (i32, i32),
     levels: &MapLevels,
+    rules: &LevelRules,
 ) -> bool {
     let prev = state.prev_cell;
 
@@ -503,8 +520,11 @@ fn entry_is_legal(
     if across != 0 {
         let entry_z = lerp(ramp.from as f32, ramp.to as f32, ramp.progress);
 
+        // граница ИСКЛЮЧАЮЩАЯ: скачок ровно на `max_side_entry_rise`
+        // (по умолчанию пол-уровня) уже незаконен — на прогоне длиной в
+        // одну клетку он давал мгновенный щелчок корпуса и тени
         if (state.z - state.level as f32).abs() > 1e-3
-            || (entry_z - state.z).abs() > MAX_SIDE_ENTRY_RISE
+            || (entry_z - state.z).abs() >= rules.max_side_entry_rise
         {
             return false;
         }
@@ -798,6 +818,8 @@ mod tests {
             max_fall_damage: 100.0,
             climb_gravity: 500.0,
             climb_max_speed_factor: 0.5,
+            level_adopt_frames: 8,
+            max_side_entry_rise: 0.5,
         }
     }
 
@@ -924,6 +946,26 @@ mod tests {
         assert_eq!(state.z, 0.0);
     }
 
+    // граница потолка заезда сбоку ИСКЛЮЧАЮЩАЯ: скачок ровно на
+    // `maxSideEntryRise` (пол-уровня) незаконен — на прогоне длиной в одну
+    // клетку он давал мгновенный щелчок корпуса и тени
+    #[test]
+    fn side_entry_exactly_at_the_threshold_is_refused() {
+        let levels = layered();
+        let mut state = LevelState::default();
+
+        // середина клетки подножия: высота прогона там ровно на 0.5 выше
+        step_level(&mut state, 15.0, 5.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: false, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert_eq!(state.z, 0.0);
+    }
+
     #[test]
     fn ramp_is_not_entered_from_under_the_bridge() {
         let levels = layered();
@@ -1021,6 +1063,57 @@ mod tests {
         );
         assert!(state.on_ramp());
         assert!(state.z > entry_z, "z = {}, вход = {entry_z}", state.z);
+    }
+
+    // ДИАГОНАЛЬНЫЙ шаг между полосами одной широкой горки: за шаг
+    // меняются обе клетки сразу, и прежнее требование «шаг строго поперёк
+    // оси» обрывало подъём на середине — гейт судил бы новый вход по
+    // клетке СЕРЕДИНЫ прогона и отказал
+    #[test]
+    fn diagonal_lane_change_on_a_wide_ramp_keeps_climbing() {
+        let levels = wide(false);
+        let mut state = LevelState::default();
+
+        // законный вход с подножия в полосу y = 1: клетка (0, 1) → (1, 1)
+        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+
+        let entry_z = state.z;
+
+        // наискось: клетка (1, 1) → (2, 2) — сменились обе координаты
+        step_level(&mut state, 25.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "диагональ оборвала подъём: {:?}",
+            state.transit
+        );
+        assert!(state.on_ramp());
+        assert!(state.z > entry_z, "z = {}, вход = {entry_z}", state.z);
+    }
+
+    // вход С ТОРЦА в полосу широкой горки правило перестроения не ловит:
+    // прошлая клетка не рампа, и вердикт даёт гейт
+    #[test]
+    fn foot_entry_into_a_lane_is_still_judged_by_the_gate() {
+        let levels = wide(false);
+        let mut state = LevelState::default();
+
+        // с земли в подножие полосы y = 2: клетка (0, 2) → (1, 2)
+        step_level(&mut state, 5.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "гейт не пустил вход с торца полосы: {:?}",
+            state.transit
+        );
     }
 
     #[test]

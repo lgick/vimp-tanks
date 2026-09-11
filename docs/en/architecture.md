@@ -97,11 +97,16 @@ static layers (`s0..sN`) and dynamic bodies (`d0..dN`) to the SAME list of
 part names (`gameSets[setId]`, `src/config/client.js`), so the part name is
 one and the data kind is resolved inside. `src/client/parts/Map.js` only
 checks `assetsBase`, picks the strategy and wires its `render` to
-`onRender`; the work lives in `src/client/parts/map/` — `MapLayer.js` (baked
-layer, its parallax, volume occluder, ramp wedge, bridge-slab transparency),
-`MapObject.js` (the crate: its own frame row, level and alpha),
-`extrusion.js` (pure geometry of volume slices and the ramp wedge) and
-`holeOverlay.js` (the see-through hole: state and the filter).
+`onRender`; the work lives in `src/client/parts/map/` — `MapLayer.js` (the
+layer itself: constructor, `render()` and `destroy()`), `layerAssets.js`
+(loading and baking, the volume, the wedge, the ramp lanes in grid cells),
+`layerSeeThrough.js` (the bridge slab and its occluder yielding visibility,
+in both modes), `MapObject.js` (the crate: its own frame row, level and
+alpha), `extrusion.js` (pure geometry of volume slices and the ramp wedge),
+`holeOverlay.js` (the see-through hole: state and the filter) and
+`tileGrid.js` (the base scale and the two world → cell conversions,
+`cellOfPoint` for a point inside a tile and `cellOfEdge` for a tile's
+boundary — shared by the layer and the crate).
 
 A part that needs something out of the game core gets it as a **service**:
 `ClientPlugin.hooks.services(core)` (`src/client/index.js`) returns the game
@@ -112,6 +117,8 @@ which `ShotEffect` anchors its debris to the box the shot hit (see
 [core.md](core.md)) — and `levelView` (`src/client/levelView.js`), where the
 local player is, on which level and at which height: the local `Tank` writes
 it, and everything that has to yield visibility to him reads it (see below).
+The same service owns the frame's camera centre — it is asked for the scene
+once and computes the centre itself.
 
 The same two names are repeated in `ClientPlugin.serviceNames`. The hook
 needs a live core, so the contract checker cannot read what it returns; the
@@ -151,10 +158,25 @@ The consequences the parts implement themselves:
   measure the distance in **drawn** coordinates: the player and the entity
   are each offset by their own height (the 2.5D projection below), and the
   hole in the slab is centred on the same offset point. The camera centre
-  that projection needs is computed once per frame by the local `Tank` and
-  published through `levelView.setCamera()` — raw world points would drift
-  the entity's fade circle away from the drawn hole the further the player
-  is from the screen centre and the higher the entity sits.
+  that projection needs is a property of the FRAME, and the service gets it
+  itself: the first part of the game canvas to render hands it the scene
+  (`levelView.attachStage(stage, renderer)`), and `levelView.camera()` then
+  recomputes the centre once per NEW scene transform, for everyone at once.
+  The cache is keyed on that transform and not on the shared ticker's tick:
+  the canvas can be drawn several times per tick (`vimp-engine` up to 0.34
+  calls `app.render()` from `updateCoords` on every camera frame — first the
+  discrete frame's camera, then the predicted one), so a per-tick key handed
+  every draw but the first a foreign centre — on the upper levels that reads
+  as jitter, the stronger the faster the player drives. How many draws a tick
+  brings is the engine's business, and the plugin must not depend on that
+  number.
+  It used to be published by the local `Tank` alone, so without one (a
+  spectator, the gap between death and respawn) there was no camera at all
+  while the `Map` layer computed its own — the hole rode the fresh
+  projection and the entities' alpha the previous one — and a part rendered
+  before the tank used the previous frame's centre. Raw world points would
+  drift the entity's fade circle away from the drawn hole the further the
+  player is from the screen centre and the higher the entity sits.
 - **Boxes ride their level.** The dynamic row (`c1`/`c2`) carries `level`,
   so `Map`'s dynamic branch re-sorts by `levelZ` and recomputes its alpha
   every frame: a box that falls off the bridge is visibly falling off it.
@@ -237,9 +259,13 @@ The consequences the parts implement themselves:
   Each run also gets a second mesh — a **skirt**: the two sides along the
   axis and the end face at the TOP end, pulled down to the run's base plane.
   Without it the ground showed under the wedge and the map lied — the sides
-  of a run are closed by the engine's guard colliders. The lower end stays
-  open (that is the legal entry), and a `1 → 2` run keeps a visible gap
-  under it, where driving through really is allowed. The wedge stays a
+  of a run are closed by the engine's guard colliders. Which is why the
+  sides are drawn by the guards' OWN bounds, `railMin`/`railMax` of the same
+  `rampRuns` service (`map::ramp_rail_span`): they start one cell past the
+  foot, and a run one cell long has no sides at all — there the skirt is the
+  end face alone. The lower end stays open (that is the legal entry), and a
+  `1 → 2` run keeps a visible gap under it, where driving through really is
+  allowed. The wedge stays a
   child of the PART, unlike the volume: a tank climbing the ramp has to be
   drawn on top of its surface. For the picture the lanes of one wide ramp
   are merged into a single run (`rampLanes.js`, by the core's `block`

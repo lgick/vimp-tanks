@@ -12,7 +12,9 @@ const SCALE = 2;
 const world = cell => cell * STEP * SCALE;
 const toCell = value => Math.round(value / SCALE / STEP);
 
-// прогон ядра в мировых единицах
+// прогон ядра в мировых единицах. Границы бортов (`railMin`/`railMax`)
+// ядро считает само (`map::ramp_rail_span`): по умолчанию борт начинается
+// на клетку дальше подножия, `null` — бортов у прогона нет вовсе
 const run = ({
   axis = 0,
   sign = 1,
@@ -23,6 +25,8 @@ const run = ({
   max,
   crossMin,
   crossMax,
+  railMin = sign > 0 ? min + 1 : min,
+  railMax = sign > 0 ? max : max - 1,
 }) => ({
   axis,
   sign,
@@ -33,6 +37,8 @@ const run = ({
   max: world(max),
   crossMin: world(crossMin),
   crossMax: world(crossMax),
+  railMin: railMin === null ? null : world(railMin),
+  railMax: railMax === null ? null : world(railMax),
 });
 
 describe('buildRampLanes: перевод в клетки', () => {
@@ -49,6 +55,8 @@ describe('buildRampLanes: перевод в клетки', () => {
         from: 0,
         to: 1,
         block: 0,
+        rail0: 2,
+        rail1: 5,
         col0: 1,
         col1: 5,
         row0: 1,
@@ -70,6 +78,8 @@ describe('buildRampLanes: перевод в клетки', () => {
         from: 0,
         to: 1,
         block: 0,
+        rail0: 1,
+        rail1: 3,
         col0: 2,
         col1: 3,
         row0: 0,
@@ -89,8 +99,8 @@ describe('buildRampLanes: перевод в клетки', () => {
       },
     );
 
-    // вдоль оси x — ось 0, поперёк неё — ось 1
-    expect(axes).toEqual([0, 0, 1, 1]);
+    // вдоль оси x — ось 0, поперёк неё — ось 1, борта снова вдоль
+    expect(axes).toEqual([0, 0, 1, 1, 0, 0]);
     expect(lanes[0].col0).toBe(1);
     expect(lanes[0].row0).toBe(3);
   });
@@ -115,6 +125,26 @@ describe('buildRampLanes: перевод в клетки', () => {
     expect(lanes[0].from).toBe(1);
     expect(lanes[0].to).toBe(0);
     expect(lanes[0].sign).toBe(-1);
+  });
+
+  it('прогон без бортов доезжает до полос с пустыми границами', () => {
+    const lanes = buildRampLanes(
+      [
+        run({
+          axis: 0,
+          min: 1,
+          max: 2,
+          crossMin: 1,
+          crossMax: 2,
+          railMin: null,
+          railMax: null,
+        }),
+      ],
+      toCell,
+    );
+
+    expect(lanes[0].rail0).toBe(null);
+    expect(lanes[0].rail1).toBe(null);
   });
 
   it('не массив — пустой список', () => {

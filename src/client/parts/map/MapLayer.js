@@ -1,33 +1,16 @@
-import { Container, Sprite, Texture, Assets, Ticker } from 'pixi.js';
+import { Texture, Assets } from 'pixi.js';
 import { levelZ } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
-import { applyParallax, offsetPoint } from '../../parallax.js';
-import { bakeTileLayer } from '../bakeTileLayer.js';
-import { buildRampLanes } from '../rampLanes.js';
-import {
-  createHole,
-  advance as advanceHole,
-  apply as applyHole,
-  dispose as disposeHole,
-} from './holeOverlay.js';
-import {
-  buildVolumeSlices,
-  buildRampMeshes,
-  updateRampMesh,
-} from './extrusion.js';
+import { applyParallax } from '../../parallax.js';
+import { baseScale, tileGrid } from './tileGrid.js';
+import { createHole, dispose as disposeHole } from './holeOverlay.js';
+import { buildLayerAssets } from './layerAssets.js';
+import { updateSeeThrough } from './layerSeeThrough.js';
+import { updateRampMesh } from './extrusion.js';
 import {
   parallax as parallaxConfig,
   volume as volumeConfig,
 } from '../../../config/render.js';
-
-// базовый zIndex контейнера-перекрывателя: объём слоя рисуется НАД
-// динамикой СВОЕГО уровня, иначе танк «наезжает» на стену вместо того,
-// чтобы уйти за неё (экструзия идёт ОТ центра камеры, то есть накрывает
-// область за стеной — ровно там танк и стоит). 5 — выше танка (3), дыма
-// (4), бомб и эффектов (2) и следов (1), и заведомо меньше шага уровней
-// (`parallax.levelZStride`): слой уровня N + 1 по-прежнему выше всего,
-// что принадлежит уровню N
-const OCCLUDER_BASE_Z = 5;
 
 // Статический слой карты: запечённый тайл-лист, его параллакс, экструзия
 // объёма и клина рампы, прозрачность плиты моста. Стратегия рисует В
@@ -47,8 +30,6 @@ export default class MapLayer {
     // JS расходился бы с ядром молча
     this._rampRuns = dependencies.rampRuns || null;
 
-    this._targetAlpha = 1;
-
     // режим 'hole': фильтр «дыры» и её сила (0 — игрок не под слоем).
     // Фильтр создаётся лениво: слоёв уровня >= 1 на карте может не быть
     // вовсе, а программу шейдера тогда компилировать не за что. У слоя и у
@@ -66,11 +47,7 @@ export default class MapLayer {
     // масштаб карты держим числами: у статического слоя сам контейнер
     // остаётся единичным (мировые координаты), а `data.scale` носят его
     // дети — каждый вместе со своим сдвигом параллакса
-    const scale = data.scale;
-
-    this._baseScaleX = typeof scale === 'number' ? scale : scale.x;
-    this._baseScaleY = typeof scale === 'number' ? scale : scale.y;
-    this._baseScale = { x: this._baseScaleX, y: this._baseScaleY };
+    this._baseScale = baseScale(data.scale);
 
     // срезы экструзии: объём слоя и клин рампы. `{ target, k }` — контейнер
     // (или спрайт) и его высота в долях сдвига
@@ -126,172 +103,61 @@ export default class MapLayer {
     // звать его каждый кадр ради выхода по первой же строке
     this.needsRender = this._level >= 1 || this._extruding;
 
-    this._create();
+    // грид тайлов значением: им одним отвечают на вопрос «что нарисовано
+    // в этой мировой точке» (`tileGrid.tileAt`)
+    this._grid = tileGrid(this._map, this._baseScale, this._step);
+
+    this._build(data);
   }
 
-  async _create() {
-    try {
-      const baseTexture = await this._baseTexturePromise;
+  // Сборка ассетов слоя. Спецификация уходит в `layerAssets` значением, а
+  // готовые объекты возвращаются оттуда и раскладываются по полям ЗДЕСЬ:
+  // владелец состояния — парт, модуль сборки его полей не знает.
+  async _build(data) {
+    const assets = await buildLayerAssets({
+      container: this._container,
+      baseTexture: this._baseTexturePromise,
+      spriteSheetData: data.spriteSheet,
+      map: this._map,
+      tiles: this._tiles,
+      step: this._step,
+      renderer: this._renderer,
+      level: this._level,
+      layer: this._layer,
+      volume: this._volume,
+      ramps: this._ramps,
+      rampRuns: this._rampRuns,
+      baseScale: this._baseScale,
+      parallaxK: this._parallaxK,
+      extruding: this._extruding,
+      assetUrl: this._assetUrl,
+      isAborted: () => this._container.destroyed,
+    });
 
-      // парт мог быть уничтожен, пока грузился ассет: смена карты сносит
-      // старые парты в том же тике, в котором создаёт новые
-      if (this._container.destroyed) {
-        return;
-      }
-
-      const bakedTexture = await bakeTileLayer({
-        baseTexture,
-        spriteSheetData: this._spriteSheetData,
-        map: this._map,
-        tiles: this._tiles,
-        step: this._step,
-        renderer: this._renderer,
-      });
-
-      // повторно: запекание — второй await, и текстура уже создана, поэтому
-      // уничтоженному парту её нужно не бросить, а освободить
-      if (this._container.destroyed) {
-        bakedTexture.destroy(true);
-
-        return;
-      }
-
-      // один большой спрайт из "запеченной" текстуры
-      this.mapSprite = new Sprite(bakedTexture);
-      applyParallax(this.mapSprite, null, this._parallaxK, this._baseScale);
-      this._container.addChild(this.mapSprite);
-
-      if (this._extruding) {
-        await this._createExtrusion(baseTexture, bakedTexture);
-      }
-    } catch (error) {
-      console.error(
-        `Failed to create static map with asset ${this._assetUrl}:`,
-        error,
-      );
-    }
+    this.mapSprite = assets.mapSprite;
+    this._occluder = assets.occluder;
+    this._slices = assets.slices;
+    this._rampTexture = assets.rampTexture;
   }
 
-  // Экструзия слоя: объём (`volume`) — K копий ТОЙ ЖЕ запечённой картинки,
-  // каждая следующая сдвинута от центра камеры сильнее предыдущей; клин
-  // рампы — по мешу на прогон, наклонная плоскость с непрерывно растущей
-  // высотой (`buildRampMeshes`, src/client/parts/map/extrusion.js).
-  //
-  // Срезы ОБЪЁМА уходят в контейнер-перекрыватель (сиблинг парта на сцене):
-  // им нужен zIndex выше динамики своего уровня, иначе танк рисуется поверх
-  // стены, за которой стоит. Прозрачность и «дыра» у перекрывателя свои —
-  // считаются той же формулой, что у слоя (`_updateSeeThrough`).
-  //
-  // Клин рампы, наоборот, остаётся ребёнком парта: танк, поднимающийся по
-  // горке, обязан рисоваться ПОВЕРХ её поверхности
-  async _createExtrusion(baseTexture, bakedTexture) {
-    const count = volumeConfig.slices;
-    const shear = parallaxConfig.shear;
-    const slices = [];
-
-    if (this._volume > 0) {
-      this._occluder = new Container();
-      this._occluder.zIndex = levelZ(
-        Math.max(this._layer, OCCLUDER_BASE_Z),
-        this._level,
-      );
-
-      slices.push(
-        ...buildVolumeSlices({
-          bakedTexture,
-          level: this._level,
-          volume: this._volume,
-          shear,
-          count,
-          sideTint: volumeConfig.sideTint,
-        }),
-      );
-    }
-
-    const runs = this._rampLanes();
-
-    if (runs.length) {
-      const rampTiles = this._ramps.map(ramp => ramp.tile);
-
-      this._rampTexture = await bakeTileLayer({
-        baseTexture,
-        spriteSheetData: this._spriteSheetData,
-        map: this._map,
-        tiles: rampTiles,
-        step: this._step,
-        renderer: this._renderer,
-      });
-
-      // третий await: парт мог уйти, пока пеклась текстура клина
-      if (this._container.destroyed) {
-        const texture = this._rampTexture;
-
-        this._rampTexture = null;
-        texture.destroy(true);
-
-        return;
-      }
-
-      slices.push(
-        ...buildRampMeshes({
-          runs,
-          texture: this._rampTexture,
-          step: this._step,
-          shear,
-          baseScale: this._baseScale,
-          segments: volumeConfig.rampSegments,
-          sideTint: volumeConfig.sideTint,
-        }),
-      );
-    }
-
-    if (this._container.destroyed) {
-      return;
-    }
-
-    // порядок отрисовки — по высоте: выше срез, позже он нарисован. Плоский
-    // слой остаётся основанием и уже лежит первым
-    slices.sort((a, b) => a.k - b.k);
-
-    for (const slice of slices) {
-      // меш клина уже стоит в мировых вершинах: до первого кадра он лежит
-      // без сдвига, как и слой без камеры
-      if (!slice.base) {
-        applyParallax(slice.target, null, slice.k, this._baseScale);
-      }
-
-      (slice.occluder ? this._occluder : this._container).addChild(
-        slice.target,
-      );
-      this._slices.push(slice);
-    }
-  }
-
-  // Полосы рамп ЭТОГО слоя в клетках его грида. Прогоны приходят из ядра
-  // в МИРОВЫХ единицах (`tile_size == step * scale`), а грид слоя не
-  // масштабирован: перевод тот же, что у `_hasTileAt`.
-  //
-  // Уровень задаёт сервис (`forLevel`), а слой среди них берёт только свои
-  // горки: у карты слой земли и слой стен делят один грид, и клин рисует
-  // тот из них, чьи тайлы рампы он и рисует. Тайла в прогоне нет — рампы
-  // сличаются по паре уровней «подножие/вершина»
-  _rampLanes() {
-    if (!this._ramps?.length || !this._rampRuns) {
-      return [];
-    }
-
-    const owned = new Set(this._ramps.map(ramp => `${ramp.from}:${ramp.to}`));
-    const runs = this._rampRuns
-      .forLevel(this._level)
-      .filter(run => owned.has(`${run.from}:${run.to}`));
-
-    const toCell = (world, axis) => {
-      const scale = axis === 0 ? this._baseScaleX : this._baseScaleY;
-
-      return Math.round(world / scale / this._step);
+  // Что нужно `layerSeeThrough` — одним значением, без единого поля парта
+  // на той стороне. Собирается каждый кадр: `mapSprite` и `_occluder`
+  // появляются асинхронно, а `parent` парт получает уже после конструктора
+  _seeThroughView() {
+    return {
+      levelView: this._levelView,
+      container: this._container,
+      stage: this._container.parent,
+      occluder: this._occluder,
+      hasSprite: Boolean(this.mapSprite),
+      hole: this._hole,
+      occluderHole: this._occluderHole,
+      level: this._level,
+      volume: this._volume,
+      grid: this._grid,
+      tileSet: this._tileSet,
+      floorSet: this._floorSet,
     };
-
-    return buildRampLanes(runs, toCell);
   }
 
   // Каждый кадр у статического слоя: видимость (плита моста) и параллакс —
@@ -303,13 +169,21 @@ export default class MapLayer {
 
     // центр камеры считается ОДИН раз за кадр и уходит параметром во всё,
     // что его просит: и прозрачность, и параллакс, и клин рампы работают
-    // одним и тем же числом, а не тремя одинаковыми объектами
-    const camera = cameraCenter(this._container.parent, this._renderer);
+    // одним и тем же числом, а не тремя одинаковыми объектами. Считает его
+    // сервис (`levelView`), а не слой: иначе дыра в плите ехала бы по
+    // свежей проекции, а alpha сущностей — по прошлой
+    if (this._levelView) {
+      this._levelView.attachStage(this._container.parent, this._renderer);
+    }
+
+    const camera = this._levelView
+      ? this._levelView.camera()
+      : cameraCenter(this._container.parent, this._renderer);
 
     // прозрачность считает плита моста и любой слой с перекрывателем: у
     // второго объём гаснет уже на уровне игрока
     if (this._level >= 1 || this._occluder) {
-      this._updateSeeThrough(camera);
+      updateSeeThrough(this._seeThroughView(), camera);
     }
 
     if (!this._parallaxK && !this._slices.length) {
@@ -347,137 +221,6 @@ export default class MapLayer {
     }
 
     stage.addChild(this._occluder);
-  }
-
-  // прозрачность плиты моста над локальным игроком: в GTA 2 игрок под
-  // эстакадой продолжает видеть свою машину. Считается по НАШЕМУ гриду
-  // уровня: парт уже знает и карту слоя, и список тайлов пола
-  _updateSeeThrough(camera) {
-    if (!this._levelView) {
-      return;
-    }
-
-    const cfg = this._levelView.cfg;
-    // сглаживание по времени тикера общего приложения
-    const dt = Ticker.shared.deltaMS / 1000;
-    const rate = Math.min(1, cfg.fadeRate * dt);
-
-    if (this.mapSprite) {
-      this._updateLayerSeeThrough(cfg, rate, camera);
-    }
-
-    if (this._occluder) {
-      this._updateOccluderSeeThrough(cfg, rate, camera);
-    }
-  }
-
-  // сам слой: гаснет только то, что НАД игроком
-  _updateLayerSeeThrough(cfg, rate, camera) {
-    // путь отхода: гаснет весь слой целиком (прежнее поведение)
-    if (this._levelView.mode === 'layer') {
-      const under =
-        this._levelView.level < this._level &&
-        this._hasTileAt(this._levelView.x, this._levelView.y, this._floorSet);
-
-      this._targetAlpha = under ? cfg.layerAlpha : 1;
-      this._container.alpha +=
-        (this._targetAlpha - this._container.alpha) * rate;
-
-      return;
-    }
-
-    // режим 'hole': проверки пола нет — дыра ездит за игроком, и её край
-    // сам показывает, где кончается плита
-    const above = this._levelView.level < this._level;
-
-    advanceHole(this._hole, above, rate);
-    applyHole(
-      this._container,
-      this._hole,
-      cfg,
-      this._levelView,
-      this._container.parent,
-      camera,
-    );
-  }
-
-  // Перекрыватель: гаснет ДВУМЯ путями. Объём чужого уровня НАД игроком —
-  // как и раньше, вместе со своим слоем (перила моста обязаны исчезать
-  // вместе с плитой). Объём СВОЕГО уровня — только когда он реально
-  // закрывает танк: экструзия уходит от центра камеры и накрывает область
-  // за стеной, поэтому «дыра всегда» превращала стены в полупрозрачные
-  // пятна и объём переставал читаться.
-  _updateOccluderSeeThrough(cfg, rate, camera) {
-    const above = this._level > this._levelView.level;
-
-    if (this._levelView.mode === 'layer') {
-      // путь отхода: чужой уровень гаснет целиком, свой не гаснет вовсе
-      const alpha = above ? cfg.layerAlpha : 1;
-
-      this._occluder.alpha += (alpha - this._occluder.alpha) * rate;
-
-      return;
-    }
-
-    const hides = above || this._volumeHidesPlayer(camera);
-
-    advanceHole(this._occluderHole, hides, rate);
-    applyHole(
-      this._occluder,
-      this._occluderHole,
-      cfg,
-      this._levelView,
-      this._container.parent,
-      camera,
-    );
-  }
-
-  // Накрывает ли объём этого слоя нарисованную точку игрока.
-  //
-  // Срез объёма на высоте k рисует тайл из мировой точки w в точке
-  // `w + (w - cam) * k`. Значит по нарисованной точке игрока `p` исходная
-  // клетка среза считается обратной формулой `w = (p + cam * k) / (1 + k)`:
-  // если в ней есть тайл этого слоя, срез накрывает танк. Проверяются те же
-  // k, что и рисуются, — ни одного лишнего среза.
-  _volumeHidesPlayer(camera) {
-    if (!camera || !this._map) {
-      return false;
-    }
-
-    const view = this._levelView;
-    const shear = parallaxConfig.shear;
-    const point = offsetPoint(view.x, view.y, camera, view.z * shear);
-    const count = volumeConfig.slices;
-
-    for (let i = 1; i <= count; i += 1) {
-      const k = (this._level + (this._volume * i) / count) * shear;
-      const scale = 1 + k;
-
-      if (
-        this._hasTileAt(
-          (point.x + camera.x * k) / scale,
-          (point.y + camera.y * k) / scale,
-          this._tileSet,
-        )
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  // Есть ли в мировой точке тайл из набора `tiles`: набор тайлов ЭТОГО слоя
-  // отвечает на вопрос «нарисован ли там объём», набор пола — «есть ли там
-  // плита». Перевод один на оба: позиция приходит в мировых единицах, а грид
-  // слоя не масштабирован — масштаб карты живёт ЗДЕСЬ (ровно как в update()
-  // для динамики), а сервис хранит мир как есть
-  _hasTileAt(worldX, worldY, tiles) {
-    const col = Math.floor(worldX / this._baseScaleX / this._step);
-    const row = Math.floor(worldY / this._baseScaleY / this._step);
-    const tile = this._map?.[row]?.[col];
-
-    return tile !== undefined && tiles.has(tile);
   }
 
   // Освобождение слоя. Порядок обязателен: снять фильтры -> снять
@@ -543,6 +286,7 @@ export default class MapLayer {
     this._floor = null;
     this._tileSet = null;
     this._floorSet = null;
+    this._grid = null;
     this._ramps = null;
     this._spriteSheetData = null;
     this._renderer = null;

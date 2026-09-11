@@ -3,7 +3,7 @@ import { Assets, Container, Texture } from 'pixi.js';
 import Map from '../../../../src/client/parts/Map.js';
 import { createLevelView } from '../../../../src/client/levelView.js';
 import { seeThrough } from '../../../../src/config/render.js';
-import { C_LEVEL } from '../../../../src/client/snapshotFields.js';
+import { C_Z, C_LEVEL } from '../../../../src/client/snapshotFields.js';
 
 // Стратегия динамического тела карты (ящик): своя строка кадра, свой
 // уровень и своя прозрачность. Парт `Map` здесь — диспетчер: он создаёт
@@ -58,19 +58,22 @@ describe('MapObject: динамическое тело карты', () => {
   });
 
   describe('динамическое тело (ящик)', () => {
-    const boxRow = (x, y, level) => {
+    // высота по умолчанию равна уровню — так хост и держит стоящее тело
+    // (`map::step_body_level`); дробная `z` бывает только в падении
+    const boxRow = (x, y, level, z = level) => {
       const row = [x, y, 0, 0, 0, 0, 0, 0];
 
+      row[C_Z] = z;
       row[C_LEVEL] = level;
 
       return row;
     };
 
-    const makeBox = view =>
+    const makeBox = (view, box = renderer) =>
       new Map(
         dynamicData,
         {},
-        { renderer, assetsBase: '/build/', levelView: view },
+        { renderer: box, assetsBase: '/build/', levelView: view },
       );
 
     // ящик на мосту гаснуть не начинал вовсе: у динамической ветки не было
@@ -114,6 +117,62 @@ describe('MapObject: динамическое тело карты', () => {
 
       expect(parent.sortableChildren).toBe(true);
       expect(parent.sortDirty).toBe(true);
+    });
+
+    // падающий ящик рисуется ВЫСОТОЙ, а не уровнем: хост держит `level`
+    // тем уровнем, с которого тело сорвалось, до самого касания
+    it('падающий ящик переходит на нижний слой по высоте', () => {
+      const box = makeBox(createLevelView(seeThrough));
+
+      box.update(boxRow(0, 0, 1));
+
+      expect(box.zIndex).toBe(102);
+
+      // сорвался с моста: `level` ещё 1, но высота уже ниже половины
+      box.update(boxRow(0, 0, 1, 0.4));
+
+      expect(box.zIndex).toBe(2);
+    });
+
+    // падающий ящик обязан ОПУСКАТЬСЯ видимо, а не телепортироваться на
+    // нижний слой в момент касания: параллакс ведёт высота строки
+    it('параллакс падающего ящика едет за высотой', () => {
+      const view = createLevelView(seeThrough);
+      // камера берётся у сцены: без родителя и полотна её нет, и параллакс
+      // не двигает ничего
+      const stage = new Container();
+
+      stage.position.set(0, 0);
+      stage.scale.set(1, 1);
+
+      const box = makeBox(view, { screen: { width: 800, height: 600 } });
+
+      stage.addChild(box);
+      box._mode.sprite = {};
+      view.set(0, 0, 0, 0);
+
+      box.update(boxRow(100, 100, 1));
+      box.onRender();
+
+      const high = box.scale.x;
+
+      box.update(boxRow(100, 100, 1, 0.5));
+      box.onRender();
+
+      expect(box.scale.x).not.toBe(high);
+      expect(box.scale.x).toBeLessThan(high);
+    });
+
+    it('alphaFor получает высоту строки', () => {
+      const view = createLevelView(seeThrough);
+      const alphaFor = vi.spyOn(view, 'alphaFor');
+      const box = makeBox(view);
+
+      box._mode.sprite = {};
+      box.update(boxRow(100, 100, 1, 0.4));
+      box.onRender();
+
+      expect(alphaFor).toHaveBeenCalledWith(0, 100, 100, 0.4);
     });
 
     it('ящик на мосту гаснет рядом с игроком и темнеет под ним', () => {

@@ -211,7 +211,7 @@ exists. Its config is assembled by the engine's
 | `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR. `reset()` also drops the local tank's meta, so the prediction overlay disappears right away instead of waiting for the spectator keyset |
 | `decode_frame(bytes)` | a plain v5 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
 | `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
-| `ramp_runs()` | the current map's ramp runs as a JSON array `{axis, sign, from, to, min, max, crossMin, crossMax, block}` in WORLD units — the very `MapLevels::runs` the physics puts its ramp guards on; `[]` when there is no map or it is single-level. The renderer draws the wedge by it (the `rampRuns` service), so the picture and the physics cannot drift apart |
+| `ramp_runs()` | the current map's ramp runs as a JSON array `{axis, sign, from, to, min, max, crossMin, crossMax, block, railMin, railMax}` in WORLD units (`railMin`/`railMax` — the side rails' bounds from `map::ramp_rail_span`, `null` when the run gets none) — the very `MapLevels::runs` the physics puts its ramp guards on; `[]` when there is no map or it is single-level. The renderer draws the wedge by it (the `rampRuns` service), so the picture and the physics cannot drift apart |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
 immediately under a local id (`L1`, `L2`, …) while the request travels to
@@ -508,11 +508,15 @@ the authoritative one.
   on a wide ramp (`is_lane_change`): a rectangular block of ramp tiles is
   cut into parallel lane runs by `MapLevels::build_runs`, and the crate
   numbers the lanes of one hill with a shared `RampRun::block`, so a step
-  ACROSS the axis into a run of the SAME block carries the verdict over —
-  without it every lane border would break the climb halfway up. The number
-  comes from the engine on purpose: the physics fences a block by the same
-  field, and two definitions of one hill would drift apart. Lanes of
-  DIFFERENT length fall into different blocks and the gate judges the move. The entry is legal when the previous
+  into ANOTHER run of the SAME block carries the verdict over — without it
+  every lane border would break the climb halfway up. The BLOCK NUMBER is
+  the whole rule: the step's direction decides nothing, because a diagonal
+  step changes both cells at once and a "straight across the axis" demand
+  broke the climb in the middle of a wide hill. The number comes from the
+  engine on purpose: the physics fences a block by the same field, and two
+  definitions of one hill would drift apart. Lanes of DIFFERENT length fall
+  into different blocks and the gate judges the move; so does an entry from
+  an END of a lane, where the previous cell is no ramp at all. The entry is legal when the previous
   step's cell (`prev_cell`, written every step) lies outside this run and
   the ENTRY cell is an END cell matching the tank's level: the foot for the
   lower level, the top for the upper one. The direction of the entry is not
@@ -521,7 +525,11 @@ the authoritative one.
   entry, by the entry cell itself). A step ACROSS the axis adds two
   conditions so that an entry cannot become a lift: the body must stand at
   its own level's height, and the ramp's height at the entry point must be
-  within `MAX_SIDE_ENTRY_RISE` (half a level) of it. A tank that came into
+  closer to it than `maxSideEntryRise` (`LevelRules::max_side_entry_rise`,
+  half a level by default). The bound EXCLUDES its own value: a jump of
+  exactly half a level is already illegal — on a run one cell long (which
+  has no side rails at all) it produced a visible click of the hull and its
+  shadow. A tank that came into
   the MIDDLE of a run, or ran into the top end from below (the passage under
   the bridge), keeps its level and treats the run as flat ground — if the
   run's guards let it in at all (see below; they do not close the foot
@@ -579,9 +587,27 @@ no grid and fence a whole BLOCK of ramp lanes, never a single lane. The
 client replica takes the very same geometry from the engine
 (`map::ramp_guards`, computed once per map load by both the host and
 `Predictor::set_map`) — one formula for both sides, a copy would drift
-silently. And the replica lets through ANY body standing on a run cell, not
-just the local tank: the "on a run" flag is read off the map under the body
-(`MapLevels::ramp_at`), exactly as the host reads it. Walls the replica
+silently. The replica's "do I see the guards" rule is a single function as
+well — `level::body_on_ramp`: only a body LEGALLY driving up a run passes
+them through. The local tank's verdict comes from the gate
+(`LevelState::on_ramp`); a map body never climbs at all (the host never
+gives map bodies `levels_interaction_on_ramp`, so a crate shoved onto a run
+runs into the rail); and a remote tank is judged by the height in its
+snapshot row: having refused the gate, the host puts `z` exactly on the
+level, while a legal climber gets a fractional one.
+
+A remote tank's height arrives in FRAMES only (`RemoteTanks::begin_reconcile`
+and `update`): between frames the replica moves the body itself and keeps
+the previous `z`. The verdict therefore lags by exactly one frame, and only
+on entry, where the height is still whole while the body already stands on a
+run cell. That lag has nowhere to go wrong: the rails start one cell FARTHER
+in than the foot (`map::ramp_rail_span`), and in one interpolation-buffer
+frame the body does not reach them, while at the top there are no guards for
+upper-level bodies at all. Predicting a remote tank's height would mean a
+second gate in the replica, with its own cell history — a second copy of the
+rule, free to drift silently.
+
+Walls the replica
 reads as the glued blocks of `MapLevels::static_blocks`
 (`collect_block_contacts_into`), the very list the host puts its colliders
 by.
@@ -661,10 +687,33 @@ it the divergence is permanent: reversing at the very brink is applied by
 the replay at the CLIENT's timing, so the hull comes back onto the slab and
 the replica never falls, while the host — which receives that same reverse
 when it is already falling — lands a level below, and nothing ever brings
-the two back together. A level ABOVE the replica is never adopted (that is
-the late-frame bug above), and a run is excluded entirely: there the frame
-lags downwards, by the replica's own state and by the map under the
-authoritative position alike.
+the two back together. A run is excluded entirely: there the frame lags
+downwards, by the replica's own state and by the map under the authoritative
+position alike.
+
+A level ABOVE the replica is never adopted on the spot (that is the
+late-frame bug above), but it IS adopted on a PERSISTENT disagreement: once
+the frame has held a level above the replica for `levelAdoptFrames` frames
+in a row (`LevelRules::level_adopt_frames`, 8 by default — about 0.4 s at
+~20 frames/s), the replica takes the frame's level and height. A frame lags
+by the interpolation buffer, that is by tens of milliseconds, so a
+disagreement that long cannot be lag any more. An agreement or a ramp run
+resets the counter immediately.
+
+Only a frame taken ON SUPPORT counts, that is one whose `z` sits exactly on
+its own level (`level::LEVEL_EPSILON` — the same test that tells a body
+standing on a run from one climbing it, `level::body_on_ramp`). This is not
+a detail: for the whole duration of a fall the host holds `level` at the
+level the body fell from and leads `z` down fractionally, so EVERY frame in
+flight reads as "above the replica". Under a slab the `airborne` branch does
+not catch them either — support at the upper level is right there overhead —
+so counting them would collect `levelAdoptFrames` during the descent itself
+and throw the already-landed replica back onto the bridge, which is exactly
+the bug `plan/done/ramp-entry-descent.md` closed.
+
+Without this branch a replica that ended up BELOW the host (a gate verdict
+that drifted, a respawn on a slab without `camera.forceReset`, a level snap
+on the host outside a respawn) would stay there forever.
 
 The `LevelState` itself takes part in reconciliation too. The replay starts
 from the authoritative position, and the level state is not a position: its
@@ -678,16 +727,25 @@ recomputed by the replay. When the history does NOT cover the frame (after
 a `reset()`, a map change, a long pause or an RTT spike) there is nothing to
 rewind to, and the level and height are then taken from the frame itself
 rather than left over from the prediction — `on_server_state` rebuilds the
-fall phase out of them right away.
+fall phase out of them right away. `Predictor::set_map` clears the level
+state, the history and the authoritative pair for the same reason: they
+belong to the OLD geometry, and keeping them would judge the first entry
+onto a run of the new map by a cell of the previous one. And when the frame
+carries no row of one's own at all (the tank is destroyed, a partial CLEAR,
+a `null` marker), `correct_level(None)` drops the authoritative pair instead
+of leaving the previous frame's — the `airborne` and "lower level" branches
+would otherwise act on stale data.
 
-The **first** frame is the exception: the engine sets the client's own
-`gameId` only after `begin_reconcile` (`client/game.rs`), so there is
-nothing yet to look the local tank's row up by. That one time, on the row's
-first sighting, `track_frame` reads it and hands it to
-`Predictor::adopt_level` — the only path that applies a frame as is: there
-is no prediction yet and nothing to replay, and otherwise a tank spawned on
-a slab (`overpass` has such respawns) would be predicted on the ground for a
-whole frame. On that frame the sample lags by nothing: there is nothing to
+The exception is a frame with no prediction behind it yet: the **first**
+frame carrying the local tank, and a **respawn**. The engine sets the
+client's own `gameId` only after `begin_reconcile` (`client/game.rs`), so
+there is nothing yet to look the local tank's row up by; and on a respawn
+(`condition` 0 → alive) there is nothing to predict either, while
+`Predictor::reset` runs on `camera.forceReset` alone. Both rows are read by
+`track_frame` and handed to `Predictor::adopt_level` — the only path that
+applies a frame as is: there is nothing to replay, and otherwise a tank
+spawned on a slab (`overpass` has such respawns) would be predicted on the
+ground for a whole frame. On that frame the sample lags by nothing: there is nothing to
 interpolate between yet.
 
 Map bodies are reconciled the same way. `MapDynamics::begin_reconcile()`

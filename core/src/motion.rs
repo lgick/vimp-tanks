@@ -191,6 +191,8 @@ mod tests {
             max_fall_damage: 100.0,
             climb_gravity: 500.0,
             climb_max_speed_factor: 0.5,
+            level_adopt_frames: 8,
+            max_side_entry_rise: 0.5,
         }
     }
 
