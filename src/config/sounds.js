@@ -38,6 +38,9 @@ const sounds = {
     volume: 0.48,
   },
 
+  // https://freesound.org/people/7of9Designs/sounds/640204/
+  tankLanding: { file: 'tank-landing', priority: 60, volume: 0.7 },
+
   // https://freesound.org/people/monosfera/sounds/572294/
   // громче остальных и с запасом на холостые: множитель холостого хода в
   // Tank.js — 0.6, поэтому эффективная громкость стоящего танка 0.5 × 0.6 =

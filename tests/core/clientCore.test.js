@@ -2,6 +2,13 @@ import { describe, it, expect } from 'vitest';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
 import { readFileSync } from 'node:fs';
 import {
+  M1_Z,
+  M1_LEVEL,
+  M1_VZ,
+  M1_PITCH,
+  M1_ROLL,
+} from '../../src/client/snapshotFields.js';
+import {
   coreAvailable,
   makeCore,
   makeClientCore,
@@ -110,7 +117,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       let decoded = decodeFrame(client, packFrame(core, 0, 1));
       const row = decoded.snapshot.m1['2'];
 
-      expect(row).toHaveLength(13);
+      expect(row).toHaveLength(16);
       expect(row[0]).toBe(100.57); // round2
       expect(row.slice(7, 10)).toEqual([3, 2, 1]); // condition, size, teamId
       expect(row[10]).toBe(0); // angvel — стоящий танк не крутится
@@ -258,9 +265,9 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       expect(hot[0] & HAS_PREDICTED).toBeTruthy();
 
-      // predicted-запись последняя (15 f32: keyId, gameId + 13 полей m1),
+      // predicted-запись последняя (18 f32: keyId, gameId + 16 полей m1),
       // x — третье поле записи
-      expect(hot[hot.length - 13]).toBeCloseTo(100, 3);
+      expect(hot[hot.length - 16]).toBeCloseTo(100, 3);
 
       client.apply_input('down', 'forward', 1150);
 
@@ -270,7 +277,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       hot = client.hot_values();
 
-      const x = hot[hot.length - 13];
+      const x = hot[hot.length - 16];
 
       expect(x).toBeGreaterThan(105);
 
@@ -306,7 +313,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       const [coreX] = core.position_of(1);
       const hot = client.hot_values();
-      const predictedX = hot[hot.length - 13];
+      const predictedX = hot[hot.length - 16];
 
       // допуск шире cargo-паритета: рендер-тик клиента дробит время
       // аккумулятором (float-режим реального цикла)
@@ -399,11 +406,16 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       client.sample(1150);
       client.take_frames();
 
-      // предсказанный хвост своей строки: z и уровень (последние два поля)
+      // предсказанный хвост своей строки: z, уровень и хвост наклона
+      // (16 полей схемы m1 после keyId/gameId)
       const hot = client.hot_values();
+      const row = hot.slice(hot.length - 16);
 
-      expect(hot[hot.length - 1]).toBe(1); // level
-      expect(hot[hot.length - 2]).toBe(1); // z
+      expect(row[M1_LEVEL]).toBe(1);
+      expect(row[M1_Z]).toBe(1);
+      expect(row[M1_VZ]).toBe(0);
+      expect(row[M1_PITCH]).toBe(0);
+      expect(row[M1_ROLL]).toBe(0);
 
       const tracer = JSON.parse(client.try_fire(1200)).w1[0];
 

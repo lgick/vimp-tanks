@@ -7,10 +7,11 @@ import trackMarkTexture from './trackMarkTexture.js';
 import tankShadowTexture from './tankShadowTexture.js';
 
 export default {
-  // три ассета - один и тот же размытый круг, различаются параметрами
+  // четыре ассета - один и тот же размытый круг, различаются параметрами
   explosionTexture: blurredCircleTexture,
   smokeTexture: blurredCircleTexture,
   impactParticleTexture: blurredCircleTexture,
+  dustTexture: blurredCircleTexture,
   tankShadowTexture,
   funnelTexture,
   tankTexture,

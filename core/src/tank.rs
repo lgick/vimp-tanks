@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
 use crate::config::{KeyConfig, LevelRules, ModelConfig, PanelValue, WeaponConfig};
-use crate::level::{Footprint, LevelState};
+use crate::level::{Footprint, LevelState, Transit};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
 use crate::motion::{self, TurretInput};
@@ -12,9 +12,9 @@ use vimp_engine_core::physics::{deg_to_rad, round2};
 use vimp_engine_core::rng::Rng;
 
 /// Строка снапшота танка: 7 float (x,y,angle,gunRotation,vx,vy,engineLoad) +
-/// condition/size/teamId + angvel + z/level (движковый `BlockKind::Indexed8`
-/// — форма, не игровая сущность; движок принимает `Vec<FieldValue>` в
-/// порядке `m1`-схемы src/config/snapshot.js).
+/// condition/size/teamId + angvel + z/level + vz/pitch/roll (движковый
+/// `BlockKind::Indexed8` — форма, не игровая сущность; движок принимает
+/// `Vec<FieldValue>` в порядке `m1`-схемы src/config/snapshot.js).
 #[derive(Clone, Copy)]
 pub struct TankRow {
     pub floats: [f32; 7],
@@ -24,6 +24,13 @@ pub struct TankRow {
     pub angvel: f32,
     pub z: f32,
     pub level: u8,
+    /// вертикальная скорость (уровней/с): вне полёта ноль
+    pub vz: f32,
+    /// наклон корпуса, радианы: чужие танки наклонять больше нечем —
+    /// восстановление уклона из разницы высот между кадрами замирало у
+    /// стоящего танка, поэтому наклон авторитетен
+    pub pitch: f32,
+    pub roll: f32,
 }
 
 impl TankRow {
@@ -36,6 +43,9 @@ impl TankRow {
         fields.push(FieldValue::F32(self.angvel));
         fields.push(FieldValue::F32(self.z));
         fields.push(FieldValue::U8(self.level));
+        fields.push(FieldValue::F32(self.vz));
+        fields.push(FieldValue::F32(self.pitch));
+        fields.push(FieldValue::F32(self.roll));
         fields
     }
 }
@@ -116,6 +126,13 @@ pub struct Tank {
     // башня
     pub gun_rotation: f32,
     pub centering_gun: bool,
+
+    /// Продольный и поперечный наклон корпуса, рад. Считается на хосте и
+    /// едет в кадре: клиент восстановить его не может — у чужих танков нет
+    /// ни `slope_vec`, ни `vz`, а восстановление из разницы высот между
+    /// кадрами замирает у стоящего танка (эта схема уже была и её убрали).
+    pub pitch: f32,
+    pub roll: f32,
 
     // движение
     engine_throttle: f32,
@@ -210,6 +227,8 @@ impl Tank {
             one_shot_events: 0,
             gun_rotation: 0.0,
             centering_gun: false,
+            pitch: 0.0,
+            roll: 0.0,
             engine_throttle: 0.0,
             engine_load: 0.0,
             condition: 3,
@@ -408,15 +427,6 @@ impl Tank {
     ) -> Option<ShotCommand> {
         let keys = self.keys_for_processing();
 
-        // падение: ввод игнорируется целиком (клавиши остаются нажатыми и
-        // подхватятся при приземлении), выстрел не производится
-        if self.level_state.input_locked() {
-            self.update_cooldowns(dt);
-            self.engine_load = 0.0;
-
-            return None;
-        }
-
         let forward = keys & bits.forward != 0;
         let back = keys & bits.back != 0;
         let left = keys & bits.left != 0;
@@ -432,7 +442,8 @@ impl Tank {
 
         self.update_cooldowns(dt);
 
-        // сначала поворот башни: gunRotation актуален перед расчётом выстрела
+        // сначала поворот башни: gunRotation актуален перед расчётом
+        // выстрела. Башня и выстрел работают ВСЕГДА, в том числе в полёте
         let turret = TurretInput {
             center: g_center,
             left: g_left,
@@ -441,6 +452,12 @@ impl Tank {
 
         (self.gun_rotation, self.centering_gun) =
             motion::step_turret(self.gun_rotation, self.centering_gun, turret, model, dt);
+
+        let forward_vec = body.rotation().transform_vector(FORWARD);
+
+        // наклон корпуса считается тоже всегда: у падающего танка нос ведёт
+        // вертикальная скорость, у стоящего на рампе — уклон под гусеницами
+        self.step_tilt(forward_vec.x, forward_vec.y, rules, dt);
 
         if fire && self.try_consume_ammo_and_shoot(weapons, events) {
             let weapon = &weapons[self.current_weapon];
@@ -452,11 +469,18 @@ impl Tank {
             });
         }
 
+        // полёт: ввод движения игнорируется целиком (клавиши остаются
+        // нажатыми и подхватятся при приземлении)
+        if self.level_state.input_locked() {
+            self.engine_load = 0.0;
+
+            return shot_data;
+        }
+
         self.engine_throttle =
             motion::step_throttle(self.engine_throttle, forward || back, model, dt);
 
         let current_velocity = body.linvel();
-        let forward_vec = body.rotation().transform_vector(FORWARD);
         let current_forward_speed = current_velocity.dot(forward_vec);
 
         // импульс против бокового скольжения: Δv · масса
@@ -588,6 +612,10 @@ impl Tank {
     ) {
         self.health = panel.get("health").map(|p| p.value).unwrap_or(100.0);
         self.condition = 3;
+        // респаун обязан ставить корпус ровно: наклон прошлой жизни не
+        // должен доезжать до новой точки появления
+        self.pitch = 0.0;
+        self.roll = 0.0;
 
         events.push(CoreEvent::PanelSet {
             id: self.game_id,
@@ -605,6 +633,26 @@ impl Tank {
                 value: self.ammo[index],
             });
         }
+    }
+
+    /// Шаг наклона корпуса: цель из `slope_vec`/`vz`, затем сглаживание.
+    /// Обе формулы живут в `motion`, потому что реплика обязана считать
+    /// наклон теми же функциями и в том же порядке.
+    fn step_tilt(&mut self, heading_x: f32, heading_y: f32, rules: &LevelRules, dt: f32) {
+        let vz = match self.level_state.transit {
+            Transit::Airborne { vz, .. } => vz,
+            _ => 0.0,
+        };
+        let (target_pitch, target_roll) = motion::tilt_target(
+            self.level_state.slope_vec,
+            (heading_x, heading_y),
+            vz,
+            self.level_state.airborne(),
+            rules,
+        );
+
+        self.pitch = motion::approach_tilt(self.pitch, target_pitch, rules, dt);
+        self.roll = motion::approach_tilt(self.roll, target_roll, rules, dt);
     }
 
     /// Строка снапшота (Tank.getData): значения скруглены до 2 знаков.
@@ -632,6 +680,15 @@ impl Tank {
             angvel: round2(body.angvel()),
             z: round2(self.level_state.z),
             level: self.level_state.level,
+            vz: round2(match self.level_state.transit {
+                Transit::Airborne { vz, .. } => vz,
+                _ => 0.0,
+            }),
+            // шаг round2 по радианам — 0.01 рад ≈ 0.6°, на глаз незаметно;
+            // если наклон станет ступенчатым, округление здесь — первое
+            // место, куда смотреть
+            pitch: round2(self.pitch),
+            roll: round2(self.roll),
         }
     }
 
@@ -739,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn falling_tank_ignores_input() {
+    fn falling_tank_ignores_movement_input() {
         let mut world = PhysicsWorld::new();
         let mut tank = make_tank(&mut world);
         let bits = key_bits();
@@ -748,10 +805,11 @@ mod tests {
 
         tank.update_keys("down", bits.forward, &bits);
         tank.update_keys("down", bits.fire, &bits);
-        tank.level_state.transit = Transit::Falling {
-            elapsed: 0.0,
+        tank.level_state.transit = Transit::Airborne {
+            vz: 0.0,
             from: 1,
             to: 0,
+            peak: 1.0,
         };
 
         let body = &mut world.bodies[tank.body];
@@ -766,8 +824,8 @@ mod tests {
             &mut events,
         );
 
-        assert!(shot.is_none(), "падающий танк не стреляет");
-        assert_eq!(body.linvel().length(), 0.0, "и не получает импульсов");
+        assert!(shot.is_some(), "падающий танк стреляет: башня работает");
+        assert_eq!(body.linvel().length(), 0.0, "но импульсов не получает");
 
         // после приземления удерживаемая клавиша подхватывается
         tank.level_state = LevelState::default();

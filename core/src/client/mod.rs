@@ -115,13 +115,20 @@ impl ClientMapConfig {
 }
 
 // индексы полей строки m1 (x, y, angle, gunRotation, vx, vy, engineLoad,
-// condition, size, teamId, angvel, z, level) — позиционный контракт со
-// схемой src/config/snapshot.js.
+// condition, size, teamId, angvel, z, level, vz, pitch, roll) —
+// позиционный контракт со схемой src/config/snapshot.js.
 const TANK_FIELD_CONDITION: usize = 7;
 const TANK_FIELD_SIZE: usize = 8;
 const TANK_FIELD_TEAM: usize = 9;
 const TANK_FIELD_Z: usize = 11;
 const TANK_FIELD_LEVEL: usize = 12;
+const TANK_FIELD_VZ: usize = 13;
+// pitch/roll ядру не нужны — их читает только JS-рендер; объявлены для
+// симметрии контракта и используются в тестах
+#[cfg(test)]
+const TANK_FIELD_PITCH: usize = 14;
+#[cfg(test)]
+const TANK_FIELD_ROLL: usize = 15;
 
 fn field_u8(fields: &[FieldValue], i: usize) -> u8 {
     match fields.get(i) {
@@ -264,16 +271,22 @@ impl GameClientDef for TanksClient {
             set.begin_reconcile(snapshot);
         }
 
-        // высота и уровень своего танка — из СЫРОГО кадра, того самого, с
-        // позиции которого начнётся реплей: интерполированный сэмпл
-        // (`track_frame`) отстаёт на буфер, и по нему фаза падения
-        // восстанавливалась бы со сдвигом
+        // высота, уровень и вертикальная скорость своего танка — из СЫРОГО
+        // кадра, того самого, с позиции которого начнётся реплей:
+        // интерполированный сэмпл (`track_frame`) отстаёт на буфер, и по
+        // нему фаза полёта восстанавливалась бы со сдвигом
         let authoritative = match (self.my_game_id, self.my_model_key.as_ref()) {
             (Some(my_id), Some(model_key)) => match snapshot.block_by_key(model_key) {
                 Some(BlockData::Indexed8(items)) => items
                     .get(&(my_id as u8))
                     .and_then(|row| row.as_ref())
-                    .map(|row| (field_f32(row, TANK_FIELD_Z), field_u8(row, TANK_FIELD_LEVEL))),
+                    .map(|row| {
+                        (
+                            field_f32(row, TANK_FIELD_Z),
+                            field_u8(row, TANK_FIELD_LEVEL),
+                            field_f32(row, TANK_FIELD_VZ),
+                        )
+                    }),
                 _ => None,
             },
             _ => None,
@@ -355,6 +368,7 @@ impl GameClientDef for TanksClient {
                         self.predictor.adopt_level(
                             field_f32(row, TANK_FIELD_Z),
                             field_u8(row, TANK_FIELD_LEVEL),
+                            field_f32(row, TANK_FIELD_VZ),
                         );
                     }
                 }
@@ -386,7 +400,8 @@ impl GameClientDef for TanksClient {
     }
 
     // predicted-хвост hot-буфера: keyId, gameId, x, y, angle, gun, vx, vy,
-    // engineLoad, condition, size, teamId, angvel, z, level (15 f32) —
+    // engineLoad, condition, size, teamId, angvel, z, level, vz, pitch,
+    // roll (18 f32) —
     // порядок полей после gameId обязан совпадать со схемой m1
     // (src/config/snapshot.js); без meta своего танка не рендерится.
     // z/level предсказанные: их считает предиктор теми же функциями
@@ -416,6 +431,9 @@ impl GameClientDef for TanksClient {
                 p.angvel,
                 p.z,
                 p.level as f32,
+                p.vz,
+                p.pitch,
+                p.roll,
             ],
         })
     }
@@ -585,7 +603,10 @@ mod tests {
                         { "name": "team", "ty": "u8" },
                         { "name": "angvel", "ty": "f32", "interp": "lerp" },
                         { "name": "z", "ty": "f32", "interp": "lerp" },
-                        { "name": "level", "ty": "u8" }
+                        { "name": "level", "ty": "u8" },
+                        { "name": "vz", "ty": "f32", "interp": "lerp" },
+                        { "name": "pitch", "ty": "f32", "interp": "lerp" },
+                        { "name": "roll", "ty": "f32", "interp": "lerp" }
                     ] },
                     "w1": { "id": 2, "kind": "list16", "class": "event", "fields": [
                         { "name": "startX", "ty": "f32" },
@@ -652,6 +673,9 @@ mod tests {
             FieldValue::F32(0.0),
             FieldValue::F32(0.0),
             FieldValue::U8(0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
+            FieldValue::F32(0.0),
         ]
     }
 
@@ -745,8 +769,9 @@ mod tests {
         assert_eq!(hot[5], 2.0);
         assert_eq!(hot[6], 15.0);
 
-        // динамики нет (запись танка — 2 служебных поля + 11 полей схемы)
-        assert_eq!(hot[4 + 13], 0.0);
+        // динамики нет (запись танка — 2 служебных поля + 14 полей схемы:
+        // дискретные condition/size/team/level в hot-строку не идут)
+        assert_eq!(hot[4 + 16], 0.0);
 
         // событийные кадры: пересечён кадр seq 1
         let frames: Vec<serde_json::Value> =
@@ -780,8 +805,8 @@ mod tests {
         assert!(flags & HOT_HAS_PREDICTED != 0);
 
         // predicted-запись последняя: keyId, gameId, x, ...,
-        // condition/size/team, angvel, z, level
-        let p = &hot[hot.len() - 15..];
+        // condition/size/team, angvel, z, level, vz, pitch, roll
+        let p = &hot[hot.len() - 18..];
 
         assert_eq!(p[0], 1.0);
         assert_eq!(p[1], 2.0);
@@ -806,6 +831,13 @@ mod tests {
 
         // хвост = keyId + gameId + строка блока модели целиком
         assert_eq!(overlay.tail.len(), 2 + schema);
+
+        // хвост 2.5D стоит на своих местах схемы (сдвиг — 2 служебных
+        // поля): у стоящего на ровной земле танка все три — нули
+        assert_eq!(overlay.tail[2 + TANK_FIELD_Z], 0.0);
+        assert_eq!(overlay.tail[2 + TANK_FIELD_VZ], 0.0);
+        assert_eq!(overlay.tail[2 + TANK_FIELD_PITCH], 0.0);
+        assert_eq!(overlay.tail[2 + TANK_FIELD_ROLL], 0.0);
     }
 
     #[test]
@@ -875,7 +907,7 @@ mod tests {
         state.sample(1450.0);
 
         let hot = state.hot().to_vec();
-        let p = &hot[hot.len() - 15..];
+        let p = &hot[hot.len() - 18..];
 
         // предсказанная позиция снаплена в 500 (без визуальной ошибки)
         assert_eq!(p[2], 500.0);

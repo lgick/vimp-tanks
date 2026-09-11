@@ -76,6 +76,13 @@ holds the transitions). Each level brings its own `layers`, over its own
   the ramps of your map are too easy. It does not affect the picture: how
   much height the render shows is `parts.parallax.shear`, shared by every
   map.
+- **Ramp jumps are the map author's business.** Leaving a run's top end
+  throws the tank into the air whenever the vertical speed at the exit (the
+  grade times the speed along it) exceeds `minLaunchVz`: a gentle run gives
+  no jump at all, a steep one at full throttle does. The platform past the
+  top end must be LONGER than a plain drive-off needs: a jumping tank flies
+  over it and can clear its far edge. Check steep runs in `npm run dev` at
+  full throttle.
 - **Railings must be part of the slab** — a `walls` tile also belongs in
   `floor`, otherwise the railing hangs in the air and a shot from below
   does not see it.
@@ -242,7 +249,12 @@ Steps:
    **two-pass** `loudnorm` and skips `silenceremove` — a single pass is a
    dynamic normalizer and head trimming shifts the seam, so either way the
    two ends of the loop stop matching in level (heard as pulsing).
-4. Playback: UI/system sounds — `soundManager.playSystemSound(name)`;
+4. A part can fire a sound itself instead of going through the engine's
+   `soundCues` event mapping (`src/config/game.js`): that is how
+   `tankLanding` works — the `Dust` part plays it, because it sees the
+   landing in the frame as `vz` rather than as a host event, and it sounds
+   for every tank, not only for your own.
+5. Playback: UI/system sounds — `soundManager.playSystemSound(name)`;
    spatial ones — `registerSound(name, { position })` (voice limits and
    priorities are handled by the engine's `SoundManager`, see the
    engine's
@@ -275,6 +287,14 @@ Steps:
    `tankShadowTexture` (the hull silhouette) is.
 4. If it needs services (`renderer`, `soundManager`), add the class to
    `componentDependencies`.
+
+The freshest example of the whole chain is `Dust` (track dust and the
+landing burst): the class in `src/client/parts/Dust.js` exported from
+`parts/index.js`, the `m1` key in `gameSets` and `vimp` in
+`entitiesOnCanvas`, a baked `dustTexture` (the same `blurredCircleTexture`
+as the smoke, in white — the particle's `tint` gives it colour) and three
+entries in `componentDependencies` (`renderer`, `soundManager`,
+`levelView`). All four config places live in `src/config/client.js`.
 
 Entities can be subclassed and shown on different canvases: for example,
 a simplified radar class is created for the radar (like `MapRadar` from

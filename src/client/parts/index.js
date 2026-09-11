@@ -6,6 +6,7 @@ import Bomb from './Bomb.js';
 import ExplosionEffect from './effects/explosion/ExplosionEffectController.js';
 import Smoke from './Smoke.js';
 import Tracks from './tracks/index.js';
+import Dust from './Dust.js';
 import ShotEffect from './effects/shot/ShotEffectController.js';
 
 export default {
@@ -17,5 +18,6 @@ export default {
   ExplosionEffect,
   Smoke,
   Tracks,
+  Dust,
   ShotEffect,
 };

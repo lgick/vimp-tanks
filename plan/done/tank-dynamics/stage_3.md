@@ -1,4 +1,4 @@
-# Этап 3. Провод: три новых поля снапшота
+# Этап 3. Провод: три новых поля снапшота ✅ выполнен
 
 Требует этапы 1 и 2.
 
@@ -165,8 +165,26 @@ JS-сторона, `tests/config/` (проект `tanks`):
 
 ## Готовность этапа
 
-- [ ] `npm run core:test`, `npm test`, `npx eslint .` зелёные
-- [ ] `npm run core:build && npm run build && npm run sim:scenarios` —
+- [x] `npm run core:test`, `npm test`, `npx eslint .` зелёные
+- [x] `npm run core:build && npm run build && npm run sim:scenarios` —
       сценарии проходят (пороги `divergence` в `tests/scenarios/*.json`
       заданы по числу полей player-блока, а он не менялся: там 8 порогов
       по `PLAYER_STATE_LEN`, трогать не нужно)
+
+> `predictionDrift` в bridge/crosslevel/fall/terraces_climb/terraces_crate
+> красный — но ровно так же он красный и ДО этого этапа (проверено на
+> `git stash`): расхождение по полю 7 player-блока (`engineThrottle`,
+> предсказано 1 против авторитетных 0.9375) пришло с этапами 1–2. Этап 3
+> ширину player-блока не трогает; починка — за этапом 6.
+
+## Отличия от плана
+
+- `players_json_matches_schema_width` (`core/tests/sim.rs`) правки не
+  потребовал: ширина в нём берётся из схемы, а не зашита числом.
+- `RemoteTanks::render_data` собирал рендер-строку чужого танка жёстко по
+  13 полей — это и была «зашитая ширина ряда» из пункта 6. `TankMeta`
+  расширен `vz`/`pitch`/`roll` (реплика их не считает, а форму блока
+  строка обязана повторять целиком).
+- Схема `m1` продублирована ещё в двух тестовых фикстурах
+  (`core/src/client/mod.rs::config_json`, `core/tests/sim.rs::flat_config_json`)
+  — обе расширены.

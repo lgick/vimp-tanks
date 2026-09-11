@@ -915,6 +915,9 @@ mod tests {
             z: 0.0,
             level: 0,
             falling: false,
+            pitch: 0.0,
+            roll: 0.0,
+            vz: 0.0,
         }
     }
 

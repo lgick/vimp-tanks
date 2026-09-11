@@ -244,13 +244,14 @@ the snapshot schema or the panel. The scenarios:
 | `round.json` | bots, friendly fire, death → round end → respawn (invariant 10) |
 | `contact.json` | two tanks in contact: one pushes the other, both predict the remote hull (`remote_tanks.rs`) |
 | `bridge.json` | `overpass`: up the west ramp, across the bridge in the middle lane (the outer ones hold boxes), coasting down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
-| `fall.json` | `overpass`: off a gap in the railings — `Falling`, `z` down to 0, landing at level 0 |
+| `fall.json` | `overpass`: off a gap in the railings — `Airborne`, `z` down to 0, landing at level 0 |
 | `crosslevel.json` | `overpass`: two players on different levels, hitscan across the levels and a bomb on the slab that does not touch the tank underneath |
 | `selfblast.json` | the same run carried on: the player switches to `w2` and drops a bomb under himself — the blast throws him ~50 units |
 | `bots_bridge.json` | `overpass`: a player plus `/bot 2` over a long run — bots use the ramp and do not get stuck (invariants 10/11) |
 | `terraces_climb.json` | `terraces`: up the steep 0 → 2 run in one drive and back down in reverse — `z` runs 0 → 2 in the dumps |
 | `terraces_backside.json` | `terraces`: two players enter the same run through the wrong side — from the passage under the slab and from the flank; neither is lifted |
 | `terraces_crate.json` | `terraces`: a crate pushed through a gap in the railings of level 2 lands on the slab of level 1, while the second player climbs the steep run |
+| `jump.json` | `terraces`: full throttle up the steep 0 → 2 run from `team1`'s first spawn — the take-off, the flight and the landing all pass without prediction drift or a panic in the core |
 
 A scenario asserts **nothing about the game rules**: the runner checks the
 engine's invariants and the prediction drift, and the 2.5D scenarios

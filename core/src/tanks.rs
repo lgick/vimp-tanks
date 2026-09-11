@@ -410,10 +410,11 @@ impl GameSim<TanksGame> for TanksSim {
 
         for (game_id, (model, row)) in &self.cached_players {
             // полный порядок полей схемы m1: 7 float, condition, size,
-            // team, angvel, z, level. Раньше метод обрывался на team, из-за
-            // чего первый кадр (FIRST_SHOT_DATA) и бинарные кадры имели
-            // разную ширину строки — с приходом level это стало ошибкой
-            let mut arr: Vec<Value> = Vec::with_capacity(13);
+            // team, angvel, z, level, vz, pitch, roll. Раньше метод
+            // обрывался на team, из-за чего первый кадр (FIRST_SHOT_DATA) и
+            // бинарные кадры имели разную ширину строки — с приходом level
+            // это стало ошибкой
+            let mut arr: Vec<Value> = Vec::with_capacity(16);
 
             for value in row.floats {
                 arr.push(Value::from(value as f64));
@@ -425,6 +426,9 @@ impl GameSim<TanksGame> for TanksSim {
             arr.push(Value::from(row.angvel as f64));
             arr.push(Value::from(row.z as f64));
             arr.push(Value::from(row.level));
+            arr.push(Value::from(row.vz as f64));
+            arr.push(Value::from(row.pitch as f64));
+            arr.push(Value::from(row.roll as f64));
 
             by_model
                 .entry(model.clone())
@@ -847,7 +851,7 @@ impl TanksSim {
         // урон приземления правит `self` целиком, поэтому он откладывается
         // до конца обхода; порядок событий тот же — внутри обхода их никто
         // больше не пишет
-        let mut landed: Vec<(u32, u8)> = Vec::new();
+        let mut landed: Vec<(u32, f32, f32)> = Vec::new();
 
         for (id, tank) in tanks.iter_mut() {
             let Some(body) = ctx.world.bodies.get(tank.body) else {
@@ -862,10 +866,12 @@ impl TanksSim {
             }
 
             let before = tank.level_state;
+            let vel = body.linvel();
             let event = level::step_level(
                 &mut tank.level_state,
                 pos.x,
                 pos.y,
+                [vel.x, vel.y],
                 &footprint,
                 levels,
                 level_rules,
@@ -881,24 +887,57 @@ impl TanksSim {
                 tank.sync_collision_groups(ctx.world);
             }
 
-            if let LevelEvent::Landed { height } = event {
-                landed.push((*id, height));
+            if let LevelEvent::Landed { height, impact } = event {
+                landed.push((*id, height, impact));
             }
         }
 
         self.levels_dirty = false;
 
-        for (id, height) in landed {
-            self.apply_fall_damage(ctx, id, height);
+        for (id, height, impact) in landed {
+            self.push_landing_shake(ctx, id, impact);
+            self.apply_fall_damage(ctx, id, height, impact);
         }
+    }
+
+    /// Тряска камеры тому, кто приземлился. Второй источник
+    /// `CoreEvent::Shake` рядом с `weapon.camera_shake`: партам движок не
+    /// раздаёт «тряхнуть камеру», поэтому правило авторитетно и живёт в
+    /// ядре. Реплика (`client::predictor`) событий не собирает и
+    /// приземление игнорирует — двойной тряски быть не может.
+    fn push_landing_shake(&mut self, ctx: &mut SimCtx, game_id: u32, impact: f32) {
+        let Some(shake) = &self.level_rules.landing_shake else {
+            return;
+        };
+
+        let span = shake.full_impact - shake.min_impact;
+
+        if span <= 0.0 {
+            return;
+        }
+
+        // тот же порог, по которому клиент не даёт ни просадки, ни пыли,
+        // ни звука: мягкое касание камеру не трогает
+        let k = ((impact - shake.min_impact) / span).clamp(0.0, 1.0);
+
+        if k <= 0.0 {
+            return;
+        }
+
+        ctx.events.push(CoreEvent::Shake {
+            id: game_id,
+            intensity: shake.intensity * k as f64,
+            duration: shake.duration,
+        });
     }
 
     /// Урон при приземлении после падения с моста. Стрелка нет — урон
     /// приходит от самой карты, поэтому дружественный огонь и тряска
     /// оружия не при чём, а смерть засчитывается как самоубийство.
-    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32, height: u8) {
-        // урон пропорционален высоте падения и зажат потолком: падение с
-        // уровня 1 стоит ровно `fallDamage`, как в первой итерации
+    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32, height: f32, _impact: f32) {
+        // урон пропорционален высоте падения от вершины дуги и зажат
+        // потолком: падение с уровня 1 стоит ровно `fallDamage`, как в
+        // первой итерации
         let damage = (self.level_rules.fall_damage * height as f64)
             .min(self.level_rules.max_fall_damage);
 

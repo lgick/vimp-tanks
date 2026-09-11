@@ -1,11 +1,14 @@
-import { Container, Sprite } from 'pixi.js';
+import { Container, PerspectiveMesh, Sprite, Ticker } from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
 import { levelZ, renderLevel } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
 import { offsetPoint } from '../parallax.js';
+import { tiltCorners } from '../tilt.js';
 import {
   parallax as parallaxConfig,
   shadow as shadowConfig,
+  tilt as tiltConfig,
+  landing as landingConfig,
 } from '../../config/render.js';
 import {
   M1_X,
@@ -18,10 +21,18 @@ import {
   M1_TEAM,
   M1_Z,
   M1_LEVEL,
+  M1_VZ,
+  M1_PITCH,
+  M1_ROLL,
 } from '../snapshotFields.js';
 
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
+
+// потолок уровней карты (`MAX_LEVELS`, движковый крейт, src/map.rs): в
+// прыжке `_z` уходит выше уровня отрыва, и слой тени иначе улетел бы за
+// верхнюю плиту
+const LEVEL_MAX = 7;
 
 // масштаб корпуса на высоте, тень и ракурс на подъёме — числа 2.5D, они
 // живут в src/config/render.js (`parallax`, `shadow`)
@@ -92,16 +103,26 @@ export default class Tank extends Container {
   constructor(data, assets, dependencies, context) {
     super();
 
-    // спрайты для отображения танка
-    this.body = new Sprite();
-    this.gun = new Sprite();
+    // корпус, пушка и остов — PerspectiveMesh, а не Sprite: наклон корпуса
+    // (`pitch`/`roll` из кадра) деформирует квад, а спрайт умеет только
+    // масштаб и поворот. Якоря и масштаб у меша уходят ВНУТРЬ углов —
+    // их считает `src/client/tilt.js`, здесь остаётся только раздать
+    // результат в `setCorners` (см. _applyTilt)
+    const mesh = () =>
+      new PerspectiveMesh({
+        verticesX: tiltConfig.vertices,
+        verticesY: tiltConfig.vertices,
+      });
 
-    // спрайт для уничтоженного состояния
-    this.wreck = new Sprite();
+    this.body = mesh();
+    this.gun = mesh();
 
-    // якоря
-    this.body.anchor.set(0.5);
-    this.wreck.anchor.set(0.5);
+    // меш для уничтоженного состояния
+    this.wreck = mesh();
+
+    // якоря: у меша своего якоря нет, он параметр `tiltCorners`
+    this._bodyAnchor = { x: 0.5, y: 0.5 };
+    this._wreckAnchor = { x: 0.5, y: 0.5 };
 
     this.addChild(this.body, this.gun, this.wreck);
 
@@ -126,7 +147,8 @@ export default class Tank extends Container {
     this.x = this._worldX;
     this.y = this._worldY;
     this.rotation = data[M1_ANGLE] || 0;
-    this.gun.rotation = data[M1_GUN_ROTATION] || 0;
+    // поворот пушки — параметр её квада, а не трансформ меша
+    this._gunRotation = data[M1_GUN_ROTATION] || 0;
     this._engineLoad = data[M1_ENGINE_LOAD] || 0;
     this._condition = data[M1_CONDITION];
     this._size = data[M1_SIZE];
@@ -135,6 +157,19 @@ export default class Tank extends Container {
     // 2.5D: непрерывная высота (рампа/падение) и дискретный уровень
     // ОТРИСОВКИ (о нём — в update)
     this._z = data[M1_Z] || 0;
+
+    // вертикальная динамика: наклон корпуса считает ядро (`pitch`/`roll`),
+    // `vz` нужен клиенту как детектор касания
+    this._vz = data[M1_VZ] || 0;
+    this._prevVz = this._vz;
+    this._pitch = data[M1_PITCH] || 0;
+    this._roll = data[M1_ROLL] || 0;
+
+    // просадка корпуса на приземлении: сила удара 0..1 и остаток анимации
+    this._landImpact = 0;
+    this._landTimer = 0;
+    this._squash = 0;
+
     this._level = renderLevel(data[M1_LEVEL], this._z);
     this.zIndex = levelZ(TANK_BASE_Z, this._level);
 
@@ -148,6 +183,10 @@ export default class Tank extends Container {
     // ради которой он и заведён
     this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
     this._levelView = dependencies.levelView || null;
+
+    // приземление: пыль и звук подписываются колбэком, чтобы сам танк не
+    // знал про эмиттер частиц
+    this._onLanded = dependencies.onLanded || null;
 
     // видимость уровня и признаки высоты считаются каждый кадр, а не по
     // приходу строки: и камера, и локальный игрок двигаются между кадрами.
@@ -163,20 +202,13 @@ export default class Tank extends Container {
         : this._textures.liveTeamId2;
     const gunAnchorData = liveTextures ? liveTextures.gunAnchor : null;
 
-    if (gunAnchorData) {
-      this.gun.anchor.set(gunAnchorData.x, gunAnchorData.y);
-    } else {
-      this.gun.anchor.set(0.5); // запасной вариант
-    }
+    this._gunAnchor = gunAnchorData
+      ? { x: gunAnchorData.x, y: gunAnchorData.y }
+      : { x: 0.5, y: 0.5 }; // запасной вариант
 
     // коэффициент масштабирования, чтобы соответствовать размеру танка
     const BAKER_BASE_SIZE = 10; // размер, использованный в текстурах
     this._scaleFactor = this._size / BAKER_BASE_SIZE;
-
-    // масштаб ко всем спрайтам
-    this.body.scale.set(this._scaleFactor);
-    this.gun.scale.set(this._scaleFactor);
-    this.wreck.scale.set(this._scaleFactor);
 
     this._soundManager = dependencies.soundManager;
     this._soundId = null;
@@ -236,7 +268,7 @@ export default class Tank extends Container {
       this.wreck.visible = true;
 
       // поворот башни, так как она теперь часть обломков
-      this.gun.rotation = 0;
+      this._gunRotation = 0;
 
       // при уничтожении отключение звука
       this.destroySounds();
@@ -260,19 +292,40 @@ export default class Tank extends Container {
 
       this._initSounds();
     }
+
+    // текстура задаёт габариты квада: без пересчёта углов меш остался бы с
+    // размерами прежней текстуры до первого кадра
+    this._applyTilt();
   }
 
   update(data) {
     this._worldX = data[M1_X];
     this._worldY = data[M1_Y];
     this.rotation = data[M1_ANGLE];
-    this.gun.rotation = data[M1_GUN_ROTATION];
+    this._gunRotation = data[M1_GUN_ROTATION];
     // `|| 0`, как в конструкторе: без него короткий ряд даёт undefined,
     // clamp() возвращает NaN, и в `sound.rate` каждый кадр уезжает NaN
     // (сравнение `rate !== activeInstance.rate` для NaN всегда истинно)
     this._engineLoad = data[M1_ENGINE_LOAD] || 0;
 
     this._z = data[M1_Z] || 0;
+
+    // `|| 0` здесь по той же причине, что у engineLoad: короткий ряд без
+    // хвоста иначе уводит углы квада в NaN
+    this._vz = data[M1_VZ] || 0;
+    this._pitch = data[M1_PITCH] || 0;
+    this._roll = data[M1_ROLL] || 0;
+
+    // касание: снижение было заметным, а в этом кадре скорость обнулилась.
+    // Детектор один и для своего танка, и для чужого — отдельного поля
+    // «приземлился» в кадре не нужно
+    if (this._prevVz < -landingConfig.minImpact && this._vz === 0) {
+      this._landImpact = Math.min(1, -this._prevVz / landingConfig.fullImpact);
+      this._landTimer = landingConfig.duration;
+      this._onLanded?.(this._landImpact);
+    }
+
+    this._prevVz = this._vz;
 
     // уровень ОТРИСОВКИ, а не физический (`renderLevel`): падающий танк
     // иначе рисовался бы слоем, тинтом и прозрачностью эстакады до самого
@@ -284,15 +337,7 @@ export default class Tank extends Container {
       this.zIndex = levelZ(TANK_BASE_Z, level);
     }
 
-    // высота читается масштабом корпуса: танк на эстакаде крупнее наземного
-    // ровно настолько же, насколько крупнее сама плита под ним — это та же
-    // проекция, что и сдвиг (`src/client/parallax.js`)
-    const zScale = 1 + this._z * parallaxConfig.shear;
-    const size = this._scaleFactor * zScale;
-
-    this.body.scale.set(size, size);
-    this.gun.scale.set(size, size);
-    this.wreck.scale.set(size, size);
+    this._applyTilt();
 
     if (this._levelView && this._isLocal()) {
       this._levelView.set(level, this._worldX, this._worldY, this._z);
@@ -327,6 +372,47 @@ export default class Tank extends Container {
     if (needsVisualChange) {
       this.create();
     }
+  }
+
+  // углы квада одного меша: масштаб высоты, просадка приземления и наклон
+  // корпуса — один трансформ, потому что у PerspectiveMesh нет ни якоря, ни
+  // осмысленного `scale` вокруг него
+  _setCorners(mesh, anchor, rotation, size, squashY) {
+    const { texture } = mesh;
+
+    mesh.setCorners(
+      ...tiltCorners({
+        width: texture.width * size,
+        height: texture.height * size * squashY,
+        anchorX: anchor.x,
+        anchorY: anchor.y,
+        rotation,
+        // выключенный наклон вырождает квад в обычный прямоугольник —
+        // отдельной «плоской» ветки держать не нужно
+        pitch: tiltConfig.enabled ? this._pitch : 0,
+        roll: tiltConfig.enabled ? this._roll : 0,
+        shear: parallaxConfig.shear,
+      }),
+    );
+  }
+
+  // высота читается масштабом корпуса: танк на эстакаде крупнее наземного
+  // ровно настолько же, насколько крупнее сама плита под ним — это та же
+  // проекция, что и сдвиг (`src/client/parallax.js`)
+  _applyTilt() {
+    const zScale = 1 + this._z * parallaxConfig.shear;
+    const size = this._scaleFactor * zScale;
+    const squashY = 1 - this._squash;
+
+    this._setCorners(this.body, this._bodyAnchor, 0, size, squashY);
+    this._setCorners(
+      this.gun,
+      this._gunAnchor,
+      this._gunRotation,
+      size,
+      squashY,
+    );
+    this._setCorners(this.wreck, this._wreckAnchor, 0, size, squashY);
   }
 
   // признаки уровня и высоты: прозрачность над игроком, затемнение под ним
@@ -367,6 +453,21 @@ export default class Tank extends Container {
 
     this.position.set(view.x, view.y);
 
+    // просадка идёт по ВРЕМЕНИ, а не по кадрам сети, поэтому живёт здесь.
+    // `sin` даёт горб без кривых и библиотек: быстрый удар, мягкий возврат
+    if (this._landTimer > 0) {
+      this._landTimer = Math.max(0, this._landTimer - Ticker.shared.deltaMS);
+
+      const t = this._landTimer / landingConfig.duration;
+
+      this._squash =
+        Math.sin(t * Math.PI) * landingConfig.squash * this._landImpact;
+    } else {
+      this._squash = 0;
+    }
+
+    this._applyTilt();
+
     this._updateShadow();
   }
 
@@ -405,12 +506,18 @@ export default class Tank extends Container {
       this._shadowScale * (1 + this._z * shadowConfig.scaleGain),
     );
     shadow.alpha =
-      Math.max(0, shadowConfig.baseAlpha - this._z * shadowConfig.alphaFalloff) *
-      this.alpha;
+      Math.max(
+        0,
+        shadowConfig.baseAlpha - this._z * shadowConfig.alphaFalloff,
+      ) * this.alpha;
 
     // тень лежит на слое, НАД которым висит танк: на рампе это ещё нижний
     // уровень, и именно поэтому по ней видно, что танк уже поднялся
-    shadow.zIndex = levelZ(TANK_BASE_Z - 1, Math.floor(this._z));
+    // в прыжке `_z` уходит выше любой плиты карты, а слоёв всего LEVEL_MAX
+    shadow.zIndex = levelZ(
+      TANK_BASE_Z - 1,
+      Math.min(LEVEL_MAX, Math.floor(this._z)),
+    );
   }
 
   // останавливает и сбрасывает все звуки, связанные с танком

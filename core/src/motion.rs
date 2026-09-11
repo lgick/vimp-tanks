@@ -126,6 +126,54 @@ pub fn drive_accel(
     accel - grade * rules.climb_gravity
 }
 
+/// Целевой наклон корпуса: продольный (`pitch`, нос вверх положителен) и
+/// поперечный (`roll`, правый борт вниз положителен).
+///
+/// `slope_vec` — вектор уклона из `LevelState` (уровней на мировую
+/// единицу, `[0,0]` вне рампы), `heading` — единичный вектор курса
+/// корпуса, `vz` — вертикальная скорость (уровней/с, 0 на земле).
+/// Вне рампы и вне полёта возвращает `(0.0, 0.0)`: одноуровневая карта
+/// наклона не замечает.
+pub fn tilt_target(
+    slope_vec: [f32; 2],
+    heading: (f32, f32),
+    vz: f32,
+    airborne: bool,
+    rules: &LevelRules,
+) -> (f32, f32) {
+    if airborne {
+        // в воздухе уклона под гусеницами нет: нос ведёт вертикальная
+        // скорость, крена нет вовсе
+        let pitch = clamp(vz * rules.tilt_air_gain, -rules.tilt_max, rules.tilt_max);
+
+        return (pitch, 0.0);
+    }
+
+    // продольный уклон — вдоль курса, поперечный — вдоль левого борта
+    let long = slope_vec[0] * heading.0 + slope_vec[1] * heading.1;
+    let lat = -slope_vec[0] * heading.1 + slope_vec[1] * heading.0;
+
+    let pitch = clamp(
+        (long * rules.tilt_gain).atan(),
+        -rules.tilt_max,
+        rules.tilt_max,
+    );
+    let roll = clamp(
+        (lat * rules.tilt_gain).atan(),
+        -rules.tilt_max,
+        rules.tilt_max,
+    );
+
+    (pitch, roll)
+}
+
+/// Шаг сглаживания наклона: экспоненциальный подход к цели.
+/// Отдельная функция, чтобы хост и реплика гарантированно считали одно и
+/// то же (обе стороны зовут её после `tilt_target`).
+pub fn approach_tilt(current: f32, target: f32, rules: &LevelRules, dt: f32) -> f32 {
+    lerp(current, target, (rules.tilt_response * dt).min(1.0))
+}
+
 /// Нагрузка двигателя (для звука): намерение + «напряжение».
 pub fn engine_load(throttle: f32, forward_speed: f32, model: &ModelConfig) -> f32 {
     let strain = (throttle - speed_ratio(forward_speed, model)).max(0.0);
@@ -183,6 +231,7 @@ mod tests {
     use super::*;
 
     use crate::config::LevelRules;
+    use crate::level::LevelState;
 
     fn rules() -> LevelRules {
         LevelRules {
@@ -193,6 +242,14 @@ mod tests {
             climb_max_speed_factor: 0.5,
             level_adopt_frames: 8,
             max_side_entry_rise: 0.5,
+            ramp_launch_factor: 1.0,
+            min_launch_vz: 0.35,
+            jump_clearance: 0.2,
+            tilt_gain: 2.0,
+            tilt_air_gain: 0.12,
+            tilt_response: 12.0,
+            tilt_max: 0.6,
+            landing_shake: None,
         }
     }
 
@@ -293,5 +350,89 @@ mod tests {
         let rules = rules();
 
         assert!(drive_accel(0.0, false, false, 0.0, 0.5, &model, &rules) < 0.0);
+    }
+
+    // курс на восток: (cos 0, sin 0)
+    const EAST: (f32, f32) = (1.0, 0.0);
+
+    #[test]
+    fn flat_ground_has_no_tilt() {
+        let rules = rules();
+
+        assert_eq!(tilt_target([0.0, 0.0], EAST, 0.0, false, &rules), (0.0, 0.0));
+    }
+
+    #[test]
+    fn uphill_lifts_the_nose() {
+        let rules = rules();
+
+        let up = tilt_target([0.33, 0.0], EAST, 0.0, false, &rules);
+        let down = tilt_target([-0.33, 0.0], EAST, 0.0, false, &rules);
+
+        assert!(up.0 > 0.0, "нос в горку обязан подниматься: {}", up.0);
+        assert!(down.0 < 0.0, "нос под горку обязан опускаться: {}", down.0);
+        assert!(up.1.abs() < 1e-6, "крена вдоль курса быть не должно");
+    }
+
+    #[test]
+    fn tilt_matches_grade_at_unit_gain() {
+        let mut rules = rules();
+
+        rules.tilt_gain = 1.0;
+
+        let state = LevelState {
+            slope_vec: [0.1, 0.0],
+            ..LevelState::default()
+        };
+        let (pitch, _) = tilt_target(state.slope_vec, EAST, 0.0, false, &rules);
+
+        assert!((pitch - state.grade(EAST.0, EAST.1).atan()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn side_slope_rolls_the_hull() {
+        let rules = rules();
+
+        // уклон поперёк курса: танк едет на восток, склон падает на юг
+        let (pitch, roll) = tilt_target([0.0, 0.33], EAST, 0.0, false, &rules);
+
+        assert!(pitch.abs() < 1e-6, "продольного наклона быть не должно");
+        assert!(roll.abs() > 0.1, "поперечный уклон обязан кренить корпус");
+    }
+
+    #[test]
+    fn tilt_is_capped() {
+        let rules = rules();
+
+        let (pitch, roll) = tilt_target([10.0, 10.0], EAST, 0.0, false, &rules);
+
+        assert!(pitch <= rules.tilt_max && roll <= rules.tilt_max);
+        assert!((pitch - rules.tilt_max).abs() < 1e-6);
+    }
+
+    #[test]
+    fn airborne_pitch_follows_vz() {
+        let rules = rules();
+
+        // уклон под гусеницами в воздухе не считается — его там нет
+        let up = tilt_target([0.5, 0.0], EAST, 2.0, true, &rules);
+        let down = tilt_target([0.5, 0.0], EAST, -2.0, true, &rules);
+
+        assert!(up.0 > 0.0 && down.0 < 0.0);
+        assert_eq!(up.1, 0.0);
+        assert_eq!(down.1, 0.0);
+    }
+
+    #[test]
+    fn approach_tilt_converges() {
+        let rules = rules();
+        let dt = 1.0 / 60.0;
+        let mut tilt = 0.0;
+
+        for _ in 0..100 {
+            tilt = approach_tilt(tilt, 0.4, &rules, dt);
+        }
+
+        assert!((tilt - 0.4).abs() < 1e-3, "наклон обязан сойтись: {tilt}");
     }
 }

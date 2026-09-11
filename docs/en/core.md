@@ -459,6 +459,17 @@ world coordinates).
 size×3` with damping from `models.js` and a cuboid collider that emits
 collision events (the projectile hits are collected by `TanksSim`).
 
+The hull tilt lives here too: `Tank` carries `pitch`/`roll` (radians) and
+recomputes them every step in `Tank::update` — BEFORE the early return on
+locked input, together with the turret, because tilt works in flight. The
+target comes from `motion::tilt_target` (the longitudinal and lateral parts
+of `slope_vec` under the hull's heading × `tiltGain`; in flight the nose
+follows `vz` × `tiltAirGain`, all clamped by `tiltMax`), and the smoothing
+from `motion::approach_tilt` (`tiltResponse`). A respawn levels the hull.
+Both formulas live in `motion` because the replica (`Predictor::step_tilt`)
+has to compute the tilt with the same functions in the same order; other
+players' tanks take their tilt straight from the frame.
+
 The body is created with `soft_ccd_prediction(width.min(height))` —
 predictive contacts up to the hull's own thickness. Rapier's default
 prediction distance, 0.002 units, is calibrated for a metre-scale world,
@@ -484,7 +495,7 @@ vector `slope_vec` and the `Transit` it is in.
 | --- | --- | --- | --- |
 | `Grounded` | standing on its own level | that level only | normal |
 | `Ramp { climbing, low, high, run }` | the hull's centre is on a ramp tile | with `climbing` — **every** level of the run (`low..=high`), otherwise its own level only | normal |
-| `Falling { elapsed, from, to }` | drove off a ledge | map walls only — no bodies | locked |
+| `Airborne { vz, from, to, peak }` | drove off a ledge or left a ramp's top end | map walls only — no bodies; above `from + jumpClearance` the mask is empty and the tank clears walls too | driving locked, turret and firing work |
 
 `step_level()` is the single source of these rules for both sides: the
 authoritative path (`TanksSim::update_levels`) and the client replica call
@@ -545,13 +556,13 @@ the authoritative one.
   climbGravity` from the thrust and trims the speed ceiling by
   `climbMaxSpeedFactor * grade`. Off a ramp the grade is exactly 0 and the
   formula is bit-for-bit the old one.
-- **Ledges.** A tank on level `L >= 1` enters `Falling` when its HULL has
+- **Ledges.** A tank on level `L >= 1` enters `Airborne` when its HULL has
   left the slab: support is judged by `level::has_support` — the hull's
   centre or any of its four corners over a floor tile of its own level.
   While a corner still rests on the slab the tank hangs over the void but
   stays `Grounded`, with its input free, so reversing at the very brink
   brings it back; the old centre-point test dropped it — irreversibly, as
-  `Falling` locks input — with half the hull still on the slab. Host
+  `Airborne` locks driving — with half the hull still on the slab. Host
   (`TanksSim::update_levels`, hull angle from the body) and replica
   (`Predictor::footprint`, angle from the predicted state) ask the same
   function; map bodies (crates) keep the engine's centre rule
@@ -562,17 +573,43 @@ the authoritative one.
   in that cell) — so a tank falling off level 2 over a level 1 slab lands on
   that slab. The stored `to` only shapes the trajectory: the landing level
   is recomputed from the cell of TOUCHDOWN, otherwise drifting past the
-  lower slab would sit the tank on a floor no longer under it. The fall lasts `coreParams.levels.fallTime` per level of
-  height, during which input is
-  ignored (held keys are picked up on landing) and the body carries the
-  `STATIC_LEVEL_GROUP` mask alone while coasting on inertia: the walls of
-  every level still stop it (at `maxForwardSpeed` a fall covers some seven
-  tiles, and without them the tank would land inside a building), while
-  tanks, crates, rays and blasts do not reach it. On landing the tank is on
-  level `to` and takes `fallDamage` per level of height, capped by
-  `maxFallDamage`; a lethal landing emits
+  lower slab would sit the tank on a floor no longer under it. The flight is BALLISTIC: `vz -= g·dt`,
+  `z += vz·dt` by the trapezoid rule (which is an exact sample of the
+  parabola at every `n·dt`, so `v² = v0² − 2g·Δz` holds on every step).
+  Gravity is not a config constant but derived from `fallTime`:
+  `g = 2 / fallTime²`, so a drop of exactly one level still takes the same
+  time and deals the same damage, while a two-level one comes out faster
+  than twice that. DRIVING input is ignored throughout (held keys are picked
+  up on landing) while the turret and the gun keep working, and the body
+  carries the `STATIC_LEVEL_GROUP` mask while coasting on inertia: the walls
+  of every level still stop it (at `maxForwardSpeed` a fall covers some
+  seven tiles, and without them the tank would land inside a building),
+  while tanks, crates, rays and blasts do not reach it. While `z` stays
+  `jumpClearance` above the take-off level the mask is empty altogether — a
+  jump clears obstacles (`LevelState::clear_walls`: the threshold comes from
+  the rules and `collision_mask` cannot see them, so `step_layered` computes
+  the flag and the mask only reads it). A slab ABOVE the take-off level is
+  caught by a branch of its own, by CROSSING a whole level downwards —
+  otherwise a tank that fell short of the slab would teleport onto it. On
+  landing the tank is on the level of the touchdown cell and takes
+  `fallDamage` per level of height, capped by `maxFallDamage`; the height is
+  measured from the arc's PEAK rather than from the take-off level, so a
+  tank thrown up by a jump pays for the climb too, while a hop onto its own
+  slab is almost free. A lethal landing emits
   `Death { victim, killer: victim }` — a suicide, so the engine's round
   meta awards no frag.
+- **Ramp jumps.** A body that was legally climbing a run does not lose its
+  vertical speed when it leaves it: `slope_vec · vel / levelHeight` (the
+  grade is dimensionless, the velocity is in world units, and the level
+  height converts them into levels per second) times `rampLaunchFactor`
+  becomes the initial `vz`. The flight only starts if that exceeds
+  `minLaunchVz` — otherwise rolling down a gentle ramp at walking pace would
+  produce a micro-jump on every cell. The check runs BEFORE the ledge test:
+  a tank leaving a ramp over the void would otherwise start falling with
+  `vz = 0` and lose the jump. The target of such a flight is the tank's own
+  slab (when there is one under it), and the arc starts exactly at the
+  level's height: a run's top end stops a thousandth of a level below it,
+  and the arc would otherwise start under the slab.
 - **Flat maps** are untouched: `step_level` resets the state to level 0 and
   the mask stays the level-0 group, exactly what a tank had before levels
   existed.
@@ -661,13 +698,31 @@ falls still carry the upper level, so a replica that had already landed was
 lifted back onto the bridge (`level = 1, z = 1`). Everything downstream then
 ran on the wrong level: the collision mask banged the tank against railings
 that do not exist for it on the host, and the renderer gave the hull the
-scale and tint of the overpass. The fall, in contrast, is authoritative all
-the way through: instead of
-dropping an unfinished `Falling`, the reconciliation rebuilds its phase out
-of the frame's height (`level::fall_elapsed()` inverts the fall lerp of
-`step_level`). Otherwise the height of one's own tank would follow the
-length of the replay rather than the host's fall time — jerking on an RTT
-spike, and finishing the fall early on a long replay.
+scale and tint of the overpass. The flight, in contrast, is authoritative all
+the way through: instead of dropping an unfinished `Airborne`, the
+reconciliation takes it from the frame — both the height `z` and the
+vertical speed `vz`. The phase cannot be recovered from the height alone:
+under ballistics one `z` answers two points of the arc, the rise and the
+descent (the inverse `fall_elapsed` only ever worked for a linear fall and
+is gone). Height and speed come from ONE frame and therefore lie on one
+parabola: the level state rewinds to the snapshot NO LATER than the frame
+while the replay starts after it, so the replica's own vertical lags the
+frame by exactly one step, and the pair "own speed + the frame's height"
+throws the arc higher on every correction. Only what the frame does not
+carry is kept from the replica's own state: the arc's peak (it is only
+needed for damage, which the host computes) and the target chosen at
+take-off. Otherwise the height of one's own tank would follow the length of
+the replay rather than the host's flight — jerking on an RTT spike, and
+finishing the flight early on a long replay.
+
+A non-zero `vz` in the frame is a flight in itself, regardless of support
+and height: that is a JUMP. At take-off `z` still equals the take-off level
+and the slab is right under the tank, so by height a flight is
+indistinguishable from driving — only `vz` gives it away. The replica aims
+such a flight at its own slab (`z` no lower than the level and a floor under
+the body) rather than at the ground: with the ground as the target the
+replica sank through the slab and kept the input locked until a frame
+reported the landing, losing throttle on every jump.
 
 A height below the level is not enough to call it a fall, though. On a run
 the level snaps to `z.round()`, so a frame taken on the upper half of any
@@ -848,7 +903,9 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
 
 Levels moved the dump the same way: `LevelState` gained `prev_cell` and
 `slope_vec`, and the `Transit` variants changed their fields
-(`Ramp { climbing, low, high }`, `Falling { elapsed, from, to }`).
+(`Ramp { climbing, low, high, run }`,
+`Airborne { vz, from, to, peak }`), and `LevelState` itself gained
+`clear_walls`.
 
 `BotBrain` is `Serialize`/`Deserialize` (the handoff dump), so the path
 type change moved the dump's shape — the dump is internal and unversioned,
@@ -870,9 +927,9 @@ and an old one no longer restores.
 
 | Layer | Where | Covers |
 | --- | --- | --- |
-| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
+| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence); the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, cross-level shots and explosions) |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots and explosions) |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
 
 `tests/core/` tests are part of `npm test` and **are skipped** if

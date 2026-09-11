@@ -111,6 +111,12 @@ The tank carries two weapons (switch with `n`/`p`, the active one is highlighted
 
 Health is 100. The tank's `condition` visually degrades with damage (smoke), and it's destroyed at 0. Stats — [configuration.md](configuration.md#weaponsjs).
 
+The throttle is visible and audible: the exhaust over the pipe thickens with
+the engine load (`engineLoad`) — from a shiver at idle to a dense plume at
+full throttle — and pushing into a wall under throttle (`engineLoad > 1`)
+adds dust from the spinning tracks and raises the engine's pitch. Damage
+smoke runs on its own channel and does not follow the throttle.
+
 ## Bridges and levels (2.5D)
 
 A map may carry up to eight levels: the ground (0) and overhead floors
@@ -138,9 +144,17 @@ A map may carry up to eight levels: the ground (0) and overhead floors
 - **A climb is visible.** The tank rises out of the wedge: the shadow stays
   on the layer under it, the hull moves away from the shadow and grows with
   height by the same projection as the slab, and the wedge itself is drawn
-  as a solid embankment with sides and a top end face. The hull no longer
-  tilts and the tracks no longer kick dust — a grade recovered from the
-  height between frames froze under a parked tank. To see it:
+  as a solid embankment with sides and a top end face. The hull TILTS with
+  it: nose up on a climb, nose down on a descent, rolled onto one side
+  across the slope, and in flight the nose follows the vertical speed. The
+  angles (`pitch`/`roll`) are computed by the host from the grade under the
+  tracks and carried in the frame, so the tilt does not die under a tank
+  parked on a ramp and other tanks are tilted just like your own. (The tilt
+  used to be recovered on the client from the height delta between frames —
+  that delta is zero under a parked tank, the tilt froze, and the scheme was
+  dropped; hence the frame fields instead of a client-side computation.) How
+  strongly the tilt reads on screen is set by `tilt` in
+  [configuration.md](configuration.md#renderjs). To see it:
   `VITE_MAP='terraces' npm run dev`, team `team1`, whose first spawn point
   is the foot of the steep ramp facing west; hold `W`. At full throttle the
   climb lasts a third of a second. There is no
@@ -178,13 +192,34 @@ A map may carry up to eight levels: the ground (0) and overhead floors
 - **Off the ledge.** A bridge edge without railings is a ledge. Driving off
   it starts a fall. Tanks land on the nearest floor below that has a
   surface: dropping off level 2 over a level 1 slab lands on that slab, not
-  on the ground. Time and damage scale with the height — 0.35 s and 15
-  health per level, capped by `maxFallDamage` (100) per landing; while
-  airborne the controls are dead and the tank coasts on inertia. While airborne it collides with
-  the walls of every level and with nothing else — a tank, a crate, a ray
-  or a blast does not reach it, but a building does, so a fall alongside
-  one ends in front of the wall instead of inside it. A fatal landing
-  counts as a suicide — the stats record a loss and nobody gets a frag.
+  on the ground. The fall is BALLISTIC: the height is integrated
+  (`vz -= g·dt`) instead of being played back linearly. Gravity is derived
+  from `fallTime`, so a one-level drop still takes the same 0.35 s — but a
+  two-level one is faster than twice that. Damage is unchanged (15 health
+  per level, capped by `maxFallDamage`, 100, per landing), yet the height is
+  measured from the ARC'S PEAK rather than from the take-off level: a tank
+  thrown upwards by a jump pays for the climb too. Only driving is dead
+  while airborne — **the turret turns and the gun fires**. As long as the
+  tank is `jumpClearance` above the level it left, it does not even see
+  walls and flies over obstacles; below that the walls of every level are
+  back, so a fall alongside a building ends in front of it instead of
+  inside it. Tanks, crates, rays and blasts never reach a tank in the air.
+  A fatal landing counts as a suicide — the stats record a loss and nobody
+  gets a frag. A hard touchdown SHAKES THE CAMERA of the tank that landed
+  (the `levels.landingShake` rule; the shake is authoritative and comes from
+  the host, just like a weapon's): its strength scales with the vertical
+  speed at contact and is capped by `intensity`. A soft touchdown (|vz|
+  below `minImpact`) leaves the camera alone — the very same threshold at
+  which the client gives no squash, no dust and no thud, so stepping off an
+  edge stays calm.
+- **Off the ramp.** Leaving a run's top end at speed throws the tank into
+  the air: the vertical speed at the exit is the grade times the speed along
+  it (`rampLaunchFactor`), and the jump only starts if that exceeds
+  `minLaunchVz`. A gentle ramp therefore gives no jump at all, while a steep
+  one at full throttle does. Landing back on the tank's own level deals no
+  damage (the arc is low); the touchdown squashes the hull, kicks dust from
+  the tracks and thuds. To see it: `VITE_MAP='terraces' npm run dev`, team
+  `team1`, its first spawn point, hold `W`.
 - **Crates fall like tanks.** A dynamic map object follows the same level
   rules: pushed off a slab it falls along the same trajectory and lands on
   the nearest floor below that has a surface, changing its level (and with
@@ -205,7 +240,7 @@ rules:
 | **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it. |
 | **Upwards** | In the very first cell that carries a floor of the nearest level above the shooter, the ray can hit a tank standing there — unless that cell is a railing of that level. Only the nearest level above is reachable: from the ground a tank on level 2 is never hit through the level 1 slab. The window is exactly that one cell wide and closes where the ray leaves it, so a tank standing on the second slab cell is already out of reach. Past it the slab shields everything and the ray continues at its own level. |
 | **Tank on a ramp** | Visible to rays of every level the run connects. |
-| **Falling tank** | Invulnerable: while airborne (0.35 s) neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. |
+| **Tank in the air** | Invulnerable: while airborne neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. It does SHOOT, though: only driving is locked in flight. |
 | **Explosion** | Only hits targets on its own level — the slab shields it both upwards and downwards. |
 | **Bomb** | Lands on its owner's level; if there is no floor of that level under the drop point (on a ramp, for instance), the bomb comes to rest on the nearest floor below it — on a three-level map that is the level 1 slab, not the ground. |
 

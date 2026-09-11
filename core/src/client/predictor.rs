@@ -129,6 +129,12 @@ pub struct RenderState {
     /// танк падает (ввод заблокирован): правило уровня сброшенной бомбы
     /// (`level::bomb_level`) обязано видеть его так же, как хост
     pub falling: bool,
+    /// наклон корпуса: предсказан теми же функциями `motion`, что считает
+    /// хост, — рендер своего танка не ждёт кадра
+    pub pitch: f32,
+    pub roll: f32,
+    /// вертикальная скорость полёта (уровней/с, 0 на земле)
+    pub vz: f32,
 }
 
 struct HistoryEntry {
@@ -178,10 +184,12 @@ pub struct Predictor {
     /// слоями
     level_state: LevelState,
     level_rules: LevelRules,
-    /// Авторитетные `(z, level)` своего танка из последнего сырого кадра:
-    /// уровень и фаза падения принадлежат хосту, реплика их только
-    /// доигрывает (см. `correct_level`)
-    authoritative_level: Option<(f32, u8)>,
+    /// Авторитетные `(z, level, vz)` своего танка из последнего сырого
+    /// кадра: уровень и фаза полёта принадлежат хосту, реплика их только
+    /// доигрывает (см. `correct_level`). Вертикальная скорость приезжает
+    /// явно, потому что по высоте фаза баллистики неоднозначна — одному
+    /// `z` отвечают и подъём, и снижение
+    authoritative_level: Option<(f32, u8, f32)>,
     /// Сколько кадров подряд авторитетный уровень держится ВЫШЕ уровня
     /// реплики. Подъём принимается только по стойкому несогласию
     /// (`LevelRules::level_adopt_frames`): одиночный кадр выше — это
@@ -208,6 +216,10 @@ pub struct Predictor {
     state: TankState,
     centering: bool,
     engine_load: f32,
+    /// Наклон корпуса реплики, рад. Живёт отдельно от `TankState`: тот
+    /// позиционно связан с `PLAYER_STATE_LEN = 8` и меняться не может.
+    pitch: f32,
+    roll: f32,
 
     // живой ввод
     keys_mask: u32,
@@ -293,6 +305,8 @@ impl Predictor {
             pending_reset: true,
             state: TankState::default(),
             centering: false,
+            pitch: 0.0,
+            roll: 0.0,
             engine_load: 0.0,
             keys_mask: 0,
             one_shot_pending: 0,
@@ -430,7 +444,7 @@ impl Predictor {
     /// чужим уровнем считалось всё: маска коллизий била танк о перила,
     /// которых для него у хоста нет, а рендер давал корпусу масштаб и тинт
     /// эстакады.
-    pub fn correct_level(&mut self, authoritative: Option<(f32, u8)>) {
+    pub fn correct_level(&mut self, authoritative: Option<(f32, u8, f32)>) {
         // `None` — своей строки в кадре нет (танк уничтожен, частичный
         // CLEAR, null-маркер): прошлое значение обязано уйти, иначе ветки
         // `airborne`, «понижение» и «истории нет» в `rewind_level_state`
@@ -447,8 +461,8 @@ impl Predictor {
     /// (`TanksClient::track_frame`): первый кадр со своим танком и
     /// респаун (`condition` 0 → живой) — уровень остался бы нулевым, хотя
     /// и спавн, и респаун бывают на плите.
-    pub fn adopt_level(&mut self, z: f32, level: u8) {
-        self.authoritative_level = Some((z, level));
+    pub fn adopt_level(&mut self, z: f32, level: u8, vz: f32) {
+        self.authoritative_level = Some((z, level, vz));
         self.level_disagreement = 0;
         self.set_grounded(z, level);
     }
@@ -505,6 +519,8 @@ impl Predictor {
         self.visual_error = [0.0; 3];
         self.replayed = None;
         self.accumulator = 0.0;
+        self.pitch = 0.0;
+        self.roll = 0.0;
     }
 
     /// Есть ли предсказанное состояние для рендера.
@@ -670,29 +686,72 @@ impl Predictor {
                 level::has_support(levels, z_level, self.state.x, self.state.y, &footprint)
             })
         };
-        let airborne = self.authoritative_level.filter(|&(z, level)| {
-            !on_ramp && level >= 1 && z < level as f32 && !supported(level)
+        // высота ровно на уровне полёт НЕ отменяет: баллистика начинает
+        // падение с нулевой вертикальной скорости, и первые тики дуги
+        // отходят от плиты на тысячные доли уровня. Судит опора — она и
+        // есть правило хоста.
+        //
+        // Ненулевая вертикальная скорость в кадре — полёт сама по себе, без
+        // оглядки на опору и высоту: это ПРЫЖОК. На взлёте `z` ещё равен
+        // уровню отрыва, плита под танком есть, и по высоте полёт
+        // неотличим от езды — только `vz` и отличает
+        let airborne = self.authoritative_level.filter(|&(z, level, vz)| {
+            !on_ramp && (vz != 0.0 || (level >= 1 && z <= level as f32 && !supported(level)))
         });
 
-        if let Some((z, level)) = airborne {
-            // куда падаем, решает та же геометрия, что у хоста: под обрывом
-            // может лежать не земля, а плита нижнего уровня
-            let to = self
-                .levels
-                .as_ref()
-                .map_or(0, |levels| levels.landing_level(level, self.state.x, self.state.y));
+        if let Some((z, level, vz)) = airborne {
+            // куда летим, решает та же геометрия, что у хоста: у ПРЫЖКА
+            // цель — своя же плита (тело ушло вверх с неё и на неё
+            // вернётся), у ПАДЕНИЯ — уровень под обрывом, где лежит не
+            // всегда земля. Отличает их высота: у падения `z` уже ниже
+            // своего уровня, а плиты под ним нет — иначе падать было бы не
+            // с чего. Без этой ветки прыжок над своей плитой получал целью
+            // землю: реплика проваливалась сквозь плиту, ввод оставался
+            // запертым до кадра о приземлении, и газ на каждом прыжке
+            // расходился с авторитетным
+            let fresh_to = self.levels.as_ref().map_or(0, |levels| {
+                if z >= level as f32 && levels.has_floor(level, self.state.x, self.state.y) {
+                    level
+                } else {
+                    levels.landing_level(level, self.state.x, self.state.y)
+                }
+            });
+
+            // высота и вертикальная скорость берутся из ОДНОГО кадра и
+            // потому лежат на одной параболе. Своя скорость сюда не
+            // годится: состояние уровня откатывается к последнему снимку
+            // НЕ ПОЗЖЕ кадра, а реплей начинается уже ПОСЛЕ него, так что
+            // вертикаль реплики отстаёт от кадра ровно на шаг. Пара «своя
+            // скорость + высота кадра» лежит тогда на разных дугах и
+            // подбрасывает полёт на каждой коррекции (замер: реплика
+            // уходила на 0.015 уровня выше хоста и приземлялась двумя
+            // тиками позже, теряя эти два тика газа).
+            //
+            // Из своего состояния переносится только то, чего в кадре нет:
+            // вершина дуги (она нужна урону, а урон считает хост — реплике
+            // довольно её не занижать) и цель полёта, выбранная в момент
+            // отрыва
+            let (peak, to) = match self.level_state.transit {
+                Transit::Airborne { from, peak, to, .. } if from == level => (peak, to),
+                _ => (z.max(level as f32), fresh_to),
+            };
 
             self.level_disagreement = 0;
             self.level_state.level = level;
             self.level_state.z = z;
-            self.level_state.transit = Transit::Falling {
-                elapsed: level::fall_elapsed(z, level, to, &self.level_rules),
+            self.level_state.transit = Transit::Airborne {
+                vz,
                 from: level,
                 to,
+                peak: peak.max(z),
             };
-        } else if let Some((z, level)) = self
+            // прыжок перелетает стены: пока танк выше уровня отрыва на
+            // `jump_clearance`, маска пуста — то же правило, что у хоста
+            self.level_state.clear_walls =
+                z >= level as f32 + self.level_rules.jump_clearance;
+        } else if let Some((z, level, _)) = self
             .authoritative_level
-            .filter(|&(_, level)| !on_ramp && level < self.level_state.level)
+            .filter(|&(_, level, _)| !on_ramp && level < self.level_state.level)
         {
             // ПОНИЖЕНИЕ уровня из кадра принимается всегда. Запоздавший
             // кадр может врать только в одну сторону — «я ещё наверху»:
@@ -712,7 +771,7 @@ impl Predictor {
             // и по состоянию реплики, и по карте под авторитетной позицией.
             self.level_disagreement = 0;
             self.set_grounded(z, level);
-        } else if let Some((z, level)) = self.authoritative_level.filter(|&(z, level)| {
+        } else if let Some((z, level, _)) = self.authoritative_level.filter(|&(z, level, _)| {
             // кадр обязан быть снят НА ОПОРЕ: `z` ровно на своём уровне.
             // Пока хост падает, он держит `level` тем уровнем, с которого
             // сорвался (`level::step_layered`), а `z` ведёт вниз дробным —
@@ -750,10 +809,16 @@ impl Predictor {
             self.level_disagreement = 0;
 
             if !climbing
-                && let Transit::Falling { .. } = self.level_state.transit
+                && let Transit::Airborne { from, to, .. } = self.level_state.transit
+                && to < from
+                && self.level_state.z < from as f32
             {
                 // кадр говорит, что танк уже на опоре: доигрывать своё
-                // падение реплике нечего
+                // ПАДЕНИЕ реплике нечего. Прыжок над своей же плитой
+                // (`to == from`) — другое дело: там кадр «стою на плите»
+                // и есть нормальный вид полёта, потому что вертикального
+                // состояния кадр пока не везёт (это чинит этап 3), и
+                // обрыв дуги здесь стоил бы реплике целого прыжка
                 self.level_state.transit = Transit::Grounded;
             }
         }
@@ -842,6 +907,12 @@ impl Predictor {
             z: self.level_state.z,
             level: self.level_state.level,
             falling: self.level_state.input_locked(),
+            pitch: self.pitch,
+            roll: self.roll,
+            vz: match self.level_state.transit {
+                Transit::Airborne { vz, .. } => vz,
+                _ => 0.0,
+            },
         })
     }
 
@@ -877,26 +948,13 @@ impl Predictor {
             return;
         };
 
-        // падение: ввод игнорируется ЦЕЛИКОМ — зеркало раннего выхода
-        // `Tank::update`. Хост в падении не двигает ни башню, ни газ, ни
-        // тягу: клавиши остаются нажатыми и подхватятся при приземлении.
-        // Реплика с обнулённой маской вместо раннего выхода доводила
-        // центрирование башни, спускала газ и тормозила тягой — все три
-        // расхождения тихо копились на каждом падении
+        // падение: ввод ДВИЖЕНИЯ игнорируется целиком — зеркало раннего
+        // выхода `Tank::update`. Хост в падении не двигает ни газ, ни тягу:
+        // клавиши остаются нажатыми и подхватятся при приземлении.
+        // Реплика с обнулённой маской вместо раннего выхода спускала газ и
+        // тормозила тягой — расхождения тихо копились на каждом падении.
+        // Башня и наклон корпуса считаются ДО выхода: в полёте они работают
         let damping = (model.damping.linear, model.damping.angular);
-
-        if self.level_state.input_locked() {
-            self.engine_load = 0.0;
-            self.resolve_world(dt);
-            self.integrate(damping.0, damping.1, dt);
-
-            return;
-        }
-
-        let forward = keys & self.forward_bit != 0;
-        let back = keys & self.back_bit != 0;
-        let left = keys & self.left_bit != 0;
-        let right = keys & self.right_bit != 0;
 
         let turret = TurretInput {
             center: keys & self.gun_center_bit != 0,
@@ -912,11 +970,27 @@ impl Predictor {
             dt,
         );
 
+        // локальные оси корпуса: forward = (cos, sin), right = (−sin, cos)
+        let (sin, cos) = self.state.angle.sin_cos();
+
+        (self.pitch, self.roll) = self.step_tilt(cos, sin, dt);
+
+        if self.level_state.input_locked() {
+            self.engine_load = 0.0;
+            self.resolve_world(dt);
+            self.integrate(damping.0, damping.1, dt);
+
+            return;
+        }
+
+        let forward = keys & self.forward_bit != 0;
+        let back = keys & self.back_bit != 0;
+        let left = keys & self.left_bit != 0;
+        let right = keys & self.right_bit != 0;
+
         self.state.throttle =
             motion::step_throttle(self.state.throttle, forward || back, model, dt);
 
-        // локальные оси корпуса: forward = (cos, sin), right = (−sin, cos)
-        let (sin, cos) = self.state.angle.sin_cos();
         let forward_speed = self.state.vx * cos + self.state.vy * sin;
         let lateral_vel = -self.state.vx * sin + self.state.vy * cos;
 
@@ -950,6 +1024,30 @@ impl Predictor {
         self.resolve_world(dt);
 
         self.integrate(damping.0, damping.1, dt);
+    }
+
+    // наклон корпуса: те же функции `motion` и в том же порядке, что у
+    // хоста (`Tank::step_tilt`). В снапшот истории уровня наклон НЕ
+    // кладётся: после реконсиляции его перебьёт авторитетное значение из
+    // кадра, а между кадрами он доигрывается сглаживанием — на позицию
+    // это не влияет и паритет не трогает
+    fn step_tilt(&self, heading_x: f32, heading_y: f32, dt: f32) -> (f32, f32) {
+        let vz = match self.level_state.transit {
+            Transit::Airborne { vz, .. } => vz,
+            _ => 0.0,
+        };
+        let (target_pitch, target_roll) = motion::tilt_target(
+            self.level_state.slope_vec,
+            (heading_x, heading_y),
+            vz,
+            self.level_state.airborne(),
+            &self.level_rules,
+        );
+
+        (
+            motion::approach_tilt(self.pitch, target_pitch, &self.level_rules, dt),
+            motion::approach_tilt(self.roll, target_roll, &self.level_rules, dt),
+        )
     }
 
     // интеграция и затухание (эмпирический порядок Rapier, зафиксирован
@@ -1004,7 +1102,7 @@ impl Predictor {
         // кадра, а не остаётся от предсказания. Иначе на спуске реплика
         // доигрывала бы чужой уровень — тот самый, что приехал в кадре
         // ПЕРЕД падением. Фазу падения тут же восстановит `on_server_state`
-        let Some((z, level)) = self.authoritative_level else {
+        let Some((z, level, _)) = self.authoritative_level else {
             return;
         };
 
@@ -1037,6 +1135,7 @@ impl Predictor {
             &mut self.level_state,
             self.state.x,
             self.state.y,
+            [self.state.vx, self.state.vy],
             &footprint,
             levels,
             &self.level_rules,
@@ -1564,6 +1663,32 @@ mod tests {
     }
 
     #[test]
+    fn parked_tank_keeps_its_tilt() {
+        // регрессия на исторический баг: наклон, восстановленный клиентом из
+        // разницы высот между кадрами, у стоящего танка замирал в нуле.
+        // Наклон считается из `slope_vec`, поэтому стоящий на рампе танк
+        // держит его сколько угодно шагов
+        let mut p = make_predictor();
+
+        seed(&mut p, 0.0);
+        p.update(0.0);
+        p.level_state.slope_vec = [0.33, 0.0];
+
+        // 600 шагов без единой клавиши: танк стоит на месте
+        for i in 1..=600 {
+            p.update(i as f64 * STEP_MS);
+        }
+
+        let expected = (0.33f32 * p.level_rules.tilt_gain).atan();
+
+        assert!(
+            (p.pitch - expected).abs() < 1e-3,
+            "стоящий на рампе танк обязан держать наклон: pitch={}",
+            p.pitch
+        );
+    }
+
+    #[test]
     fn replay_matches_continuous_simulation() {
         // шаг 10 мс: точен в f64 — число шагов детерминировано
         let make = || {
@@ -2045,6 +2170,7 @@ mod tests {
             &mut state,
             x,
             y,
+            [p.state.vx, p.state.vy],
             &p.footprint(),
             &levels,
             &p.level_rules,
@@ -2067,7 +2193,7 @@ mod tests {
 
     // кадр, который держит танк на плите уровня 1
     fn frame_above(p: &mut Predictor) {
-        p.correct_level(Some((1.0, 1)));
+        p.correct_level(Some((1.0, 1, 0.0)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
     }
 
@@ -2325,26 +2451,49 @@ mod tests {
 
     #[test]
     fn a_falling_replica_freezes_the_input_exactly_like_the_host() {
-        // `Tank::update` в падении выходит РАНЬШЕ башни, газа и тяги:
-        // клавиши остаются нажатыми и подхватятся при приземлении. Реплика
-        // с одной лишь обнулённой маской доводила центрирование, спускала
-        // газ и тормозила тягой — расхождение копилось на каждом падении
+        // `Tank::update` в падении выходит РАНЬШЕ газа и тяги: клавиши
+        // остаются нажатыми и подхватятся при приземлении. Реплика с одной
+        // лишь обнулённой маской спускала газ и тормозила тягой —
+        // расхождение копилось на каждом падении. Башня — исключение: она
+        // считается ДО раннего выхода на обеих сторонах
         let mut p = make_predictor();
 
         p.state.throttle = 1.0;
         p.state.gun_rotation = 0.5;
         p.centering = true;
-        p.level_state.transit = Transit::Falling {
-            elapsed: 0.0,
+        p.level_state.transit = Transit::Airborne {
+            vz: 0.0,
             from: 1,
             to: 0,
+            peak: 1.0,
         };
 
         p.step(0);
 
         assert_eq!(p.state.throttle, 1.0, "газ в падении не спускается");
-        assert_eq!(p.state.gun_rotation, 0.5, "башня в падении не едет");
+        assert!(
+            p.state.gun_rotation < 0.5,
+            "башня в полёте работает: {}",
+            p.state.gun_rotation
+        );
         assert_eq!(p.engine_load, 0.0, "нагрузка двигателя обнулена");
+    }
+
+    #[test]
+    fn a_falling_replica_pitches_with_its_vertical_speed() {
+        let mut p = make_predictor();
+
+        p.level_state.transit = Transit::Airborne {
+            vz: -2.0,
+            from: 1,
+            to: 0,
+            peak: 1.0,
+        };
+
+        p.step(0);
+
+        assert!(p.pitch < 0.0, "нос на снижении опущен: {}", p.pitch);
+        assert_eq!(p.roll, 0.0, "крена в полёте нет");
     }
 
     #[test]
@@ -2412,7 +2561,7 @@ mod tests {
 
         assert!(matches!(
             p.level_state().transit,
-            Transit::Falling { from: 1, to: 0, .. }
+            Transit::Airborne { from: 1, to: 0, .. }
         ));
     }
 
@@ -2424,10 +2573,11 @@ mod tests {
         p.level_state = LevelState {
             level: 1,
             z: 1.0,
-            transit: Transit::Falling {
-                elapsed: 0.0,
+            transit: Transit::Airborne {
+                vz: 0.0,
                 from: 1,
                 to: 0,
+                peak: 1.0,
             },
             ..LevelState::default()
         };
@@ -2456,10 +2606,11 @@ mod tests {
         p.level_state = LevelState {
             level: 1,
             z: 1.0,
-            transit: Transit::Falling {
-                elapsed: 0.0,
+            transit: Transit::Airborne {
+                vz: 0.0,
                 from: 1,
                 to: 0,
+                peak: 1.0,
             },
             ..LevelState::default()
         };
@@ -2530,7 +2681,7 @@ mod tests {
 
         let flat = p.level_state();
 
-        p.correct_level(Some((1.0, 1)));
+        p.correct_level(Some((1.0, 1, 0.0)));
         assert_eq!(p.level_state(), flat);
 
         p.state.x = 90.0;
@@ -2539,7 +2690,7 @@ mod tests {
 
         let on_ramp = p.level_state();
 
-        p.correct_level(Some((1.0, 1)));
+        p.correct_level(Some((1.0, 1, 0.0)));
         assert_eq!(p.level_state(), on_ramp);
     }
 
@@ -2564,13 +2715,94 @@ mod tests {
             p.level_state().transit
         );
 
-        p.correct_level(Some((0.6, 1)));
+        p.correct_level(Some((0.6, 1, 0.0)));
         p.on_server_state([90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert!(
             !p.level_state().input_locked(),
             "подъём по рампе принят за падение: {:?}",
             p.level_state().transit
+        );
+    }
+
+    #[test]
+    fn a_jump_over_its_own_slab_returns_to_it() {
+        // прыжок с рампы на СВОЙ же уровень: кадр несёт `z` ровно на плите
+        // (или чуть выше) и ненулевую `vz`. Целью такого полёта обязана
+        // быть та же плита — с целью «земля» реплика проваливалась сквозь
+        // неё и держала ввод запертым до кадра о приземлении, теряя газ
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // плита уровня 1 (колонки 3 и 4: x от 120 до 200)
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.level_state.level = 1;
+        p.level_state.z = 1.0;
+
+        p.correct_level(Some((1.0, 1, 1.2)));
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert!(
+            matches!(
+                p.level_state().transit,
+                Transit::Airborne { to: 1, from: 1, .. }
+            ),
+            "прыжок над своей плитой целится мимо неё: {:?}",
+            p.level_state().transit
+        );
+
+        // дуга обязана кончиться на своей же плите и отпустить ввод
+        for _ in 0..240 {
+            p.step_time += STEP_MS;
+            p.step(0);
+        }
+
+        assert_eq!(p.level_state().level, 1);
+        assert_eq!(p.level_state().z, 1.0);
+        assert!(!p.level_state().input_locked());
+    }
+
+    #[test]
+    fn the_frame_sets_the_vertical_speed_of_a_flight_in_progress() {
+        // высота и скорость обязаны приехать из ОДНОГО кадра: состояние
+        // уровня откатывается к снимку НЕ ПОЗЖЕ кадра, а реплей идёт уже
+        // после него, поэтому своя вертикаль отстаёт от кадра на шаг. Пара
+        // «своя скорость + высота кадра» лежит на другой дуге и с каждой
+        // коррекцией подбрасывает полёт выше хоста
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.level_state.level = 1;
+        p.level_state.z = 1.0;
+
+        p.correct_level(Some((1.0, 1, 1.2)));
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        p.step_time += STEP_MS;
+        p.step(0);
+
+        // следующий кадр той же дуги: скорость в нём уже другая
+        p.correct_level(Some((1.02, 1, 0.9)));
+        p.on_server_state(
+            [140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            false,
+            p.step_time,
+            0.0,
+            p.step_time,
+        );
+
+        let Transit::Airborne { vz, .. } = p.level_state().transit else {
+            panic!("полёт прерван: {:?}", p.level_state().transit);
+        };
+
+        assert!(
+            (vz - 0.9).abs() < 1e-6,
+            "вертикальная скорость взята не из кадра: {vz}"
         );
     }
 
@@ -2588,7 +2820,7 @@ mod tests {
         p.level_state.level = 1;
         p.level_state.z = 1.0;
 
-        p.correct_level(Some((0.9, 1)));
+        p.correct_level(Some((0.9, 1, 0.0)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert!(
@@ -2637,7 +2869,7 @@ mod tests {
 
             let t = p.step_time;
 
-            p.correct_level(Some((z, level)));
+            p.correct_level(Some((z, level, 0.0)));
             p.on_server_state(
                 [140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 false,
@@ -2679,7 +2911,7 @@ mod tests {
 
             let t = p.step_time;
 
-            p.correct_level(Some((1.0, 1)));
+            p.correct_level(Some((1.0, 1, 0.0)));
             p.on_server_state(
                 [140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 false,
@@ -2716,7 +2948,7 @@ mod tests {
         assert_eq!(p.level_state().level, 0);
 
         // запоздавший кадр, снятый ещё на мосту
-        p.correct_level(Some((1.0, 1)));
+        p.correct_level(Some((1.0, 1, 0.0)));
 
         assert_eq!(p.level_state().level, 0, "кадр перебил предсказание");
 
@@ -2752,7 +2984,7 @@ mod tests {
         assert_eq!(p.level_state().level, 1);
 
         // хост давно на земле
-        p.correct_level(Some((0.0, 0)));
+        p.correct_level(Some((0.0, 0, 0.0)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().level, 0, "понижение из кадра не принято");
@@ -2777,7 +3009,7 @@ mod tests {
             prev_cell: (3, 2),
             ..LevelState::default()
         };
-        p.correct_level(Some((1.0, 1)));
+        p.correct_level(Some((1.0, 1, 0.0)));
 
         apply_map(&mut p, &layered_map());
 
@@ -2794,7 +3026,7 @@ mod tests {
         let mut p = make_predictor();
 
         apply_map(&mut p, &layered_map());
-        p.correct_level(Some((1.0, 1)));
+        p.correct_level(Some((1.0, 1, 0.0)));
 
         assert!(p.authoritative_level.is_some());
 
@@ -2851,7 +3083,7 @@ mod tests {
         for _ in 0..p.level_rules.level_adopt_frames * 2 {
             frame_above(&mut p);
             // кадр согласен с репликой
-            p.correct_level(Some((0.0, 0)));
+            p.correct_level(Some((0.0, 0, 0.0)));
             p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
         }
 
@@ -2875,7 +3107,7 @@ mod tests {
         assert!(matches!(p.level_state().transit, Transit::Ramp { .. }));
 
         for _ in 0..p.level_rules.level_adopt_frames * 2 {
-            p.correct_level(Some((2.0, 2)));
+            p.correct_level(Some((2.0, 2, 0.0)));
             p.on_server_state([90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
         }
 
@@ -2908,7 +3140,7 @@ mod tests {
         // откат и так берёт состояние из кадра (`rewind_level_state`)
         p.step(0);
 
-        p.correct_level(Some((0.0, 0)));
+        p.correct_level(Some((0.0, 0, 0.0)));
         p.on_server_state([110.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().level, 1, "кадр с прогона стянул реплику вниз");
@@ -2924,7 +3156,7 @@ mod tests {
 
         p.state.x = 140.0;
         p.state.y = 100.0;
-        p.adopt_level(1.0, 1);
+        p.adopt_level(1.0, 1, 0.0);
 
         assert_eq!(p.level_state().level, 1);
         assert_eq!(p.level_state().z, 1.0);
@@ -2945,7 +3177,7 @@ mod tests {
         p.level_state.transit = Transit::Grounded;
         p.level_history.clear();
 
-        p.correct_level(Some((0.0, 0)));
+        p.correct_level(Some((0.0, 0, 0.0)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().level, 0);
@@ -2953,35 +3185,47 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_restores_the_fall_phase_from_the_frame() {
+    fn reconcile_restores_the_fall_speed_from_the_frame() {
         let mut p = make_predictor();
 
         apply_map(&mut p, &layered_map());
-        p.level_state = LevelState {
-            level: 1,
-            z: 0.75,
-            transit: Transit::Falling {
-                elapsed: 0.25 * p.level_rules.fall_time,
-                from: 1,
-                to: 0,
-            },
-            ..LevelState::default()
-        };
 
-        // кадр застал падение на половине высоты
-        p.correct_level(Some((0.5, 1)));
+        // реплика полёта ещё не начала: своей скорости у неё нет, и фазу
+        // задаёт кадр — по высоте она неоднозначна (подъём и снижение
+        // проходят одно и то же `z`)
+        p.correct_level(Some((0.5, 1, -1.4)));
         p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
 
-        let expected = level::fall_elapsed(0.5, 1, 0, &p.level_rules);
-
         assert!(
-            matches!(p.level_state().transit, Transit::Falling { elapsed, from: 1, to: 0 }
-                if (elapsed - expected).abs() < 1e-5),
+            matches!(p.level_state().transit, Transit::Airborne { vz, from: 1, to: 0, .. }
+                if (vz + 1.4).abs() < 1e-5),
             "{:?}",
             p.level_state().transit
         );
         assert_eq!(p.level_state().z, 0.5);
         assert_eq!(p.level_state().level, 1);
+    }
+
+    // ПРЫЖОК: на взлёте `z` ещё равен уровню отрыва и плита под танком
+    // есть — по высоте полёт неотличим от езды. Отличает его только
+    // вертикальная скорость кадра, и без неё реплика оставалась бы на
+    // земле, пока танк на экране уже в воздухе
+    #[test]
+    fn jump_phase_survives_reconciliation() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.set_grounded(1.0, 1);
+
+        p.correct_level(Some((1.0, 1, 2.0)));
+        p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
+
+        assert!(
+            matches!(p.level_state().transit, Transit::Airborne { vz, from: 1, .. }
+                if (vz - 2.0).abs() < 1e-5),
+            "{:?}",
+            p.level_state().transit
+        );
     }
 
     #[test]
@@ -2992,15 +3236,16 @@ mod tests {
         p.level_state = LevelState {
             level: 1,
             z: 0.5,
-            transit: Transit::Falling {
-                elapsed: 0.5 * p.level_rules.fall_time,
+            transit: Transit::Airborne {
+                vz: -1.0,
                 from: 1,
                 to: 0,
+                peak: 1.0,
             },
             ..LevelState::default()
         };
 
-        p.correct_level(Some((0.0, 0)));
+        p.correct_level(Some((0.0, 0, 0.0)));
         p.on_server_state([0.0; 8], false, 0.0, 0.0, 0.0);
 
         assert_eq!(p.level_state().transit, Transit::Grounded);
@@ -3045,28 +3290,27 @@ mod tests {
         p.level_state = LevelState {
             level: 3,
             z: 2.9,
-            transit: Transit::Falling {
-                elapsed: 0.1 * p.level_rules.fall_time,
+            transit: Transit::Airborne {
+                vz: -0.5,
                 from: 3,
                 to: 1,
+                peak: 3.0,
             },
             ..LevelState::default()
         };
 
         // кадр застал падение на половине высоты (3 → 1)
-        p.correct_level(Some((2.0, 3)));
+        p.correct_level(Some((2.0, 3, -1.5)));
         p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
 
-        let expected = level::fall_elapsed(2.0, 3, 1, &p.level_rules);
-
-        // цель падения — плита уровня 1, а не земля, и фаза не обнулена
+        // цель падения — плита уровня 1, а не земля, и скорость кадра не
+        // обнулена
         assert!(
-            matches!(p.level_state().transit, Transit::Falling { elapsed, from: 3, to: 1 }
-                if (elapsed - expected).abs() < 1e-5),
+            matches!(p.level_state().transit, Transit::Airborne { vz, from: 3, to: 1, .. }
+                if (vz + 1.5).abs() < 1e-5),
             "{:?}",
             p.level_state().transit
         );
-        assert!(expected > 0.0);
         assert_eq!(p.level_state().z, 2.0);
     }
 
@@ -3078,10 +3322,11 @@ mod tests {
         p.level_state = LevelState {
             level: 3,
             z: 3.0,
-            transit: Transit::Falling {
-                elapsed: 0.0,
+            transit: Transit::Airborne {
+                vz: 0.0,
                 from: 3,
                 to: 1,
+                peak: 3.0,
             },
             ..LevelState::default()
         };
@@ -3121,7 +3366,7 @@ mod tests {
 
         // реконсиляция с реплеем трёх шагов: кадр везёт уровень 0 — на
         // рампе он отстаёт, и подъём обязан пережить и его, и реплей
-        p.correct_level(Some((0.0, 0)));
+        p.correct_level(Some((0.0, 0, 0.0)));
         p.on_server_state(
             [90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             false,
@@ -3175,7 +3420,7 @@ mod tests {
         // кадр снят на шаге у подножия и везёт законный вход с торца.
         // Реплей обязан судить его гейтом ЭТОГО шага: без отката состояния
         // уровня отказ диагонального входа наследовался бы прогоном
-        p.correct_level(Some((0.0, 0)));
+        p.correct_level(Some((0.0, 0, 0.0)));
         p.on_server_state(
             [90.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             false,

@@ -1,5 +1,12 @@
 import sounds from './sounds.js';
-import { seeThrough, parallax, volume, shadow } from './render.js';
+import {
+  seeThrough,
+  parallax,
+  volume,
+  shadow,
+  tilt,
+  landing,
+} from './render.js';
 
 // Игровая половина клиентского CONFIG_DATA: сущности рендера, канвасы,
 // keyset игрока, схемы panel/stat, тексты chat/vote/gameInform. Движковые
@@ -12,7 +19,7 @@ export default {
     gameSets: {
       c1: ['Map', 'MapRadar'],
       c2: ['Map'],
-      m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks'],
+      m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks', 'Dust'],
       w1: ['ShotEffect'],
       w2: ['Bomb'],
       w2e: ['ExplosionEffect'],
@@ -28,6 +35,7 @@ export default {
       ExplosionEffect: 'vimp',
       Smoke: 'vimp',
       Tracks: 'vimp',
+      Dust: 'vimp',
     },
 
     // ассеты, которые должны быть "запечены" (созданы один раз) при старте игры
@@ -115,6 +123,18 @@ export default {
           },
         },
         {
+          // пыль из-под гусениц и всплеск приземления: тот же размытый круг,
+          // что у дыма, белым — цвет даёт tint частицы
+          name: 'dustTexture',
+          component: 'Dust',
+          params: {
+            radius: 4,
+            blur: 1,
+            quality: 20,
+            color: 0xffffff,
+          },
+        },
+        {
           name: 'trackMarkTexture',
           component: 'Tracks',
           params: {
@@ -153,6 +173,7 @@ export default {
         'Tank',
         'Tracks',
         'Smoke',
+        'Dust',
         'Bomb',
         'ShotEffect',
         'ExplosionEffect',
@@ -161,7 +182,7 @@ export default {
       // динамических тел (`${assetsBase}img/<file>`), см. assets/img/
       assetsBase: ['Map'],
       // компоненты использующие звук
-      soundManager: ['ExplosionEffect', 'ShotEffect', 'Bomb', 'Tank'],
+      soundManager: ['ExplosionEffect', 'ShotEffect', 'Bomb', 'Tank', 'Dust'],
       // геометрия динамики карты (рендерные боксы ящиков): эффект попадания
       // держит якорь на теле и спрашивает, где тело нарисовано, в момент
       // запуска эффекта.
@@ -184,6 +205,7 @@ export default {
         'ShotEffect',
         'ExplosionEffect',
         'Tracks',
+        'Dust',
       ],
       // «своя ли это сущность» — движковый сервис; локальный танк
       // единственный, кто вправе писать в levelView, а свой танк и свой
@@ -200,6 +222,8 @@ export default {
     parallax,
     volume,
     shadow,
+    tilt,
+    landing,
 
     // звуковые ассеты
     sounds,

@@ -28,7 +28,7 @@ Imports maps, models, and weapons from `src/data/`.
 | `currentMap` | `'pool mini'` | The default map |
 | `mapsInVote` | `4` | How many maps show up in a vote |
 | `mapSetId` | `'c1'` | The default snapshot key for the map constructor |
-| `coreParams.levels` | `fallTime: 0.35, fallDamage: 15, maxFallDamage: 100, climbGravity: 500, climbMaxSpeedFactor: 0.5, levelAdoptFrames: 8, maxSideEntryRise: 0.5` | 2.5D level rules handed to the game's Rust core as-is (the engine neither reads nor validates `coreParams`): the fall time and the landing damage are both per ONE level of height (`0` — falling is free), `maxFallDamage` caps a single landing, `climbGravity` is the roll-back acceleration per unit of longitudinal grade, and `climbMaxSpeedFactor` is how much a grade of 1.0 trims the speed ceiling (`[0, 1)`). The grade is DIMENSIONLESS: the engine computes it as `rise * levelHeight / span`, where `levelHeight` is the map's level height in world units (the tile size by default), so a level-per-tile climb gives 1.0 while the demo maps' runs range from 0.11 (`terraces.rampLong`) to 0.5 (`terraces.rampSteep`). `levelAdoptFrames` is how many frames in a row must hold a level ABOVE the client's replica before it adopts one (a level below is adopted at once — a late frame can only lie upwards; see `client::predictor`). `maxSideEntryRise` caps how far the ramp's height at the entry point may sit from the body's own height when it enters a run across the axis (in levels, the bound excluded). A flat map never touches them |
+| `coreParams.levels` | `fallTime: 0.35, fallDamage: 15, maxFallDamage: 100, climbGravity: 500, climbMaxSpeedFactor: 0.5, levelAdoptFrames: 8, maxSideEntryRise: 0.5, rampLaunchFactor: 1.0, minLaunchVz: 0.35, jumpClearance: 0.2, tiltGain: 2.0, tiltAirGain: 0.12, tiltResponse: 12.0, tiltMax: 0.6, landingShake: { intensity: 6, duration: 300, minImpact: 1.5, fullImpact: 6 }` | 2.5D level rules handed to the game's Rust core as-is (the engine neither reads nor validates `coreParams`): the fall time and the landing damage are both per ONE level of height (`0` — falling is free), `maxFallDamage` caps a single landing, `climbGravity` is the roll-back acceleration per unit of longitudinal grade, and `climbMaxSpeedFactor` is how much a grade of 1.0 trims the speed ceiling (`[0, 1)`). The grade is DIMENSIONLESS: the engine computes it as `rise * levelHeight / span`, where `levelHeight` is the map's level height in world units (the tile size by default), so a level-per-tile climb gives 1.0 while the demo maps' runs range from 0.11 (`terraces.rampLong`) to 0.5 (`terraces.rampSteep`). `levelAdoptFrames` is how many frames in a row must hold a level ABOVE the client's replica before it adopts one (a level below is adopted at once — a late frame can only lie upwards; see `client::predictor`). `maxSideEntryRise` caps how far the ramp's height at the entry point may sit from the body's own height when it enters a run across the axis (in levels, the bound excluded). `fallTime` no longer sets a duration directly but the GRAVITY: falling is ballistic (`vz -= g·dt`), and `g` is picked so that a drop of exactly one level still takes `fallTime`. Jumping: `rampLaunchFactor` (dimensionless, `0` — no jump at all) is the share of the slope's vertical speed carried into flight when the body leaves a run's top end; `minLaunchVz` (levels/s, `0` — even a walking-pace exit jumps) is the threshold below which no flight starts; `jumpClearance` (levels, `0` — walls vanish the instant the tank takes off) is how far above the take-off level the tank stops seeing walls and flies over obstacles. Hull tilt: `tiltGain` (dimensionless, `1` — the angle equals the grade's arctangent, `0` — no tilt on a ramp) is how strongly the grade turns into an angle; `tiltAirGain` (radians per level/s, `0` — the nose does not follow the flight) tilts the nose by the vertical speed; `tiltResponse` (1/s, `0` — the hull freezes at its current angle) is how fast the hull returns to the target angle; `tiltMax` (radians, `0` — no tilt at all) caps the tilt by absolute value. `landingShake` is the camera shake on touchdown, declared exactly like a weapon's (`cameraShake` in `src/data/weapons.js`): `intensity` is the strength at a full impact, `duration` its length in ms, `minImpact` the contact |vz| (levels/s) below which the landing is soft and there is no shake at all, and `fullImpact` the |vz| that yields the full strength (anything above gives the same — `intensity` is the cap). The block may be omitted, and then a landing shakes nothing, exactly as before the rule existed. NOTE: `minImpact`/`fullImpact` numerically duplicate the `landing` block in `src/config/render.js` (hull squash, dust and sound on the client) — the client renderer and the WASM core share no source for them, so the two must always be changed together; otherwise you get a camera without dust, or dust without a camera. A flat map never touches them |
 | `roomDefaults.maxPlayers` | `8` | The bounds for the lobby's room settings: caps the limit picked by the creator (also published in `GameManifest.roomDefaults`) |
 | `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v3): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`text`/`checkbox`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog. `scripts/build-game-manifest.js` adds `regExp` **and** `min`/`max` to `maxPlayers`/`roundTime`/`mapTime` from these same bounds — the engine renders `min`/`max` as a "(min–max)" hint next to the field's label and checks them client-side; the authoritative clamp stays in the engine's `applyRoomOverrides.js` |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Scripted-participant (bot) parameters: the `Bot<id>` name prefix and the default tank model |
@@ -110,7 +110,7 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   gameSets: {
     c1: ['Map', 'MapRadar'],
     c2: ['Map'],
-    m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks'],
+    m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks', 'Dust'],
     w1: ['ShotEffect'],
     w2: ['Bomb'],
     w2e: ['ExplosionEffect'],
@@ -118,7 +118,7 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   ```
 
   A single key can create several entities (a tank is drawn on the main
-  canvas and the radar, plus smoke and tank tracks).
+  canvas and the radar, plus smoke, tank tracks and dust).
 
 - **`entitiesOnCanvas`** — which canvas (`vimp` or `radar`) each class
   renders on. Entities can be subclassed and shown on different canvases
@@ -129,7 +129,7 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   the tank, the tank shadow, the bomb, track marks, radar
   blips. Each entry: `name`
   (texture id), `component` (who owns it), `params` (generation
-  parameters). `explosionTexture`, `smokeTexture` and
+  parameters). `explosionTexture`, `smokeTexture`, `dustTexture` and
   `impactParticleTexture` are baked by a single `blurredCircleTexture`
   baker and differ only by `params` (`radius`, `blur`, `quality`,
   `color`); it returns `{ texture, contentSize }`, where `contentSize` is
@@ -151,10 +151,12 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   blob across the whole canvas and the rim stops reading.
 
 - **`componentDependencies`** — which services get injected into which
-  components (`renderer` → Map, Tank, Tracks; `assetsBase` → Map;
-  `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank;
+  components (`renderer` → Map, Tank, Tracks, Smoke, Dust, Bomb, ShotEffect,
+  ExplosionEffect; `assetsBase` → Map;
+  `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust;
   `mapDynamics` → ShotEffect; `rampRuns` → Map; `levelView` → Tank, Map, MapRadar,
-  Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks; `localPlayer` → Tank).
+  Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` →
+  Tank, ShotEffect).
   `mapDynamics` is the map-dynamics geometry from the client core
   (`toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`),
   handed to the pool by the plugin itself (`hooks.services`, see
@@ -180,9 +182,9 @@ projection.
   `${assetsBase}img/<file>` for the tile sheets and dynamic-body sprites
   it loads (see [extending.md](extending.md#new-map-image)).
 
-### The 2.5D render: `seeThrough`, `parallax`, `volume`, `shadow`
+### The 2.5D render: `seeThrough`, `parallax`, `volume`, `shadow`, `tilt`, `landing`
 
-All four objects come from `src/config/render.js` and lie here as part of
+All six objects come from `src/config/render.js` and lie here as part of
 the game's client config. The module is the single source: the engine hands
 a part only services, never the config (`new Part(data, assets,
 dependencies, context)`), so `src/client/levelView.js`,
@@ -216,6 +218,19 @@ it changes both sides at once.
 | `scaleGain` | How much the shadow grows per unit of height |
 | `baseAlpha`, `alphaFalloff` | The shadow's opacity on the ground and how fast it fades with height |
 | `sizeFactor` | The shadow's size as a share of the hull LENGTH: the texture is already in the hull's proportion, so at `z = 0` the shadow lies exactly under the hull and never peeks out |
+
+| `tilt` | Meaning |
+| --- | --- |
+| `enabled` | `false` restores the old flat hull sprite: the tilt is not drawn at all (the host still computes the angles and carries them) |
+| `lift` | The on-screen rise of the raised edge of the quad, as a share of its height: this turns the authoritative `pitch`/`roll` into `PerspectiveMesh` corners (`src/client/tilt.js`) |
+| `vertices` | The `PerspectiveMesh` grid density along each axis |
+
+| `landing` | Meaning |
+| --- | --- |
+| `minImpact` | The \|`vz`\| threshold at touchdown (levels/s) below which a landing counts as soft: no squash, no dust, no sound |
+| `fullImpact` | The touchdown speed that gives the full squash; anything above is clamped to it |
+| `squash` | The maximum vertical compression of the hull, as a share |
+| `duration` | How long the squash and the recovery take, ms |
 
 The height of one level in world units is a **map** field, not a render
 constant: `levelHeight` (see [extending.md](extending.md)). It is a
@@ -313,6 +328,13 @@ above). At idle the pitch also wobbles slightly (`IDLE_WOBBLE_DEPTH`,
 pitch reads to the ear as a hum rather than as a running engine. `volume` is
 therefore set for the moving tank; the standing one is `0.6` of it.
 
+`tankLanding` is the hull hitting the slab. It is fired not by the engine's
+event mapping (`soundCues` in `src/config/game.js`) but by the `Dust` part
+itself (`registerSound`/`playSound`): a landing is visible in the frame as
+`vz` rather than as a host event, and it sounds for every tank, not only for
+your own. The volume follows the impact, and a soft landing (below
+`landing.minImpact`) stays silent.
+
 The `spatial` block overrides the engine's spatial-sound geometry, and only
 what this game has to override: `mode: 'topDown'`, `virtualElevation: 108`,
 `innerRadius: 5`. The engine's own defaults (`180` / `40`) are calculated
@@ -353,13 +375,18 @@ Registered as `HostPlugin.gameConfig.snapshot`: `m1`, `w1`, `w2`, `w2e`,
 (the engine's schema-driven packer/unpacker, see
 [core.md](core.md)). An unregistered key breaks frame packing.
 
-The tank row (`m1`) ends with `angvel`, `z` and `level`: `z` is the visual
-height `0.0..1.0` and is interpolated — a ramp climb and a fall must look
-smooth — while `level` is the discrete 2.5D level with no intermediate
-values, since it switches the zIndex and the collision set. That tail's
-width and order are a positional contract with three places at once:
-`TankRow::fields` and `players_json` in the host core, and `render_overlay`
-in the client core.
+The tank row (`m1`) carries 16 fields; its tail is `angvel`, `z`, `level`,
+`vz`, `pitch`, `roll`. `z` is the visual height (`f32`, `interp: 'lerp'`: a
+ramp climb and a flight must look smooth), `level` the discrete 2.5D level
+(`u8`, not interpolated), which switches the zIndex and the collision set.
+`vz` (`f32`, `lerp`) is the vertical speed in levels per second, zero on the
+ground: the client reads flight and impact strength off it, and the local
+tank's replica reads the phase of the arc (one height answers both the rise
+and the descent, so it cannot be recovered from `z`). `pitch`/`roll` (`f32`,
+`lerp`) are the hull tilt in radians, computed by the host because nothing
+else can tilt another player's tank. That tail's width and order are a
+positional contract with three places at once: `TankRow::fields` and
+`players_json` in the host core, and `render_overlay` in the client core.
 
 The 2.5D level travels with the shot blocks as well: the tracer (`w1`)
 ends with `startLevel`/`endLevel` — the level the ray started at and the one

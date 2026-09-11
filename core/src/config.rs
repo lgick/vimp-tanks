@@ -69,6 +69,25 @@ pub struct CameraShake {
     pub duration: f64,
 }
 
+/// Тряска камеры на приземлении (`coreParams.levels.landingShake`). Порог
+/// `min_impact` и шкала `full_impact` численно повторяют блок `landing` из
+/// `src/config/render.js` (просадка корпуса, пыль и звук на клиенте):
+/// общего источника у клиентского рендера и WASM нет, поэтому значения
+/// обязаны меняться парой — иначе камера тряхнётся без пыли или наоборот.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LandingShake {
+    /// Интенсивность при полном ударе (те же единицы, что у оружия).
+    pub intensity: f64,
+    /// Длительность тряски, мс.
+    pub duration: f64,
+    /// |vz| касания (уровней/с), ниже которого приземление мягкое и
+    /// тряски нет вовсе.
+    pub min_impact: f32,
+    /// |vz| касания, дающий полную интенсивность.
+    pub full_impact: f32,
+}
+
 /// Тип оружия — определяет серверную механику выстрела.
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -155,6 +174,41 @@ pub struct LevelRules {
     /// давал видимый щелчок корпуса и тени.
     #[serde(default = "default_max_side_entry_rise")]
     pub max_side_entry_rise: f32,
+    /// Множитель вертикальной скорости на вылете с верхнего торца рампы.
+    /// 0.0 — прыжка нет вовсе (прежнее поведение), 1.0 — вся вертикальная
+    /// составляющая скорости на уклоне уходит в полёт.
+    #[serde(default = "default_ramp_launch_factor")]
+    pub ramp_launch_factor: f32,
+    /// Минимальная вертикальная скорость (уровней/с) на вылете, ниже
+    /// которой прыжок не начинается: иначе съезд по рампе шагом рождал бы
+    /// микропрыжки на каждой клетке.
+    #[serde(default = "default_min_launch_vz")]
+    pub min_launch_vz: f32,
+    /// Насколько выше уровня взлёта (в уровнях) танк перестаёт видеть
+    /// стены — то есть перепрыгивает препятствия.
+    #[serde(default = "default_jump_clearance")]
+    pub jump_clearance: f32,
+    /// Во сколько раз безразмерный уклон превращается в угол наклона
+    /// корпуса. 1.0 — наклон равен арктангенсу уклона (физически честно и
+    /// визуально слабо на пологих рампах).
+    #[serde(default = "default_tilt_gain")]
+    pub tilt_gain: f32,
+    /// Наклон носа в полёте: сколько радиан на единицу вертикальной
+    /// скорости (уровней/с). Нос задран на взлёте, опущен на снижении.
+    #[serde(default = "default_tilt_air_gain")]
+    pub tilt_air_gain: f32,
+    /// Скорость возврата корпуса к целевому наклону, 1/с. Ноль — наклон
+    /// мгновенный и дёрганый.
+    #[serde(default = "default_tilt_response")]
+    pub tilt_response: f32,
+    /// Потолок наклона по модулю, рад.
+    #[serde(default = "default_tilt_max")]
+    pub tilt_max: f32,
+    /// Тряска камеры на приземлении. `None` (блока нет в конфиге) — тряски
+    /// нет, поведение бит-в-бит прежнее; то же решение, что у
+    /// `WeaponConfig::camera_shake`.
+    #[serde(default)]
+    pub landing_shake: Option<LandingShake>,
 }
 
 impl Default for LevelRules {
@@ -169,6 +223,14 @@ impl Default for LevelRules {
             climb_max_speed_factor: 0.0,
             level_adopt_frames: default_level_adopt_frames(),
             max_side_entry_rise: default_max_side_entry_rise(),
+            ramp_launch_factor: default_ramp_launch_factor(),
+            min_launch_vz: default_min_launch_vz(),
+            jump_clearance: default_jump_clearance(),
+            tilt_gain: default_tilt_gain(),
+            tilt_air_gain: default_tilt_air_gain(),
+            tilt_response: default_tilt_response(),
+            tilt_max: default_tilt_max(),
+            landing_shake: None,
         }
     }
 }
@@ -187,6 +249,34 @@ fn default_level_adopt_frames() -> u8 {
 
 fn default_max_side_entry_rise() -> f32 {
     0.5
+}
+
+fn default_ramp_launch_factor() -> f32 {
+    1.0
+}
+
+fn default_min_launch_vz() -> f32 {
+    0.35
+}
+
+fn default_jump_clearance() -> f32 {
+    0.2
+}
+
+fn default_tilt_gain() -> f32 {
+    2.0
+}
+
+fn default_tilt_air_gain() -> f32 {
+    0.12
+}
+
+fn default_tilt_response() -> f32 {
+    12.0
+}
+
+fn default_tilt_max() -> f32 {
+    0.6
 }
 
 /// Игровая половина init-JSON хостового ядра (`GameCore::new`) — см.
@@ -252,6 +342,55 @@ impl TanksConfig {
             return Err(format!(
                 "levels.climbMaxSpeedFactor must be in [0, 1), got {}",
                 self.levels.climb_max_speed_factor
+            ));
+        }
+
+        if self.levels.ramp_launch_factor < 0.0 {
+            return Err(format!(
+                "levels.rampLaunchFactor must be >= 0, got {}",
+                self.levels.ramp_launch_factor
+            ));
+        }
+
+        if self.levels.min_launch_vz < 0.0 {
+            return Err(format!(
+                "levels.minLaunchVz must be >= 0, got {}",
+                self.levels.min_launch_vz
+            ));
+        }
+
+        if self.levels.jump_clearance < 0.0 {
+            return Err(format!(
+                "levels.jumpClearance must be >= 0, got {}",
+                self.levels.jump_clearance
+            ));
+        }
+
+        if self.levels.tilt_gain < 0.0 {
+            return Err(format!(
+                "levels.tiltGain must be >= 0, got {}",
+                self.levels.tilt_gain
+            ));
+        }
+
+        if self.levels.tilt_air_gain < 0.0 {
+            return Err(format!(
+                "levels.tiltAirGain must be >= 0, got {}",
+                self.levels.tilt_air_gain
+            ));
+        }
+
+        if self.levels.tilt_response < 0.0 {
+            return Err(format!(
+                "levels.tiltResponse must be >= 0, got {}",
+                self.levels.tilt_response
+            ));
+        }
+
+        if !(0.0..=1.5).contains(&self.levels.tilt_max) {
+            return Err(format!(
+                "levels.tiltMax must be in [0, 1.5], got {}",
+                self.levels.tilt_max
             ));
         }
 

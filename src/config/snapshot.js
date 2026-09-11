@@ -15,9 +15,10 @@
 // индексу поля (schema.fields[i]), не по имени. Переставлять поля местами
 // или менять interp без синхронной правки Rust-структур нельзя: validate()
 // проверяет только количество и тип полей, не interp и не порядок по смыслу.
-// Хвост m1 (angvel, z, level) обязан совпадать по ширине и порядку в трёх
-// местах сразу: `TankRow::fields` и `players_json` хостового ядра
-// (core/src/tanks.rs) и `render_overlay` клиентского (core/src/client/mod.rs).
+// Хвост m1 (angvel, z, level, vz, pitch, roll) обязан совпадать по ширине и
+// порядку в трёх местах сразу: `TankRow::fields` и `players_json` хостового
+// ядра (core/src/tanks.rs) и `render_overlay` клиентского
+// (core/src/client/mod.rs).
 export default {
   m1: {
     id: 1,
@@ -43,6 +44,12 @@ export default {
       // коллизий, промежуточных значений у него нет
       { name: 'z', ty: 'f32', interp: 'lerp' },
       { name: 'level', ty: 'u8' },
+      // вертикальная скорость (уровней/с, 0 на земле) и наклон корпуса в
+      // радианах: наклон авторитетен, клиент его не восстанавливает из
+      // разницы высот между кадрами — у стоящего танка та нулевая
+      { name: 'vz', ty: 'f32', interp: 'lerp' },
+      { name: 'pitch', ty: 'f32', interp: 'lerp' },
+      { name: 'roll', ty: 'f32', interp: 'lerp' },
     ],
   },
   w1: {

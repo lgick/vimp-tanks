@@ -7,8 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### ⚠️ Breaking
+
+- The `m1` snapshot row grew from 13 to 16 fields (`vz`, `pitch`, `roll`).
+  A host and a client on different versions of the plugin no longer read
+  the same frame.
+- `LevelRules` gained seven parameters under `coreParams.levels`
+  (`rampLaunchFactor`, `minLaunchVz`, `jumpClearance`, `tiltGain`,
+  `tiltAirGain`, `tiltResponse`, `tiltMax`); a config written for the
+  previous version still loads — all of them have defaults — but a tank now
+  jumps off ramps where it used to roll off.
+- Falling is ballistic instead of linear: a drop from two levels is now
+  faster than twice a one-level drop.
+
+### Migration
+
+- Rebuild the core (`npm run core:build`) and republish host and client
+  together — the frame layout changed.
+- To restore the previous, jump-free behaviour set
+  `coreParams.levels.rampLaunchFactor` to `0`; to restore the flat hull,
+  set `render.js`'s `tilt.enabled` to `false`.
+
+### Added
+
+- **Ramp jumps.** Leaving a run's top end at speed throws the tank into a
+  ballistic arc: the vertical speed at the exit is the grade times the speed
+  along it (`rampLaunchFactor`), and the flight only starts above
+  `minLaunchVz`, so a gentle ramp still gives no jump. While the tank is
+  `jumpClearance` above the level it left it does not see walls and clears
+  obstacles; below that they are back, so it never lands inside a building.
+  Landing back on the same level deals no damage.
+- **Hull tilt on slopes and in flight (`pitch`/`roll`).** The angles are
+  computed by the host from the grade under the tracks and the vertical
+  speed and carried in the frame, so other players' tanks are tilted too.
+  `PerspectiveMesh` deforms the hull, the gun and the wreck; the screen
+  reading is configured by `render.js`'s `tilt`.
+- **Landing squash, landing dust and a `tankLanding` sound**, all scaled by
+  the impact speed (`render.js`'s `landing`).
+- **Exhaust smoke follows the throttle.** `Smoke` gained a second, independent
+  emission channel driven by `engineLoad` rather than by damage: an idle
+  engine shivers over the pipe, a tank at full throttle trails a thick plume.
+  Strain (`engineLoad > 1`) does not make it thicker — a tank pushing into a
+  wall throws dust instead.
+- **Dust from the tracks (`Dust`, a new part).** Spinning tracks — throttle
+  with no motion — raise dust from both contact points, thrown backwards along
+  the hull; a hard landing punches a radial burst out of the same two points,
+  scaled by impact. The landing detector is the one `Tank` uses (`vz` in the
+  snapshot), so it works for every tank, not just the local one. A hard
+  landing also thuds: the new `tankLanding` sound, spatial and scaled by
+  impact — a soft touchdown (below `landing.minImpact`) stays silent.
+- **A hard landing shakes the camera** of the tank that landed. The rule is
+  authoritative and lives in the core — a second source of `CoreEvent::Shake`
+  next to a weapon's `cameraShake` — and is declared as
+  `coreParams.levels.landingShake` (`intensity`, `duration`, `minImpact`,
+  `fullImpact`). The strength scales with the vertical speed at contact and
+  is capped by `intensity`; a soft touchdown below `minImpact` shakes
+  nothing, the same threshold at which the client gives no squash, no dust
+  and no thud. Omitting the block keeps the previous, shake-free behaviour.
+
 ### Changed
 
+- **The turret and firing now work while airborne**; only driving is locked.
+  A tank thrown off a ramp can aim and shoot through the whole arc, while it
+  stays invulnerable to rays and blasts as before.
+- **Fall damage is measured from the arc's peak** instead of the take-off
+  level, so a tank thrown upwards by a jump pays for the climb as well. The
+  formula is unchanged (`fallDamage` per level, capped by `maxFallDamage`).
+- **`fallTime` now sets the gravity, not a duration.** `g = 2 / fallTime²`,
+  so a one-level drop still takes the same time and deals the same damage.
 - **Two level rules moved into `coreParams.levels`.** `levelAdoptFrames`
   (new, see below) and `maxSideEntryRise` (was a core constant) are game
   rules, so they belong to the config rather than to a recompile. The side
@@ -18,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Hull tilt no longer freezes under a parked tank.** It used to be
+  recovered on the client from the height delta between frames — zero under
+  a tank standing on a ramp — and was dropped for that reason; it is now
+  authoritative and carried in the frame.
 - **The 2.5D projection jittered on the upper levels.** `levelView` cached
   the camera centre per tick of the shared ticker, but the canvas is drawn
   several times per tick: `vimp-engine` up to 0.34 calls `app.render()`

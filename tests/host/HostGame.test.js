@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { M1_Z, M1_LEVEL } from '../../src/client/snapshotFields.js';
 import {
   coreAvailable,
   createHost,
@@ -513,9 +514,10 @@ describe.skipIf(!coreAvailable)('HostGame: спавн на мосту (overpass)
 
     const row = socket.lastFrame('s1').snapshot.m1[gameId];
 
-    // хвост строки m1: [... angvel, z, level] (src/config/snapshot.js)
-    expect(row[row.length - 1]).toBe(1);
-    expect(row[row.length - 2]).toBe(1);
+    // хвост строки m1: [... angvel, z, level, vz, pitch, roll]
+    // (src/config/snapshot.js)
+    expect(row[M1_LEVEL]).toBe(1);
+    expect(row[M1_Z]).toBe(1);
   });
 
   it('наземная точка без 4-го элемента даёт level 0', async () => {
@@ -540,7 +542,7 @@ describe.skipIf(!coreAvailable)('HostGame: спавн на мосту (overpass)
 
     const row = socket.lastFrame('s1').snapshot.m1[gameId];
 
-    expect(row[row.length - 1]).toBe(0);
-    expect(row[row.length - 2]).toBe(0);
+    expect(row[M1_LEVEL]).toBe(0);
+    expect(row[M1_Z]).toBe(0);
   });
 });

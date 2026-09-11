@@ -107,7 +107,10 @@ fn flat_config_json() -> serde_json::Value {
                     { "name": "team", "ty": "u8" },
                     { "name": "angvel", "ty": "f32", "interp": "lerp" },
                     { "name": "z", "ty": "f32", "interp": "lerp" },
-                    { "name": "level", "ty": "u8" }
+                    { "name": "level", "ty": "u8" },
+                    { "name": "vz", "ty": "f32", "interp": "lerp" },
+                    { "name": "pitch", "ty": "f32", "interp": "lerp" },
+                    { "name": "roll", "ty": "f32", "interp": "lerp" }
                 ] },
                 "w1": { "id": 2, "kind": "list16", "class": "event", "fields": [
                     { "name": "startX", "ty": "f32" },
@@ -301,6 +304,24 @@ fn level_of(core: &GameCore, game_id: u32) -> u64 {
     let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
 
     data["m1"][game_id.to_string()][12].as_u64().unwrap()
+}
+
+/// Наклон корпуса из players_data (индексы 14/15 строки схемы m1).
+fn tilt_of(core: &GameCore, game_id: u32) -> (f32, f32) {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+    let row = &data["m1"][game_id.to_string()];
+
+    (
+        row[14].as_f64().unwrap() as f32,
+        row[15].as_f64().unwrap() as f32,
+    )
+}
+
+/// Угол башни из players_data (индекс 3 строки схемы m1).
+fn gun_rotation_of(core: &GameCore, game_id: u32) -> f32 {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()][3].as_f64().unwrap() as f32
 }
 
 /// Координата x танка из players_data (индекс 0 строки схемы m1).
@@ -910,6 +931,33 @@ fn ramp_lifts_tank_to_level_one() {
 }
 
 #[test]
+fn turret_works_while_falling() {
+    // правило полёта: газ и корпус заблокированы, а башня работает
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, GROUND.0, GROUND.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+
+    // над землёй плиты нет: уровень 1 в этой точке — обрыв
+    core.set_actor_level(1, 1);
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1, "танк в полёте");
+
+    let before = gun_rotation_of(&core, 1);
+
+    core.apply_input(1, 1, "down", "gunLeft");
+    steps(&mut core, 10);
+
+    assert_eq!(level_of(&core, 1), 1, "танк всё ещё в полёте");
+    assert!(
+        gun_rotation_of(&core, 1) < before,
+        "башня падающего танка обязана поворачиваться"
+    );
+}
+
+#[test]
 fn landing_applies_fall_damage() {
     let mut core = make_core();
 
@@ -956,6 +1004,89 @@ fn landing_applies_fall_damage() {
     }
 
     assert!(killed, "смерть от падения засчитывается самоубийством");
+}
+
+/// Конфиг из `config_json()` с блоком `levels.landingShake`.
+fn config_json_with_landing_shake(min_impact: f32, full_impact: f32) -> String {
+    let mut flat = flat_config_json();
+
+    flat["levels"]["landingShake"] = serde_json::json!({
+        "intensity": 6.0,
+        "duration": 300.0,
+        "minImpact": min_impact,
+        "fullImpact": full_impact
+    });
+
+    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+}
+
+/// Роняет танк с уровня 1 на землю и отдаёт тряски, случившиеся за падение.
+fn shakes_after_a_fall(config: &str) -> Vec<(u32, f64, f64)> {
+    let mut core = GameCore::new(config).unwrap();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, GROUND.0, GROUND.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.take_events();
+
+    // над землёй плиты нет: уровень 1 в этой точке — обрыв
+    core.set_actor_level(1, 1);
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+
+    // fallTime = 0.35 c = 42 шага
+    steps(&mut core, 50);
+    assert_eq!(level_of(&core, 1), 0, "танк обязан приземлиться");
+
+    events(&mut core)
+        .iter()
+        .filter_map(|event| match event {
+            CoreEvent::Shake { id, intensity, duration } => Some((*id, *intensity, *duration)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn hard_landing_shakes_the_camera_once() {
+    let shakes = shakes_after_a_fall(&config_json_with_landing_shake(1.5, 6.0));
+
+    assert_eq!(shakes.len(), 1, "ровно одна тряска на приземление");
+
+    let (id, intensity, duration) = shakes[0];
+
+    assert_eq!(id, 1, "трясёт камеру тому, кто приземлился");
+    assert_eq!(duration, 300.0);
+    assert!(
+        intensity > 0.0 && intensity <= 6.0,
+        "интенсивность зажата потолком, получено {intensity}"
+    );
+}
+
+#[test]
+fn soft_landing_does_not_shake_the_camera() {
+    // порог выше скорости касания при падении с одного уровня
+    let shakes = shakes_after_a_fall(&config_json_with_landing_shake(8.0, 12.0));
+
+    assert!(shakes.is_empty(), "мягкое касание камеру не трогает");
+}
+
+#[test]
+fn landing_shake_intensity_is_capped() {
+    // fullImpact ниже реальной скорости касания: k зажимается единицей
+    let shakes = shakes_after_a_fall(&config_json_with_landing_shake(0.5, 2.0));
+
+    assert_eq!(shakes.len(), 1);
+    assert_eq!(shakes[0].1, 6.0, "сильнее полного удара тряски не бывает");
+}
+
+#[test]
+fn landing_without_the_config_block_does_not_shake() {
+    // `config_json()` блока landingShake не объявляет — поведение прежнее
+    let shakes = shakes_after_a_fall(&config_json());
+
+    assert!(shakes.is_empty(), "без блока в конфиге тряски нет вовсе");
 }
 
 #[test]
@@ -1387,6 +1518,44 @@ fn tank_climbs_the_ramp_and_falls_back_to_the_ground() {
     );
 }
 
+// наклон корпуса авторитетен: он едет в кадре, а не восстанавливается
+// клиентом из разницы высот между кадрами (у стоящего танка та нулевая)
+#[test]
+fn tank_row_carries_tilt() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // подножие рампы, движение на восток
+    core.spawn_actor(1, "m1", 1, 208.0, 304.0, 0.0).unwrap();
+    // и второй танк вдали от рампы — на ровной земле
+    core.spawn_actor(2, "m1", 2, 100.0, 100.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+
+    // на ровной земле корпус не наклонён
+    assert_eq!(tilt_of(&core, 2), (0.0, 0.0));
+
+    core.apply_input(1, 1, "down", "forward");
+
+    let mut on_ramp = None;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        let (pitch, roll) = tilt_of(&core, 1);
+
+        if pitch != 0.0 || roll != 0.0 {
+            on_ramp = Some((pitch, roll));
+            break;
+        }
+    }
+
+    let (pitch, _) = on_ramp.expect("на прогоне рампы корпус обязан наклониться");
+
+    // рампа ведёт вверх: нос задран
+    assert!(pitch > 0.0, "pitch = {pitch}");
+}
+
 #[test]
 fn box_pushed_off_the_slab_falls_to_the_ground() {
     // задача 1 итерации 2: тело карты живёт по тем же правилам уровня, что
@@ -1733,6 +1902,13 @@ fn terraces_cell(x: f32, y: f32) -> (f32, f32) {
     ((x + 0.5) * 12.8, (y + 0.5) * 12.8)
 }
 
+/// Высота танка из players_data (индекс 11 строки схемы m1).
+fn tank_z(core: &GameCore, game_id: u32) -> f32 {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()][11].as_f64().unwrap() as f32
+}
+
 /// Координата y танка из players_data (индекс 1 строки схемы m1).
 fn tank_y(core: &GameCore, game_id: u32) -> f32 {
     let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
@@ -1799,6 +1975,54 @@ fn tank_climbs_two_levels_in_one_ramp() {
 
     assert!(climbed, "танк не поднялся на уровень 2 одним прогоном");
     assert!(seen_middle, "подъём обязан пройти через промежуточный уровень 1");
+}
+
+#[test]
+fn terraces_ramp_launches_the_tank() {
+    // верхний торец крутого прогона 0 → 2 работает трамплином: сойдя с
+    // него на ходу, танк уходит в полёт выше уровня отрыва и возвращается
+    // на верхнюю площадку, а не приклеивается к плите
+    let mut core = make_core();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    let (x, y) = terraces_cell(58.0, 21.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 180.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 2);
+
+    let mut peak = 0.0_f32;
+    let mut climbed = false;
+    let mut landed = false;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        if level_of(&core, 1) == 2 {
+            climbed = true;
+        }
+
+        if !climbed {
+            continue;
+        }
+
+        peak = peak.max(tank_z(&core, 1));
+
+        // дуга кончилась: высота вернулась ровно на целый уровень
+        if peak > 2.0 && (tank_z(&core, 1) - 2.0).abs() < 1e-3 {
+            landed = true;
+            break;
+        }
+    }
+
+    assert!(climbed, "танк не поднялся на уровень 2 одним прогоном");
+    assert!(
+        peak > 2.0,
+        "сход с прогона обязан подбросить танк выше уровня отрыва, peak = {peak}"
+    );
+    assert!(landed, "прыжок обязан закончиться приземлением");
+    assert_eq!(level_of(&core, 1), 2, "после прыжка танк на верхней площадке");
 }
 
 #[test]

@@ -30,10 +30,18 @@ pub enum Transit {
         #[serde(default)]
         run: u16,
     },
-    /// Свободное падение с обрыва: остаются только стены, ввод заблокирован.
-    /// `from` — уровень срыва, `to` — уровень приземления (он выбран в
-    /// момент срыва: под танком может быть не земля, а нижняя плита).
-    Falling { elapsed: f32, from: u8, to: u8 },
+    /// Полёт: свободное падение с обрыва или прыжок с рампы. Ввод
+    /// заблокирован. `vz` — вертикальная скорость в уровнях/с
+    /// (положительная вверх), `from` — уровень отрыва, `to` —
+    /// предполагаемый уровень приземления (выбран в момент отрыва,
+    /// окончательный решает клетка касания), `peak` — высшая точка дуги
+    /// (по ней считается урон).
+    Airborne {
+        vz: f32,
+        from: u8,
+        to: u8,
+        peak: f32,
+    },
 }
 
 /// Уровень танка/тела и его визуальная высота.
@@ -55,6 +63,12 @@ pub struct LevelState {
     /// на два порядка. Заполняется из `RampSample { dir, slope }` и только
     /// при `climbing`.
     pub slope_vec: [f32; 2],
+    /// Летит ли тело ВЫШЕ уровня отрыва на `jumpClearance` — тогда оно не
+    /// видит даже стен и перелетает препятствия. Поле живёт в состоянии,
+    /// потому что порог берётся из правил, а `collision_mask` правил не
+    /// видит: считает флаг `step_layered`, маска только читает.
+    #[serde(default)]
+    pub clear_walls: bool,
 }
 
 impl Default for LevelState {
@@ -65,6 +79,7 @@ impl Default for LevelState {
             transit: Transit::Grounded,
             prev_cell: (-1, -1),
             slope_vec: [0.0, 0.0],
+            clear_walls: false,
         }
     }
 }
@@ -73,25 +88,41 @@ impl Default for LevelState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LevelEvent {
     None,
-    /// Танк только что коснулся опоры после падения; `height` — высота
-    /// падения в уровнях (по ней считается урон).
-    Landed { height: u8 },
+    /// Танк коснулся опоры. `height` — высота падения в уровнях от вершины
+    /// дуги до точки касания (дробная: короткий прыжок на свой же уровень
+    /// даёт почти ноль). `impact` — модуль вертикальной скорости в момент
+    /// касания, уровней/с: по нему клиент рисует просадку и пыль.
+    Landed { height: f32, impact: f32 },
 }
 
 impl LevelState {
-    /// Игнорирует ли ввод (падение).
+    /// Тело в полёте: падает с обрыва или летит прыжком с рампы.
+    pub fn airborne(&self) -> bool {
+        matches!(self.transit, Transit::Airborne { .. })
+    }
+
+    /// Игнорирует ли ввод (полёт). Пока это ровно `airborne`, но имя
+    /// отдельное: смысл сузится, когда башне в полёте разрешат работать.
     pub fn input_locked(&self) -> bool {
-        matches!(self.transit, Transit::Falling { .. })
+        self.airborne()
     }
 
     /// Битовая маска уровней, которые тело сейчас видит физически.
-    /// `Falling` — только группа статики: падающий пролетает за время
+    /// `Airborne` — только группа статики: падающий пролетает за время
     /// падения около семи тайлов, и без стен он проходил бы сквозь здание и
     /// приземлялся внутри него; при этом ни танки, ни ящики, ни лучи, ни
-    /// взрывы его не достают — они живут в группах уровней.
+    /// взрывы его не достают — они живут в группах уровней. Выше уровня
+    /// отрыва (`clear_walls`) пропадают и стены: танк перелетает
+    /// препятствия — ровно то, ради чего прыжок и делается.
     pub fn collision_mask(&self) -> Group {
         match self.transit {
-            Transit::Falling { .. } => STATIC_LEVEL_GROUP,
+            Transit::Airborne { .. } => {
+                if self.clear_walls {
+                    Group::empty()
+                } else {
+                    STATIC_LEVEL_GROUP
+                }
+            }
             Transit::Ramp {
                 climbing,
                 low,
@@ -131,27 +162,34 @@ impl LevelState {
     }
 }
 
-/// Модель падения по правилам игры — одна траектория на танки и на тела
-/// карты (её же зовёт движок в `step_body_level`).
+/// Модель падения ТЕЛ КАРТЫ (`step_body_level` на стороне движка): ящики
+/// и бочки падают прежним линейным `lerp`, их модель баллистика танков не
+/// трогает.
 pub fn fall_model(rules: &LevelRules) -> FallModel {
     FallModel {
         time_per_level: rules.fall_time,
     }
 }
 
-/// Сколько времени прошло с начала падения с уровня `from` на уровень `to`
-/// до высоты `z` — обратная к `FallModel::z_at`. Нужна клиентской реплике:
-/// кадр везёт авторитетные `z`/`level`, но не фазу падения, а восстанавливать
-/// её обнулением нельзя — высота своего танка тогда зависела бы от длины
-/// реплея, а не от времени падения.
-pub fn fall_elapsed(z: f32, from: u8, to: u8, rules: &LevelRules) -> f32 {
-    let fall = fall_model(rules);
+/// Гравитация в уровнях/с², выведенная из `fallTime`, чтобы обычное
+/// падение с обрыва длилось ровно столько же, сколько раньше. Свободное
+/// падение с нулевой вертикальной скоростью: h = g·t²/2, а прежняя модель
+/// проходила ОДИН уровень за `fall_time`, значит g = 2 / fall_time².
+pub fn gravity(rules: &LevelRules) -> f32 {
+    let t = rules.fall_time.max(1e-3);
 
-    if from <= to {
-        return fall.duration((from as f32 - to as f32).abs());
-    }
+    2.0 / (t * t)
+}
 
-    fall.elapsed_at(from as f32, to as f32, z)
+/// Вертикальная скорость свободного падения с уровня `from` на высоте `z`
+/// — обратная к параболе полёта (h = g·t²/2, v = -√(2·g·h)). Нужна
+/// клиентской реплике: кадр везёт авторитетные `z`/`level`, но не фазу
+/// полёта, а восстанавливать её нулём нельзя — высота своего танка тогда
+/// зависела бы от длины реплея, а не от времени падения.
+pub fn fall_speed_at(z: f32, from: u8, rules: &LevelRules) -> f32 {
+    let drop = (from as f32 - z).max(0.0);
+
+    -(2.0 * gravity(rules) * drop).sqrt()
 }
 
 /// Опора корпуса: прямоугольник тела в мировых единицах. Срыв с обрыва
@@ -263,10 +301,12 @@ pub fn bomb_level(
 
 /// Шаг правил уровня для точки `(x, y)`. Вызывается ДО применения ввода и
 /// ДО шага физики — так маска коллизий уже верна для наступающего шага.
+#[allow(clippy::too_many_arguments)]
 pub fn step_level(
     state: &mut LevelState,
     x: f32,
     y: f32,
+    vel: [f32; 2],
     footprint: &Footprint,
     levels: &MapLevels,
     rules: &LevelRules,
@@ -280,7 +320,7 @@ pub fn step_level(
     }
 
     let cell = cell_of(levels, x, y);
-    let event = step_layered(state, x, y, cell, footprint, levels, rules, dt);
+    let event = step_layered(state, x, y, vel, cell, footprint, levels, rules, dt);
 
     // клетка пишется ВСЕГДА, а не только на рампе: иначе после проезда по
     // плите значение протухло бы, и гейт судил бы вход по древней клетке
@@ -295,42 +335,78 @@ fn step_layered(
     state: &mut LevelState,
     x: f32,
     y: f32,
+    vel: [f32; 2],
     cell: (i32, i32),
     footprint: &Footprint,
     levels: &MapLevels,
     rules: &LevelRules,
     dt: f32,
 ) -> LevelEvent {
-    if let Transit::Falling { elapsed, from, to } = state.transit {
-        let fall = fall_model(rules);
-        let elapsed = elapsed + dt;
+    if let Transit::Airborne { vz, from, to, peak } = state.transit {
+        let prev_z = state.z;
+        // трапеция (скорость усредняется по шагу) — это ТОЧНАЯ выборка
+        // параболы в моменты `n·dt`, а не приближение: v² = v0² - 2g·Δz
+        // держится на каждом шаге. Без этого `fall_speed_at` (реплика
+        // восстанавливает скорость полёта по высоте кадра) промахивался бы
+        // на полшага, и падение у реплики кончалось тиком раньше — газ
+        // расходился с авторитетным на каждом падении
+        let next_vz = vz - gravity(rules) * dt;
+        let z = prev_z + (vz + next_vz) * 0.5 * dt;
+        let vz = next_vz;
+        let peak = peak.max(z);
 
         state.slope_vec = [0.0, 0.0];
-        state.z = fall.z_at(from as f32, to as f32, elapsed);
+        state.z = z;
+        state.clear_walls = z >= from as f32 + rules.jump_clearance;
 
-        if elapsed >= fall.duration(from as f32 - to as f32) {
-            // цель падения выбрана в момент срыва, а тело всё это время
-            // летело горизонтально: на длинном сносе плиты `to` под ним уже
-            // может не быть. Приземление судит КЛЕТКА КАСАНИЯ, сохранённое
-            // `to` остаётся только траекторией
-            debug_assert!(from > to, "падение обязано идти вниз: {from} → {to}");
+        // цель `to` выбрана в момент отрыва, а тело всё это время летело
+        // горизонтально: на длинном сносе плиты `to` под ним уже может не
+        // быть. Приземление судит КЛЕТКА КАСАНИЯ, сохранённое `to`
+        // остаётся только траекторией
+        let target = if levels.has_floor(to, x, y) {
+            to
+        } else {
+            levels.landing_level(to, x, y)
+        };
 
-            let landed = if levels.has_floor(to, x, y) {
-                to
+        // ВВЕРХ дуги приземления быть не может: пока `vz > 0`, проверять
+        // касание бессмысленно и вредно — танк, прыгнувший со своей же
+        // плиты, коснулся бы её на первом же шаге
+        let landed = if vz > 0.0 {
+            None
+        } else {
+            // плита ВЫШЕ уровня отрыва: прыжок закинул танк на соседний
+            // ярус. Проверяется отдельно, потому что `to` считался вниз, и
+            // ловится по ПЕРЕСЕЧЕНИЮ целого уровня сверху вниз: иначе танк,
+            // не долетевший до плиты, телепортировался бы на неё
+            let crossed = z.floor() + 1.0;
+            let jumped = crossed > from as f32
+                && prev_z >= crossed
+                && crossed <= u8::MAX as f32
+                && levels.has_floor(crossed as u8, x, y);
+
+            if jumped {
+                Some(crossed as u8)
+            } else if z <= target as f32 {
+                Some(target)
             } else {
-                levels.landing_level(to, x, y)
-            };
+                None
+            }
+        };
 
-            state.level = landed;
-            state.z = landed as f32;
+        if let Some(level) = landed {
+            state.level = level;
+            state.z = level as f32;
             state.transit = Transit::Grounded;
+            state.clear_walls = false;
 
             return LevelEvent::Landed {
-                height: from.saturating_sub(landed),
+                height: (peak - level as f32).max(0.0),
+                impact: vz.abs(),
             };
         }
 
-        state.transit = Transit::Falling { elapsed, from, to };
+        state.transit = Transit::Airborne { vz, from, to, peak };
 
         return LevelEvent::None;
     }
@@ -389,19 +465,61 @@ fn step_layered(
         return LevelEvent::None;
     }
 
+    // вылет с рампы: тело только что сошло с прогона, по которому законно
+    // поднималось. Вертикальная скорость на прогоне — это уклон, умноженный
+    // на скорость вдоль него; в момент схода она никуда не девается, и танк
+    // продолжает лететь вверх
+    let launched = matches!(state.transit, Transit::Ramp { climbing: true, .. });
+    let prev_slope = state.slope_vec;
+
     state.transit = Transit::Grounded;
     state.slope_vec = [0.0, 0.0];
+    state.clear_walls = false;
+
+    // порядок веток важен: вылет проверяется ДО проверки обрыва, иначе
+    // танк, слетевший с рампы над пустотой, начал бы падение с `vz = 0` и
+    // потерял бы прыжок
+    if launched {
+        // `slope_vec` безразмерен (`rise * levelHeight / span`), `vel` — в
+        // мировых единицах в секунду: произведение — мировая вертикальная
+        // скорость, и в уровни её переводит высота уровня
+        let vz = (prev_slope[0] * vel[0] + prev_slope[1] * vel[1]) / levels.level_height()
+            * rules.ramp_launch_factor;
+
+        if vz >= rules.min_launch_vz {
+            state.transit = Transit::Airborne {
+                vz,
+                from: state.level,
+                // у прыжка цель — СВОЯ же плита: танк уходит вверх и
+                // возвращается на неё. Плиты под ним может и не быть
+                // (вылет над обрывом) — тогда цель обычная, нижняя
+                to: if levels.has_floor(state.level, x, y) {
+                    state.level
+                } else {
+                    levels.landing_level(state.level, x, y)
+                },
+                peak: state.level as f32,
+            };
+            // полёт начинается с высоты ПЛИТЫ, а не с последней высоты
+            // прогона: верхний торец кончается на тысячные доли ниже
+            // уровня, и дуга иначе стартовала бы под ним
+            state.z = state.level as f32;
+
+            return LevelEvent::None;
+        }
+    }
 
     // срыв судит габарит корпуса: пока под телом есть опора хоть одним
     // углом, оно свисает над пустотой, но стоит — и ввод у него не заперт,
     // так что реверс у самой кромки возвращает танк на плиту
     if state.level >= 1 && !has_support(levels, state.level, x, y, footprint) {
-        state.transit = Transit::Falling {
-            elapsed: 0.0,
+        state.transit = Transit::Airborne {
+            vz: 0.0,
             from: state.level,
             // приземление — не всегда земля: под обрывом может лежать плита
             // нижнего уровня
             to: levels.landing_level(state.level, x, y),
+            peak: state.level as f32,
         };
         state.z = state.level as f32;
 
@@ -820,6 +938,14 @@ mod tests {
             climb_max_speed_factor: 0.5,
             level_adopt_frames: 8,
             max_side_entry_rise: 0.5,
+            ramp_launch_factor: 1.0,
+            min_launch_vz: 0.35,
+            jump_clearance: 0.2,
+            tilt_gain: 2.0,
+            tilt_air_gain: 0.12,
+            tilt_response: 12.0,
+            tilt_max: 0.6,
+            landing_shake: None,
         }
     }
 
@@ -843,10 +969,11 @@ mod tests {
                 run: 0,
             },
             prev_cell: (1, 1),
+            clear_walls: false,
             slope_vec: [0.1, 0.0],
         };
 
-        let event = step_level(&mut state, 15.0, 15.0, &Footprint::point(), &flat(), &rules(), DT);
+        let event = step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &flat(), &rules(), DT);
 
         assert_eq!(event, LevelEvent::None);
         assert_eq!(state, LevelState::default());
@@ -858,10 +985,10 @@ mod tests {
         let mut state = LevelState::default();
 
         // подъезд к подножию прогона: клетка (0, 1), уровень 0
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         // клетка рампы — x от 10 до 20, подъём на восток
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(
@@ -879,7 +1006,7 @@ mod tests {
         assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
         assert_eq!(state.level, 0);
 
-        step_level(&mut state, 17.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 17.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!((state.z - 0.7).abs() < 1e-5, "z = {}", state.z);
         assert_eq!(state.level, 1);
@@ -891,20 +1018,20 @@ mod tests {
         let mut state = LevelState::default();
 
         // клетка рампы у вершины (progress 0.7) достижима с земли сбоку
-        step_level(&mut state, 17.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 17.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.level, 0);
         assert_eq!(state.z, 0.0);
 
         // гейт держится и когда танк доехал по прогону до его подножия
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.level, 0);
         assert_eq!(state.z, 0.0);
 
         // сойдя с рампы, танк снова может зайти на неё снизу
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
     }
@@ -916,8 +1043,8 @@ mod tests {
 
         // клетка (1, 0) — соседняя ПОПЕРЁК оси прогона. Клетка (1, 1) —
         // подножие: заход в неё сбоку законен, высоту он не перепрыгивает
-        step_level(&mut state, 12.0, 5.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 5.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -935,8 +1062,8 @@ mod tests {
 
         // заход сбоку в дальний край клетки подножия: прогон там уже на
         // 0.8 уровня выше танка — это подкидывание, а не заезд
-        step_level(&mut state, 18.0, 5.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 18.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 18.0, 5.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 18.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -955,8 +1082,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // середина клетки подножия: высота прогона там ровно на 0.5 выше
-        step_level(&mut state, 15.0, 5.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 5.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -973,8 +1100,8 @@ mod tests {
 
         // клетка (2, 1) — проезд уровня 0 ПОД плитой, упирающийся в верхний
         // торец прогона
-        step_level(&mut state, 25.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 17.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 17.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -991,8 +1118,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // танк уровня 0 катится под прогоном 1 → 2: клетка (1, 1) → (2, 1)
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 25.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -1016,8 +1143,8 @@ mod tests {
         };
 
         // законный вход с нижнего торца прогона: клетка (1, 1) → (2, 1)
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 25.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1034,8 +1161,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // законный вход с подножия в полосу y = 1: клетка (0, 1) → (1, 1)
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1046,7 +1173,7 @@ mod tests {
         let entry_z = state.z;
 
         // перестроение ПОПЕРЁК оси в полосу y = 2 и дальше вверх по ней
-        step_level(&mut state, 15.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1054,7 +1181,7 @@ mod tests {
             state.transit
         );
 
-        step_level(&mut state, 25.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1075,8 +1202,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // законный вход с подножия в полосу y = 1: клетка (0, 1) → (1, 1)
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1087,7 +1214,7 @@ mod tests {
         let entry_z = state.z;
 
         // наискось: клетка (1, 1) → (2, 2) — сменились обе координаты
-        step_level(&mut state, 25.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1106,8 +1233,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // с земли в подножие полосы y = 2: клетка (0, 2) → (1, 2)
-        step_level(&mut state, 5.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1121,8 +1248,8 @@ mod tests {
         let levels = wide(true);
         let mut state = LevelState::default();
 
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1131,7 +1258,7 @@ mod tests {
         );
 
         // средняя полоса короче — это уже другая горка, вход судит гейт
-        step_level(&mut state, 15.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -1146,8 +1273,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // с земли ВБОК на полосу: клетка (2, 0) → (2, 1)
-        step_level(&mut state, 25.0, 5.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 25.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 5.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -1168,10 +1295,10 @@ mod tests {
         };
 
         // срыв с плиты уровня 2 над колонкой x=4: под ней плита уровня 1
-        step_level(&mut state, 45.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 45.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
-            matches!(state.transit, Transit::Falling { to: 1, .. }),
+            matches!(state.transit, Transit::Airborne { to: 1, .. }),
             "{:?}",
             state.transit
         );
@@ -1180,7 +1307,7 @@ mod tests {
         let mut event = LevelEvent::None;
 
         for _ in 0..200 {
-            event = step_level(&mut state, 55.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+            event = step_level(&mut state, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
             if event != LevelEvent::None {
                 break;
@@ -1189,7 +1316,10 @@ mod tests {
 
         assert_eq!(state.level, 0, "снос за плиту обязан ронять на землю");
         assert_eq!(state.z, 0.0);
-        assert_eq!(event, LevelEvent::Landed { height: 2 });
+        assert!(
+            matches!(event, LevelEvent::Landed { height, .. } if (height - 2.0).abs() < 1e-3),
+            "{event:?}"
+        );
     }
 
     #[test]
@@ -1214,8 +1344,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // законный вход в первый прогон: клетка (0, 1) → (1, 1)
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1224,14 +1354,14 @@ mod tests {
         );
 
         // проезд первого прогона до конца: наверху уровень 1
-        step_level(&mut state, 25.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.level, 1);
 
         // въезд во ВТОРОЙ прогон: его нижний торец ждёт уровень 0, поэтому
         // подъём обязан быть отказан. До правки вердикт наследовался от
         // первого прогона, и подъём продолжался бесплатно
-        step_level(&mut state, 35.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 35.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
@@ -1249,8 +1379,8 @@ mod tests {
 
         // клетка (0, 0) — диагональный сосед подножия: заезд под углом
         // поднимает так же, как заезд в лоб
-        step_level(&mut state, 5.0, 5.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 5.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: true, .. }),
@@ -1268,13 +1398,13 @@ mod tests {
 
         // спуск: танк уровня 1 приезжает по плите и заходит на прогон с его
         // верхнего торца
-        step_level(&mut state, 25.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 17.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 17.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.level, 1);
         assert!((state.z - 0.7).abs() < 1e-5, "z = {}", state.z);
 
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.level, 0);
         assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
@@ -1285,8 +1415,8 @@ mod tests {
         let levels = layered();
         let mut state = LevelState::default();
 
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         let mask = state.collision_mask();
 
@@ -1300,8 +1430,8 @@ mod tests {
         let mut state = LevelState::default();
 
         // подножие прогона — клетка (1, 1), вершина — (2, 1)
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
         assert_eq!(state.level, 0);
@@ -1317,12 +1447,12 @@ mod tests {
         assert!(mask.contains(level_group(1)));
         assert!(mask.contains(level_group(2)));
 
-        step_level(&mut state, 22.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 22.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!((state.z - 1.2).abs() < 1e-5, "z = {}", state.z);
         assert_eq!(state.level, 1);
 
-        step_level(&mut state, 29.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 29.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!((state.z - 1.9).abs() < 1e-5, "z = {}", state.z);
         assert_eq!(state.level, 2);
@@ -1335,10 +1465,10 @@ mod tests {
         let mut state = grounded(2);
 
         // колонка x=4 несёт пол только уровня 1
-        step_level(&mut state, 45.0, 15.0, &Footprint::point(), &levels, &rules, DT);
+        step_level(&mut state, 45.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
 
         assert!(
-            matches!(state.transit, Transit::Falling { from: 2, to: 1, .. }),
+            matches!(state.transit, Transit::Airborne { from: 2, to: 1, .. }),
             "{:?}",
             state.transit
         );
@@ -1346,14 +1476,17 @@ mod tests {
         let mut event = LevelEvent::None;
 
         for _ in 0..1000 {
-            event = step_level(&mut state, 45.0, 15.0, &Footprint::point(), &levels, &rules, DT);
+            event = step_level(&mut state, 45.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
 
             if event != LevelEvent::None {
                 break;
             }
         }
 
-        assert_eq!(event, LevelEvent::Landed { height: 1 });
+        assert!(
+            matches!(event, LevelEvent::Landed { height, .. } if (height - 1.0).abs() < 1e-3),
+            "{event:?}"
+        );
         assert_eq!(state.level, 1);
         assert_eq!(state.z, 1.0);
         assert_eq!(state.transit, Transit::Grounded);
@@ -1368,13 +1501,13 @@ mod tests {
         let mut deep = grounded(2);
         let mut shallow = grounded(1);
 
-        step_level(&mut deep, 55.0, 15.0, &Footprint::point(), &levels, &rules, DT);
-        step_level(&mut shallow, 55.0, 15.0, &Footprint::point(), &levels, &rules, DT);
+        step_level(&mut deep, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
+        step_level(&mut shallow, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
 
         let steps = |state: &mut LevelState| {
             let mut count = 0;
 
-            while step_level(state, 55.0, 15.0, &Footprint::point(), &levels, &rules, DT) == LevelEvent::None {
+            while step_level(state, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT) == LevelEvent::None {
                 count += 1;
 
                 assert!(count < 1000, "падение обязано завершиться");
@@ -1400,19 +1533,22 @@ mod tests {
         let rules = rules();
         let mut state = grounded(2);
 
-        step_level(&mut state, 55.0, 15.0, &Footprint::point(), &levels, &rules, DT);
+        step_level(&mut state, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
 
         let mut event = LevelEvent::None;
 
         for _ in 0..1000 {
-            event = step_level(&mut state, 55.0, 15.0, &Footprint::point(), &levels, &rules, DT);
+            event = step_level(&mut state, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
 
             if event != LevelEvent::None {
                 break;
             }
         }
 
-        assert_eq!(event, LevelEvent::Landed { height: 2 });
+        assert!(
+            matches!(event, LevelEvent::Landed { height, .. } if (height - 2.0).abs() < 1e-3),
+            "{event:?}"
+        );
     }
 
     #[test]
@@ -1421,7 +1557,7 @@ mod tests {
         let mut state = grounded(1);
 
         // колонка x=2 — плита
-        let event = step_level(&mut state, 25.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        let event = step_level(&mut state, 25.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(event, LevelEvent::None);
         assert_eq!(state.transit, Transit::Grounded);
@@ -1435,11 +1571,11 @@ mod tests {
         let mut state = grounded(1);
 
         // колонка x=3 — плиты нет
-        step_level(&mut state, 35.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 35.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert!(matches!(
             state.transit,
-            Transit::Falling { from: 1, to: 0, .. }
+            Transit::Airborne { from: 1, to: 0, .. }
         ));
         // стены остаются, тела — нет
         let mask = state.collision_mask();
@@ -1451,18 +1587,19 @@ mod tests {
     }
 
     #[test]
-    fn fall_elapsed_is_the_inverse_of_the_falling_lerp() {
+    fn fall_speed_is_the_inverse_of_the_flight_parabola() {
         let rules = rules();
+        let g = gravity(&rules);
 
-        assert_eq!(fall_elapsed(1.0, 1, 0, &rules), 0.0);
-        assert!((fall_elapsed(0.5, 1, 0, &rules) - rules.fall_time * 0.5).abs() < 1e-6);
-        assert_eq!(fall_elapsed(0.0, 1, 0, &rules), rules.fall_time);
-        // высота вне диапазона (кадр старой карты) не даёт отрицательной фазы
-        assert_eq!(fall_elapsed(2.0, 1, 0, &rules), 0.0);
-        assert_eq!(fall_elapsed(0.5, 0, 0, &rules), 0.0);
-        // падение на нижнюю плиту короче падения до земли
-        assert!((fall_elapsed(1.5, 2, 1, &rules) - rules.fall_time * 0.5).abs() < 1e-6);
-        assert!((fall_elapsed(1.0, 2, 0, &rules) - rules.fall_time).abs() < 1e-6);
+        // на своём уровне тело ещё не разогналось
+        assert_eq!(fall_speed_at(1.0, 1, &rules), 0.0);
+        // высота вне диапазона (кадр старой карты) не даёт разгона вверх
+        assert_eq!(fall_speed_at(2.0, 1, &rules), 0.0);
+        // v = -√(2·g·h)
+        assert!((fall_speed_at(0.5, 1, &rules) + (g).sqrt()).abs() < 1e-5);
+        assert!((fall_speed_at(0.0, 1, &rules) + (2.0 * g).sqrt()).abs() < 1e-5);
+        // падение на нижнюю плиту разгоняет слабее падения до земли
+        assert!(fall_speed_at(1.0, 2, &rules) > fall_speed_at(0.0, 2, &rules));
     }
 
     #[test]
@@ -1471,14 +1608,15 @@ mod tests {
         let rules = rules();
         let mut state = grounded(1);
 
-        step_level(&mut state, 35.0, 25.0, &Footprint::point(), &levels, &rules, DT);
+        step_level(&mut state, 35.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
 
         let mut landed = false;
 
         for _ in 0..1000 {
-            if step_level(&mut state, 35.0, 25.0, &Footprint::point(), &levels, &rules, DT)
-                == (LevelEvent::Landed { height: 1 })
-            {
+            let event =
+                step_level(&mut state, 35.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules, DT);
+
+            if matches!(event, LevelEvent::Landed { height, .. } if (height - 1.0).abs() < 1e-3) {
                 landed = true;
                 break;
             }
@@ -1492,17 +1630,266 @@ mod tests {
         assert_eq!(state.transit, Transit::Grounded);
     }
 
+    // Состояние «еду вверх по прогону и вот-вот сойду с него»: прогон
+    // `layered()` — одна клетка (1, 1), подъём на восток, уклон 1.0
+    // (подъём на уровень за клетку). Следующий шаг ставит тело на плиту
+    // колонки x=2 — это и есть верхний торец.
+    fn on_the_ramp_top() -> LevelState {
+        LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Ramp {
+                climbing: true,
+                low: 0,
+                high: 1,
+                run: 0,
+            },
+            prev_cell: (1, 1),
+            slope_vec: [1.0, 0.0],
+            clear_walls: false,
+        }
+    }
+
+    // сколько шагов длится полёт, начавшийся на прошлом шаге
+    fn flight_steps(state: &mut LevelState, levels: &MapLevels, x: f32, y: f32) -> u32 {
+        let rules = rules();
+        let mut count = 0;
+
+        while step_level(state, x, y, [0.0, 0.0], &Footprint::point(), levels, &rules, DT)
+            == LevelEvent::None
+        {
+            count += 1;
+
+            assert!(count < 1000, "полёт обязан завершиться");
+        }
+
+        count
+    }
+
+    #[test]
+    fn fall_from_one_level_keeps_old_duration() {
+        // гравитация выведена из fallTime так, чтобы падение РОВНО на один
+        // уровень длилось столько же, сколько прежняя линейная модель
+        let levels = layered();
+        let mut state = grounded(1);
+
+        // колонка x=3 — плиты нет
+        step_level(&mut state, 35.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+
+        let steps = flight_steps(&mut state, &levels, 35.0, 25.0) + 1;
+        let expected = (rules().fall_time / DT).ceil() as u32;
+
+        assert!(
+            steps.abs_diff(expected) <= 1,
+            "падение с уровня 1 обязано длиться fallTime: {steps} против {expected}"
+        );
+        assert_eq!(state.level, 0);
+    }
+
+    #[test]
+    fn fall_from_two_levels_is_faster_than_linear() {
+        // парабола: два уровня проходятся за fallTime·√2, а не за 2·fallTime
+        let levels = tall();
+        let mut state = grounded(2);
+
+        // колонка x=5 без плит — падение с уровня 2 до земли
+        step_level(&mut state, 55.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+
+        let steps = flight_steps(&mut state, &levels, 55.0, 15.0) + 1;
+        let linear = (2.0 * rules().fall_time / DT).ceil() as u32;
+
+        assert!(
+            steps < linear,
+            "падение с двух уровней обязано быть быстрее линейного: {steps} против {linear}"
+        );
+        assert_eq!(state.level, 0);
+    }
+
+    #[test]
+    fn ramp_exit_launches_the_tank() {
+        let levels = layered();
+        let rules = rules();
+        let mut state = on_the_ramp_top();
+
+        // сход с прогона на плиту колонки x=2 на полном ходу
+        let event = step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [100.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules,
+            DT,
+        );
+
+        assert_eq!(event, LevelEvent::None);
+        assert!(
+            matches!(state.transit, Transit::Airborne { vz, from: 1, .. } if vz > 0.0),
+            "{:?}",
+            state.transit
+        );
+
+        // и дуга действительно поднимает тело выше уровня отрыва
+        let mut rose = false;
+
+        for _ in 0..1000 {
+            if step_level(
+                &mut state,
+                25.0,
+                15.0,
+                [100.0, 0.0],
+                &Footprint::point(),
+                &levels,
+                &rules,
+                DT,
+            ) != LevelEvent::None
+            {
+                break;
+            }
+
+            rose = rose || state.z > 1.0 + LEVEL_EPSILON;
+        }
+
+        assert!(rose, "прыжок обязан поднять танк выше уровня отрыва");
+        assert_eq!(state.level, 1, "танк вернулся на свою же плиту");
+    }
+
+    #[test]
+    fn slow_ramp_exit_does_not_launch() {
+        let levels = layered();
+        let mut state = on_the_ramp_top();
+
+        // та же геометрия шагом: вертикальная скорость ниже minLaunchVz
+        step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [1.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules(),
+            DT,
+        );
+
+        assert_eq!(state.transit, Transit::Grounded);
+        assert_eq!(state.z, 1.0);
+    }
+
+    #[test]
+    fn jump_back_to_the_same_level_deals_no_damage() {
+        let levels = layered();
+        let rules = rules();
+        let mut state = on_the_ramp_top();
+
+        // вылет ровно на пороге minLaunchVz: дуга поднимает тело на сотые
+        // доли уровня, и урона такое приземление не стоит
+        step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [4.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules,
+            DT,
+        );
+
+        assert!(state.airborne(), "{:?}", state.transit);
+
+        let mut event = LevelEvent::None;
+
+        for _ in 0..1000 {
+            event = step_level(
+                &mut state,
+                25.0,
+                15.0,
+                [4.0, 0.0],
+                &Footprint::point(),
+                &levels,
+                &rules,
+                DT,
+            );
+
+            if event != LevelEvent::None {
+                break;
+            }
+        }
+
+        assert!(
+            matches!(event, LevelEvent::Landed { height, .. }
+                if (height as f64) * rules.fall_damage < 0.5),
+            "прыжок на свой же уровень не стоит даже половины очка: {event:?}"
+        );
+        assert_eq!(state.level, 1);
+        assert_eq!(state.z, 1.0);
+    }
+
+    #[test]
+    fn jump_clears_walls_above_take_off() {
+        let levels = layered();
+        let rules = rules();
+        let mut state = on_the_ramp_top();
+
+        step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [100.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules,
+            DT,
+        );
+
+        let mut cleared = false;
+
+        for _ in 0..1000 {
+            if step_level(
+                &mut state,
+                25.0,
+                15.0,
+                [100.0, 0.0],
+                &Footprint::point(),
+                &levels,
+                &rules,
+                DT,
+            ) != LevelEvent::None
+            {
+                break;
+            }
+
+            if state.z >= 1.0 + rules.jump_clearance {
+                cleared = true;
+                assert_eq!(
+                    state.collision_mask(),
+                    Group::empty(),
+                    "выше уровня отрыва танк не видит даже стен"
+                );
+            } else {
+                assert_eq!(
+                    state.collision_mask(),
+                    STATIC_LEVEL_GROUP,
+                    "ниже клиренса стены обязаны вернуться"
+                );
+            }
+        }
+
+        assert!(cleared, "прыжок обязан пройти выше jumpClearance");
+        assert_eq!(state.collision_mask(), level_group(1), "приземлился — свой уровень");
+    }
+
     #[test]
     fn prev_cell_is_written_every_step() {
         let levels = layered();
         let mut state = LevelState::default();
 
-        step_level(&mut state, 25.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.prev_cell, (2, 2));
 
         // точка вне карты снова делает клетку неизвестной
-        step_level(&mut state, -5.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, -5.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.prev_cell, (-1, -1));
     }
@@ -1512,7 +1899,7 @@ mod tests {
         let levels = layered();
         let mut state = LevelState::default();
 
-        step_level(&mut state, 25.0, 25.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 25.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         assert_eq!(state.grade(1.0, 0.0), 0.0);
     }
@@ -1522,8 +1909,8 @@ mod tests {
         let levels = layered();
         let mut state = LevelState::default();
 
-        step_level(&mut state, 5.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
-        step_level(&mut state, 12.0, 15.0, &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 5.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, [0.0, 0.0], &Footprint::point(), &levels, &rules(), DT);
 
         // курс в горку — уклон положительный, назад — отрицательный
         assert!(state.grade(1.0, 0.0) > 0.0);
@@ -1549,7 +1936,7 @@ mod tests {
 
         // плита уровня 1 — колонка x=2, то есть кромка на x=30. Центр уже
         // за ней, но задние углы корпуса (x=27) ещё на плите
-        step_level(&mut state, 31.0, 25.0, &hull(0.0), &levels, &rules(), DT);
+        step_level(&mut state, 31.0, 25.0, [0.0, 0.0], &hull(0.0), &levels, &rules(), DT);
 
         assert_eq!(state.transit, Transit::Grounded);
         assert_eq!(state.level, 1);
@@ -1565,11 +1952,11 @@ mod tests {
         let mut state = grounded(1);
 
         // задний угол корпуса (x=31) тоже сошёл с плиты
-        step_level(&mut state, 35.0, 25.0, &hull(0.0), &levels, &rules(), DT);
+        step_level(&mut state, 35.0, 25.0, [0.0, 0.0], &hull(0.0), &levels, &rules(), DT);
 
         assert!(matches!(
             state.transit,
-            Transit::Falling { from: 1, to: 0, .. }
+            Transit::Airborne { from: 1, to: 0, .. }
         ));
         assert!(state.input_locked());
     }
@@ -1579,9 +1966,9 @@ mod tests {
         let levels = layered();
         let mut state = grounded(1);
 
-        step_level(&mut state, 31.0, 25.0, &hull(0.0), &levels, &rules(), DT);
+        step_level(&mut state, 31.0, 25.0, [0.0, 0.0], &hull(0.0), &levels, &rules(), DT);
         // дал назад: центр вернулся на плиту
-        step_level(&mut state, 28.0, 25.0, &hull(0.0), &levels, &rules(), DT);
+        step_level(&mut state, 28.0, 25.0, [0.0, 0.0], &hull(0.0), &levels, &rules(), DT);
 
         assert_eq!(state.transit, Transit::Grounded);
         assert_eq!(state.level, 1);
@@ -1609,13 +1996,13 @@ mod tests {
         let levels = layered();
         let mut state = grounded(1);
 
-        step_level(&mut state, 35.0, 25.0, &hull(0.0), &levels, &rules(), DT);
+        step_level(&mut state, 35.0, 25.0, [0.0, 0.0], &hull(0.0), &levels, &rules(), DT);
         assert!(state.input_locked());
 
         // снос обратно под плиту падение не отменяет: сорвался — летишь
-        step_level(&mut state, 25.0, 25.0, &hull(0.0), &levels, &rules(), DT);
+        step_level(&mut state, 25.0, 25.0, [0.0, 0.0], &hull(0.0), &levels, &rules(), DT);
 
-        assert!(matches!(state.transit, Transit::Falling { from: 1, .. }));
+        assert!(matches!(state.transit, Transit::Airborne { from: 1, .. }));
         assert!(state.input_locked());
     }
 }

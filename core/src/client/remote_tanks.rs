@@ -70,6 +70,9 @@ const FIELD_TEAM: usize = 9;
 const FIELD_ANGVEL: usize = 10;
 const FIELD_Z: usize = 11;
 const FIELD_LEVEL: usize = 12;
+const FIELD_VZ: usize = 13;
+const FIELD_PITCH: usize = 14;
+const FIELD_ROLL: usize = 15;
 
 fn field_f32(fields: &[FieldValue], i: usize) -> f32 {
     match fields.get(i) {
@@ -106,11 +109,15 @@ struct TankMeta {
     condition: u8,
     size: u8,
     team: u8,
-    /// 2.5D-хвост строки: визуальная высота и уровень. Реплика их не
-    /// считает (правила уровня — только для своего танка), а рендер-строка
-    /// обязана повторять форму блока модели целиком
+    /// 2.5D-хвост строки: визуальная высота, уровень, вертикальная
+    /// скорость и наклон корпуса. Реплика их не считает (правила уровня и
+    /// наклона — только для своего танка), а рендер-строка обязана
+    /// повторять форму блока модели целиком
     z: f32,
     level: u8,
+    vz: f32,
+    pitch: f32,
+    roll: f32,
 }
 
 /// Предсказание чужих танков в контакте.
@@ -327,6 +334,9 @@ impl PredictedBodies for RemoteTanks {
                         team: field_u8(&row.fields, FIELD_TEAM),
                         z: field_f32(&row.fields, FIELD_Z),
                         level: field_u8(&row.fields, FIELD_LEVEL),
+                        vz: field_f32(&row.fields, FIELD_VZ),
+                        pitch: field_f32(&row.fields, FIELD_PITCH),
+                        roll: field_f32(&row.fields, FIELD_ROLL),
                     },
                 );
                 seen.insert(key);
@@ -440,6 +450,9 @@ impl PredictedBodies for RemoteTanks {
                         body.body.angvel,
                         meta.z,
                         meta.level as f32,
+                        meta.vz,
+                        meta.pitch,
+                        meta.roll,
                     ],
                 })
             })
@@ -610,12 +623,16 @@ mod tests {
         tank_row(x, y, 0.0, 0.0, 0.0, 0.0)
     }
 
-    // строка с 2.5D-хвостом: z и уровень корпуса
+    // строка с 2.5D-хвостом: z, уровень корпуса, вертикальная скорость и
+    // наклон (последние три рендерные — реплика их не считает)
     fn at_level(x: f32, y: f32, level: u8) -> Vec<FieldValue> {
         let mut row = at(x, y);
 
         row.push(FieldValue::F32(level as f32));
         row.push(FieldValue::U8(level));
+        row.push(FieldValue::F32(0.0));
+        row.push(FieldValue::F32(0.0));
+        row.push(FieldValue::F32(0.0));
         row
     }
 
@@ -978,8 +995,9 @@ mod tests {
         assert_eq!(rows[0].id, 7);
         assert_eq!(
             rows[0].fields,
-            // хвост 2.5D (z, level) — из строки кадра: реплика их не считает
-            vec![0.0, 0.0, 0.5, 0.0, 3.0, -1.0, 0.0, 3.0, 10.0, 1.0, 0.7, 0.0, 0.0]
+            // хвост 2.5D (z, level, vz, pitch, roll) — из строки кадра:
+            // реплика их не считает
+            vec![0.0, 0.0, 0.5, 0.0, 3.0, -1.0, 0.0, 3.0, 10.0, 1.0, 0.7, 0.0, 0.0, 0.0, 0.0, 0.0]
         );
     }
 

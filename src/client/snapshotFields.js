@@ -18,6 +18,9 @@ export const M1_TEAM = 9;
 export const M1_ANGVEL = 10;
 export const M1_Z = 11;
 export const M1_LEVEL = 12;
+export const M1_VZ = 13;
+export const M1_PITCH = 14;
+export const M1_ROLL = 15;
 
 // w1 — трассер выстрела (event)
 export const W1_START_X = 0;

@@ -184,7 +184,7 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       // танк в блоке m1: формат Tank.getData
       const tank = decoded.snapshot.m1[1];
 
-      expect(tank).toHaveLength(13);
+      expect(tank).toHaveLength(16);
       expect(tank[0]).toBeCloseTo(decoded.player.state[0], 1); // x
       expect(tank[7]).toBe(3); // condition
       expect(tank[8]).toBe(2); // size

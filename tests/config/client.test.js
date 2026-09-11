@@ -20,6 +20,7 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
       'ShotEffect',
       'ExplosionEffect',
       'Tracks',
+      'Dust',
     ]);
   });
 
@@ -51,6 +52,7 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
       'Tank',
       'Tracks',
       'Smoke',
+      'Dust',
       'Bomb',
       'ShotEffect',
       'ExplosionEffect',

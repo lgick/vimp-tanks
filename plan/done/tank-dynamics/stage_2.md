@@ -1,4 +1,4 @@
-# Этап 2. Ядро: наклон корпуса (`pitch` / `roll`)
+# Этап 2. Ядро: наклон корпуса (`pitch` / `roll`) ✅ выполнен
 
 Требует этап 1 (`Transit::Airborne`, `vz`).
 
@@ -197,5 +197,5 @@ if self.level_state.input_locked() {
 
 ## Готовность этапа
 
-- [ ] `npm run core:test` зелёный, пороги паритета не тронуты
-- [ ] `npx eslint .` зелёный (`src/config/game.js`)
+- [x] `npm run core:test` зелёный, пороги паритета не тронуты
+- [x] `npx eslint .` зелёный (`src/config/game.js`)

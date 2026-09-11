@@ -1,17 +1,28 @@
-import { describe, it, expect, vi } from 'vitest';
-import { Container, Texture } from 'pixi.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { Container, Texture, TextureSource, Ticker } from 'pixi.js';
 import Tank, {
   calculateEngineSoundParams,
 } from '../../../src/client/parts/Tank.js';
-import { shadow, parallax, seeThrough } from '../../../src/config/render.js';
+import {
+  shadow,
+  parallax,
+  seeThrough,
+  landing,
+} from '../../../src/config/render.js';
 import { createLevelView } from '../../../src/client/levelView.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
 // (регистрация/обновление/снятие) — визуал рендером не трогаем.
 
+// габариты текстуры — часть геометрии квада (`src/client/tilt.js`), а не
+// украшение: у Texture.EMPTY нулевой размер, и любой наклон выродился бы в
+// точку
+const sized = (width, height) =>
+  new Texture({ source: new TextureSource({ width, height }) });
+
 const liveTextures = () => ({
-  body: Texture.EMPTY,
-  gun: Texture.EMPTY,
+  body: sized(40, 30),
+  gun: sized(20, 20),
   gunAnchor: { x: 0.5, y: 0.5 },
 });
 
@@ -19,8 +30,23 @@ const assets = {
   tankTexture: {
     liveTeamId1: liveTextures(),
     liveTeamId2: liveTextures(),
-    destroyed: Texture.EMPTY,
+    destroyed: sized(40, 30),
   },
+};
+
+// углы квада PerspectiveMesh: сетка идёт построчно, углы — первая и
+// последняя вершины первого и последнего ряда
+const quad = mesh => {
+  const { positions } = mesh.geometry;
+  const last = positions.length - 2;
+  const rowEnd = 2 * (Math.sqrt(positions.length / 2) - 1);
+
+  return [
+    { x: positions[0], y: positions[1] },
+    { x: positions[rowEnd], y: positions[rowEnd + 1] },
+    { x: positions[last], y: positions[last + 1] },
+    { x: positions[last - rowEnd], y: positions[last - rowEnd + 1] },
+  ];
 };
 
 // engineConfig = null — звук не загрузился (нет кодека/файла)
@@ -257,10 +283,11 @@ describe('Tank: признаки уровня и высоты', () => {
     tankShadowTexture: { texture: Texture.EMPTY, contentSize: 24 },
   };
 
-  // строка m1 целиком: [..., angvel, z, level]. По умолчанию тело СТОИТ на
-  // своём уровне (`z === level`) — так его и отдаёт хост; `z` ниже уровня
-  // означает падение, и уровень отрисовки идёт за высотой
-  const row = (level, z = level, x = 0, y = 0) => [
+  // строка m1 целиком: [..., angvel, z, level, vz, pitch, roll]. По
+  // умолчанию тело СТОИТ на своём уровне (`z === level`) — так его и отдаёт
+  // хост; `z` ниже уровня означает падение, и уровень отрисовки идёт за
+  // высотой
+  const row = (level, z = level, x = 0, y = 0, air = {}) => [
     x,
     y,
     0,
@@ -274,7 +301,19 @@ describe('Tank: признаки уровня и высоты', () => {
     0,
     z,
     level,
+    air.vz || 0,
+    air.pitch || 0,
+    air.roll || 0,
   ];
+
+  // просадка идёт по времени: единственный её источник — общий тикер
+  const advance = ms => {
+    Ticker.shared.deltaMS = ms;
+  };
+
+  afterEach(() => {
+    advance(1000 / 60);
+  });
 
   // камера — трансформ сцены плюс размер полотна (src/client/camera.js):
   // при пустом трансформе её центр — середина полотна
@@ -336,20 +375,94 @@ describe('Tank: признаки уровня и высоты', () => {
   });
 
   // масштаб высоты — та же проекция, что у плиты: танк на уровне 1 крупнее
-  // наземного ровно настолько же, насколько крупнее сама плита под ним
+  // наземного ровно настолько же, насколько крупнее сама плита под ним.
+  // Масштаба у меша нет, он внутри углов квада (`src/client/tilt.js`)
+  const quadWidth = mesh => quad(mesh)[1].x - quad(mesh)[0].x;
+
   it('корпус на высоте крупнее ровно на shear', () => {
     const { tank } = onStage({ levelView: makeView() });
 
     tank.update(row(0, 0, 100, 100));
 
-    const ground = tank.body.scale.x;
+    const ground = quadWidth(tank.body);
+    const groundGun = quadWidth(tank.gun);
+    const groundWreck = quadWidth(tank.wreck);
 
     tank.update(row(1, 1, 100, 100));
 
-    expect(tank.body.scale.x / ground).toBeCloseTo(1 + parallax.shear, 6);
-    expect(tank.gun.scale.x).toBeCloseTo(tank.body.scale.x, 6);
+    expect(quadWidth(tank.body) / ground).toBeCloseTo(1 + parallax.shear, 6);
+    expect(quadWidth(tank.gun) / groundGun).toBeCloseTo(1 + parallax.shear, 6);
     // обломки едут по той же проекции: иначе подбитый танк съедет с плиты
-    expect(tank.wreck.scale.x).toBeCloseTo(tank.body.scale.x, 6);
+    expect(quadWidth(tank.wreck) / groundWreck).toBeCloseTo(
+      1 + parallax.shear,
+      6,
+    );
+  });
+
+  // наклон корпуса — авторитетный: углы приходят в кадре, клиент их только
+  // рисует (поэтому меш, а не спрайт)
+  it('корпус деформируется на рампе', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100, { pitch: 0.3 }));
+    tank.onRender();
+
+    const [lt, rt, rb, lb] = quad(tank.body);
+
+    // квад перестал быть прямоугольником: нос поднялся и стал шире кормы
+    expect(rt.x - lt.x).toBeGreaterThan(rb.x - lb.x);
+    expect(lt.y).toBeLessThan(-15);
+  });
+
+  it('приземление даёт просадку и гаснет', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 1, 100, 100, { vz: -8 }));
+    tank.onRender();
+
+    expect(tank._squash).toBe(0);
+
+    tank.update(row(0, 0, 100, 100, { vz: 0 }));
+    tank.onRender();
+
+    expect(tank._squash).toBeGreaterThan(0);
+    // удар быстрее fullImpact просаживает корпус целиком
+    expect(tank._landImpact).toBe(1);
+
+    // корпус сжат по вертикали, но не по горизонтали
+    const [lt, , rb] = quad(tank.body);
+
+    expect(rb.y - lt.y).toBeLessThan(30);
+    expect(rb.x - lt.x).toBeCloseTo(40, 6);
+
+    advance(landing.duration);
+    tank.onRender();
+
+    expect(tank._squash).toBe(0);
+    expect(quad(tank.body)[2].y - quad(tank.body)[0].y).toBeCloseTo(30, 6);
+  });
+
+  it('мягкое касание просадки не даёт', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0.1, 100, 100, { vz: -0.5 }));
+    tank.update(row(0, 0, 100, 100, { vz: 0 }));
+    tank.onRender();
+
+    expect(tank._squash).toBe(0);
+  });
+
+  // короткий ряд (кадр без хвоста vz/pitch/roll) не должен уводить квад в
+  // NaN: та же страховка `|| 0`, что у engineLoad
+  it('короткий ряд не роняет наклон', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update([100, 100, 0, 0, 0, 0, 0, 100, 10, 1, 0, 0, 0]);
+    tank.onRender();
+
+    expect(
+      Array.from(tank.body.geometry.positions).every(Number.isFinite),
+    ).toBe(true);
   });
 
   // тень — силуэт корпуса: круглая тень нормировалась по `size` (2 единицы

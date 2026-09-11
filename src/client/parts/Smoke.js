@@ -74,6 +74,22 @@ const SMOKE_CONFIG = {
   // количество частиц при "взрыве" (смене состояния)
   // эффект резкого облака дыма при получении урона
   burstParticleCount: 3,
+
+  // выхлоп по газу: канал, независимый от дыма повреждений
+  exhaust: {
+    // частиц в секунду при полном газе
+    spawnRate: 45,
+    // частиц в секунду при холостом ходе (лёгкое дрожание над трубой)
+    idleSpawnRate: 4,
+    // ниже этой нагрузки выхлопа нет вовсе
+    minLoad: 0.05,
+    // размер относительно дыма повреждений
+    startSizeFactor: 0.6,
+    endSizeFactor: 1.6,
+    startAlpha: 0.05,
+    color: 0x555555,
+    lifetime: { min: 350, max: 750 },
+  },
 };
 
 export default class Smoke extends Container {
@@ -160,6 +176,7 @@ export default class Smoke extends Container {
     this.addChild(this._particleContainer);
 
     this._timeSinceLastSpawn = 0;
+    this._timeSinceExhaust = 0;
 
     this._tickListener = ticker => this._updateParticles(ticker.deltaMS);
     Ticker.shared.add(this._tickListener);
@@ -212,7 +229,7 @@ export default class Smoke extends Container {
 
       for (let i = 0; i < particlesPerStream; i += 1) {
         for (let s = 0; s < numStreams; s += 1) {
-          this.spawnParticle(s, numStreams, true);
+          this.spawnParticle(s, numStreams, 'burst');
         }
       }
     }
@@ -225,6 +242,7 @@ export default class Smoke extends Container {
 
     const deltaTime = deltaMs / 1000.0;
     this._timeSinceLastSpawn += deltaMs;
+    this._timeSinceExhaust += deltaMs;
 
     let numStreams = 0;
 
@@ -262,6 +280,31 @@ export default class Smoke extends Container {
     } else {
       // сброс таймера, если дыма нет
       this._timeSinceLastSpawn = 0;
+    }
+
+    // канал выхлопа: интенсивность — это газ, а не повреждения. `min(load, 1)`
+    // отсекает «напряжение» (> 1): упёршийся в стену танк дымит не сильнее,
+    // чем едущий на полном газу, — за упор отвечает пыль из-под гусениц.
+    // Уничтоженный танк (condition 0) выхлопа не даёт: газа нет
+    const gas = Math.min(this._engineLoad, 1);
+    const exhaustRate =
+      this._condition > 0 && gas >= SMOKE_CONFIG.exhaust.minLoad
+        ? lerp(
+            SMOKE_CONFIG.exhaust.idleSpawnRate,
+            SMOKE_CONFIG.exhaust.spawnRate,
+            gas,
+          )
+        : 0;
+
+    if (exhaustRate > 0) {
+      const exhaustInterval = 1000.0 / exhaustRate;
+
+      while (this._timeSinceExhaust >= exhaustInterval) {
+        this.spawnParticle(0, 1, 'exhaust');
+        this._timeSinceExhaust -= exhaustInterval;
+      }
+    } else {
+      this._timeSinceExhaust = 0;
     }
 
     // предварительный расчет трения
@@ -319,20 +362,33 @@ export default class Smoke extends Container {
     }
   }
 
-  spawnParticle(streamIndex, numStreams, isBurst = false) {
-    const lifetime = randomRange(
-      SMOKE_CONFIG.particleLifetime.min,
-      SMOKE_CONFIG.particleLifetime.max,
-    );
+  // kind: 'damage' — дым повреждений, 'burst' — облако при смене состояния,
+  // 'exhaust' — выхлоп по газу. Точка спавна и начальные скорости у всех
+  // трёх общие: труба одна
+  spawnParticle(streamIndex, numStreams, kind = 'damage') {
+    const isBurst = kind === 'burst';
+    const isExhaust = kind === 'exhaust';
+    const exhaust = SMOKE_CONFIG.exhaust;
+
+    const lifetime = isExhaust
+      ? randomRange(exhaust.lifetime.min, exhaust.lifetime.max)
+      : randomRange(
+          SMOKE_CONFIG.particleLifetime.min,
+          SMOKE_CONFIG.particleLifetime.max,
+        );
 
     // параметры из конфига или дефолтные маленькие значения
-    let startSizeFactor =
-      SMOKE_CONFIG.particleStartSizeFactor[this._condition] || 0.3;
-    let endSizeFactor =
-      SMOKE_CONFIG.particleEndSizeFactor[this._condition] || 1.0;
+    let startSizeFactor = isExhaust
+      ? exhaust.startSizeFactor
+      : SMOKE_CONFIG.particleStartSizeFactor[this._condition] || 0.3;
+    let endSizeFactor = isExhaust
+      ? exhaust.endSizeFactor
+      : SMOKE_CONFIG.particleEndSizeFactor[this._condition] || 1.0;
 
     // параметры по умолчанию
-    let startAlpha = SMOKE_CONFIG.particleStartAlpha;
+    let startAlpha = isExhaust
+      ? exhaust.startAlpha
+      : SMOKE_CONFIG.particleStartAlpha;
     let velocityMultiplier = 1.0;
 
     // если эффект взрыва
@@ -406,7 +462,7 @@ export default class Smoke extends Container {
     vy += this._emitterVY;
 
     const view = ParticlePool.get(this._smokeTexture);
-    view.tint = SMOKE_CONFIG.particleColor;
+    view.tint = isExhaust ? exhaust.color : SMOKE_CONFIG.particleColor;
     view.x = spawnX;
     view.y = spawnY;
     view.alpha = startAlpha;

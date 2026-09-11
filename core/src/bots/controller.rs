@@ -1125,10 +1125,11 @@ mod tests {
 
         brain.key_states = [true; 6];
         brain.stuck_timer = 1.4;
-        fixture.tanks[&1].level_state.transit = Transit::Falling {
-            elapsed: 0.0,
+        fixture.tanks[&1].level_state.transit = Transit::Airborne {
+            vz: 0.0,
             from: 1,
             to: 0,
+            peak: 1.0,
         };
 
         let mut view = fixture.view();
