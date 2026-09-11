@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-11
+
 ### Changed
 
 - **A ramp is entered at its ends from ANY direction.** The entry gate used
@@ -96,11 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- The crate requirement is raised to `vimp-engine-core` 0.17.0
+- The crate requirement is raised to `vimp-engine-core` 0.18.0
   (`core/Cargo.toml`): the replica needs `map::ramp_guards` (the shared
   guard geometry, with the run's foot cell now open),
-  `client::collision::collect_block_contacts_into` (the buffered collection)
-  and the degenerate-OBB fix in the speculative contacts.
+  `client::collision::collect_block_contacts_into` (the buffered collection),
+  the degenerate-OBB fix in the speculative contacts and
+  `client::rigid_body::penetration_correction` (a deep overlap undone at the
+  host's own pace).
 
 - The ramp wedge is built from the core's runs (the new
   `ClientCore.ramp_runs` and the `rampRuns` client service) instead of a
