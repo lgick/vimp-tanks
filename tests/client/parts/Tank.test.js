@@ -109,8 +109,10 @@ describe('Tank: звук двигателя', () => {
 // сервису levelView, где он и на каком уровне — по этому плита моста над
 // игроком становится полупрозрачной (Map.onRender).
 describe('Tank: уровни 2.5D', () => {
-  // строка m1 целиком: [..., angvel, z, level]
-  const row = (level, z = 0, x = 0, y = 0) => [
+  // строка m1 целиком: [..., angvel, z, level]. По умолчанию тело СТОИТ на
+  // своём уровне (`z === level`) — так его и отдаёт хост; `z` ниже уровня
+  // означает падение, и уровень отрисовки идёт за высотой
+  const row = (level, z = level, x = 0, y = 0) => [
     x,
     y,
     0,
@@ -163,6 +165,39 @@ describe('Tank: уровни 2.5D', () => {
     tank.update(row(0));
 
     expect(tank.zIndex).toBe(3);
+  });
+
+  it('падающий танк переходит на нижний слой по высоте, а не по level', () => {
+    // пока тело падает, хост держит `level` уровнем, с которого оно
+    // сорвалось: без правила по высоте танк рисовался бы слоем эстакады до
+    // самого касания
+    const tank = makeTankAt(1, {});
+
+    expect(tank.zIndex).toBe(103);
+
+    // первая половина падения — ещё слой эстакады
+    tank.update(row(1, 0.8));
+
+    expect(tank.zIndex).toBe(103);
+
+    // ниже половины — слой земли
+    tank.update(row(1, 0.3));
+
+    expect(tank.zIndex).toBe(3);
+  });
+
+  it('подъём по рампе слой не дёргает', () => {
+    // на прогоне `level` и есть `round(z)`, поэтому правило по высоте его
+    // не трогает
+    const tank = makeTankAt(0, {});
+
+    tank.update(row(0, 0.4));
+
+    expect(tank.zIndex).toBe(3);
+
+    tank.update(row(1, 0.6));
+
+    expect(tank.zIndex).toBe(103);
   });
 
   it('свой танк публикует свой уровень и позицию в levelView', () => {
@@ -221,8 +256,10 @@ describe('Tank: признаки уровня и высоты', () => {
     tankShadowTexture: { texture: Texture.EMPTY, contentSize: 24 },
   };
 
-  // строка m1 целиком: [..., angvel, z, level]
-  const row = (level, z = 0, x = 0, y = 0) => [
+  // строка m1 целиком: [..., angvel, z, level]. По умолчанию тело СТОИТ на
+  // своём уровне (`z === level`) — так его и отдаёт хост; `z` ниже уровня
+  // означает падение, и уровень отрисовки идёт за высотой
+  const row = (level, z = level, x = 0, y = 0) => [
     x,
     y,
     0,

@@ -400,14 +400,33 @@ impl Predictor {
     /// `on_server_state`), а поправка уровня применяется только вне
     /// перехода: на рампе реплика идёт впереди кадра, и коррекция тянула бы
     /// подъём назад каждым тиком.
+    ///
+    /// Сам по себе кадр уровень реплики НЕ перебивает: за ним всегда идёт
+    /// `on_server_state`, который откатывает состояние на шаг кадра и
+    /// переигрывает ввод — там уровень и пересчитывается теми же правилами,
+    /// что у хоста (`ClientGame::push_frame`: `begin_reconcile` вызывается
+    /// только вместе с player-блоком). Кадр применяется как есть лишь там,
+    /// где откатываться некуда, — см. `rewind_level_state`.
+    ///
+    /// Прежняя поправка «вне перехода принять уровень кадра» ломала спуск:
+    /// кадры в полёте несут ещё ВЕРХНИЙ уровень, и уже приземлившуюся
+    /// реплику подбрасывало обратно на мост (`level = 1, z = 1`). Дальше
+    /// чужим уровнем считалось всё: маска коллизий била танк о перила,
+    /// которых для него у хоста нет, а рендер давал корпусу масштаб и тинт
+    /// эстакады.
     pub fn correct_level(&mut self, z: f32, level: u8) {
         self.authoritative_level = Some((z, level));
+    }
 
-        if matches!(self.level_state.transit, Transit::Grounded) && self.level_state.level != level
-        {
-            self.level_state.level = level;
-            self.level_state.z = level as f32;
-        }
+    /// Взять уровень и высоту из кадра как есть. Зовётся ОДИН раз — на
+    /// первом кадре со своим танком (`TanksClient::track_frame`): предсказания
+    /// ещё нет, переигрывать нечего, а респаун бывает и на плите.
+    pub fn adopt_level(&mut self, z: f32, level: u8) {
+        self.authoritative_level = Some((z, level));
+        self.level_state.level = level;
+        self.level_state.z = z;
+        self.level_state.transit = Transit::Grounded;
+        self.level_state.slope_vec = [0.0, 0.0];
     }
 
     /// Предсказанное состояние уровня своего танка.
@@ -875,7 +894,23 @@ impl Predictor {
 
         if let Some((_, state)) = self.level_history.back() {
             self.level_state = *state;
+
+            return;
         }
+
+        // история кадр не покрывает (после reset, смены карты, длинной
+        // паузы или скачка RTT): откатываться некуда, и состояние из самого
+        // кадра, а не остаётся от предсказания. Иначе на спуске реплика
+        // доигрывала бы чужой уровень — тот самый, что приехал в кадре
+        // ПЕРЕД падением. Фазу падения тут же восстановит `on_server_state`
+        let Some((z, level)) = self.authoritative_level else {
+            return;
+        };
+
+        self.level_state.level = level;
+        self.level_state.z = z;
+        self.level_state.transit = Transit::Grounded;
+        self.level_state.slope_vec = [0.0, 0.0];
     }
 
     /// Правила уровня одного шага — до применения ввода, ровно как в
@@ -2028,8 +2063,10 @@ mod tests {
         p.state.x = 400.0;
         p.state.y = 400.0;
         p.add_predicted_set(Box::new(BoxSet::new(0.0)));
-        // клетка (0, 2) — не прогон, но корпус заходит на борт блока
-        place_box(&mut p, 100.0, 32.0);
+        // клетка над СЕРЕДИНОЙ блока (колонка 3): корпус заходит на борт.
+        // Клетка подножия (колонка 2) с `vimp-engine-core` 0.17.0 открыта —
+        // на горку въезжают с любой стороны
+        place_box(&mut p, 140.0, 32.0);
         p.step(0);
 
         let body = box_body(&mut p);
@@ -2038,6 +2075,29 @@ mod tests {
         assert!(
             body.body.y < 32.0,
             "борт прогона тело не удержал: y = {}",
+            body.body.y
+        );
+    }
+
+    // и третья половина: клетку ПОДНОЖИЯ борт не закрывает — заезд на горку
+    // законен с любой стороны, судит его гейт (`level::entry_is_legal`)
+    #[test]
+    fn a_predicted_body_enters_the_foot_cell_from_the_side() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        p.state.x = 400.0;
+        p.state.y = 400.0;
+        p.add_predicted_set(Box::new(BoxSet::new(0.0)));
+        // над клеткой подножия (колонка 2: x от 80 до 120)
+        place_box(&mut p, 100.0, 32.0);
+        p.step(0);
+
+        let body = box_body(&mut p);
+
+        assert!(
+            body.body.y > 31.9,
+            "борт удержал тело у подножия: y = {}",
             body.body.y
         );
     }
@@ -2208,17 +2268,19 @@ mod tests {
     }
 
     #[test]
-    fn correct_level_only_when_grounded() {
+    fn correct_level_does_not_overwrite_the_prediction() {
+        // кадр только запоминается: уровень пересчитает реплей
+        // (`on_server_state`), и на рампе тоже — там кадр отстаёт на буфер
+        // интерполяции и тянул бы подъём назад каждым тиком
         let mut p = make_predictor();
 
         apply_map(&mut p, &layered_map());
 
-        // на плоскости кадр перебивает реплику
-        p.correct_level(1.0, 1);
-        assert_eq!(p.level_state().level, 1);
-        assert_eq!(p.level_state().z, 1.0);
+        let flat = p.level_state();
 
-        // на рампе — нет: кадр отстаёт на буфер интерполяции
+        p.correct_level(1.0, 1);
+        assert_eq!(p.level_state(), flat);
+
         p.state.x = 90.0;
         p.state.y = 100.0;
         p.step(0);
@@ -2282,6 +2344,73 @@ mod tests {
             "запоздавший кадр принят за падение: {:?}",
             p.level_state().transit
         );
+    }
+
+    #[test]
+    fn late_frame_from_the_bridge_does_not_lift_a_landed_replica() {
+        // на спуске кадры в полёте везут ещё ВЕРХНИЙ уровень. Реплика,
+        // которая уже приземлилась и едет ПОД плитой, обязана считать
+        // уровень сама: иначе её подбрасывало на мост, и дальше всё — маска
+        // коллизий, масштаб корпуса, тинт — считалось чужим уровнем
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // уровень 0 под плитой моста (колонки 3 и 4: x от 120 до 200)
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.step_time = 0.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().level, 0);
+
+        // запоздавший кадр, снятый ещё на мосту
+        p.correct_level(1.0, 1);
+
+        assert_eq!(p.level_state().level, 0, "кадр перебил предсказание");
+
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert_eq!(p.level_state().level, 0, "реплику подняло реплеем");
+        assert_eq!(p.level_state().z, 0.0);
+    }
+
+    #[test]
+    fn the_first_frame_is_adopted_as_is() {
+        // первый кадр со своим танком: предсказания ещё нет, и respawn на
+        // плите обязан приехать из кадра
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.adopt_level(1.0, 1);
+
+        assert_eq!(p.level_state().level, 1);
+        assert_eq!(p.level_state().z, 1.0);
+    }
+
+    #[test]
+    fn empty_level_history_takes_the_state_from_the_frame() {
+        // история не покрывает кадр (после reset): откат обязан взять
+        // уровень из самого кадра, а не оставить предсказанный
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.level_state.level = 1;
+        p.level_state.z = 1.0;
+        p.level_state.transit = Transit::Grounded;
+        p.level_history.clear();
+
+        p.correct_level(0.0, 0);
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert_eq!(p.level_state().level, 0);
+        assert_eq!(p.level_state().z, 0.0);
     }
 
     #[test]
@@ -2487,10 +2616,11 @@ mod tests {
         p.state.y = 100.0;
         p.step(0);
 
-        // предсказание убежало вперёд и заехало на прогон ПО ДИАГОНАЛИ
-        // (колонка 2, строка 1): гейт такой вход не пускает
+        // предсказание убежало вперёд и заехало на прогон ПО ДИАГОНАЛИ в
+        // дальний край клетки (колонка 2, строка 1, x = 110): прогон там
+        // уже на 0.75 уровня выше танка, и гейт такой вход не пускает
         p.step_time = STEP_MS;
-        p.state.x = 90.0;
+        p.state.x = 110.0;
         p.state.y = 60.0;
         p.step(0);
 

@@ -158,6 +158,12 @@ The consequences the parts implement themselves:
 - **Boxes ride their level.** The dynamic row (`c1`/`c2`) carries `level`,
   so `Map`'s dynamic branch re-sorts by `levelZ` and recomputes its alpha
   every frame: a box that falls off the bridge is visibly falling off it.
+- **A falling body draws by its height, not by `level`.** While a body
+  falls, the host keeps `level` at the level it fell FROM
+  (`core/src/level.rs`), so the `Tank` part computes the DRAWN level as
+  `min(level, round(z))`: layer, tint and transparency move down halfway
+  through the fall rather than on touchdown. A climb is untouched — on a run
+  `level` is `round(z)` already.
 - **Darker means lower.** Anything below the player's level is tinted with
   `seeThrough.lowerTint` — the only level cue that works at the edge of the
   screen. On the radar the same idea: layers of other levels dim, the level

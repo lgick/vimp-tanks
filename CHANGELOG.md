@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A ramp is entered at its ends from ANY direction.** The entry gate used
+  to demand that the previous cell be the neighbour straight along the run's
+  axis, so a tank that reached the foot at an angle stayed on its own level
+  and drove over the hill as if it were flat ground. The gate now judges the
+  ENTRY CELL — the foot takes tanks of the lower level, the top cell tanks
+  of the upper one — and ignores the direction. An entry across the axis
+  may not lift the tank: it must stand at its own level's height, and the
+  ramp's height at the entry point must be within half a level of it. The
+  middle of a run is still closed, by the gate and by the engine's side
+  rails, which now start one cell past the foot
+  (`vimp-engine-core` 0.17.0); leaving a run sideways was never held and
+  still is not.
+
 ### Fixed
+
+- **A late frame no longer lifts a landed tank back onto the bridge.**
+  While a tank descends, the frames still in flight carry the level it left,
+  and the replica adopted them whenever it was grounded — snapping itself to
+  `level = 1, z = 1`. Everything downstream then ran on the wrong level: the
+  collision mask banged the tank against railings that do not exist for it
+  on the host (the shaking under an overpass), the hull took the scale and
+  the projection offset of a body on the slab (the shadow drifting away), and
+  the slab above stopped being transparent. The frame is now only remembered;
+  the level is recomputed by the replay, which rewinds to the frame's own
+  step — and when the level history does not reach that far, the state is
+  taken from the frame instead of being left over from the prediction.
+- A falling tank is drawn by its height: the host keeps `level` at the level
+  the tank fell from, so the hull kept the layer, tint and transparency of
+  the overpass until it touched the ground.
 
 - A point entity's transparency and the hole in the slab above the player
   were measured in different coordinate systems. The hole is centred on the
@@ -39,11 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- The crate requirement is raised to `vimp-engine-core` 0.16.0
+- The crate requirement is raised to `vimp-engine-core` 0.17.0
   (`core/Cargo.toml`): the replica needs `map::ramp_guards` (the shared
-  guard geometry), `client::collision::collect_block_contacts_into` (the
-  buffered collection) and the degenerate-OBB fix in the speculative
-  contacts.
+  guard geometry, with the run's foot cell now open),
+  `client::collision::collect_block_contacts_into` (the buffered collection)
+  and the degenerate-OBB fix in the speculative contacts.
 
 - The ramp wedge is built from the core's runs (the new
   `ClientCore.ramp_runs` and the `rampRuns` client service) instead of a

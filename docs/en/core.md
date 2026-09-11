@@ -513,14 +513,20 @@ the authoritative one.
   comes from the engine on purpose: the physics fences a block by the same
   field, and two definitions of one hill would drift apart. Lanes of
   DIFFERENT length fall into different blocks and the gate judges the move. The entry is legal when the previous
-  step's cell (`prev_cell`, written every step) lies outside this run, is
-  its neighbour along the run's axis, and the end matches the tank's level
-  — up from the foot, down from the top. A tank that came in from the side,
-  diagonally, or ran into the top end from below (the passage under the
-  bridge) keeps its level and treats the run as flat ground — if the run's
-  guards let it in at all (see below). A spawn
-  directly on a run has nothing to judge by: there the old half-of-the-run
-  rule applies.
+  step's cell (`prev_cell`, written every step) lies outside this run and
+  the ENTRY cell is an END cell matching the tank's level: the foot for the
+  lower level, the top for the upper one. The direction of the entry is not
+  judged at all — head-on, diagonal and sideways are equally legal, and the
+  end is picked by the sign of the step along the axis (or, for a pure side
+  entry, by the entry cell itself). A step ACROSS the axis adds two
+  conditions so that an entry cannot become a lift: the body must stand at
+  its own level's height, and the ramp's height at the entry point must be
+  within `MAX_SIDE_ENTRY_RISE` (half a level) of it. A tank that came into
+  the MIDDLE of a run, or ran into the top end from below (the passage under
+  the bridge), keeps its level and treats the run as flat ground — if the
+  run's guards let it in at all (see below; they do not close the foot
+  cell). A spawn directly on a run has nothing to judge by: there the old
+  half-of-the-run rule applies.
 - **Grade.** On a ramp `slope_vec` is the uphill vector, and it is
   DIMENSIONLESS: the engine computes it as `rise * levelHeight / span`,
   where `levelHeight` is the map's level height in world units (the tile
@@ -608,10 +614,18 @@ authoritative and arrives with the panel.
 The frame is still the last word: `begin_reconcile` reads the local tank's
 `z`/`level` off the **raw** frame — the very one the replay starts from,
 rather than the interpolated sample, which lags by the buffer — and hands
-the pair to `Predictor::correct_level`. The level correction applies **only
-while the replica is `Grounded`**: on a ramp the replica runs ahead of the
-frame, and a correction there would drag the climb back on every tick. The
-fall, in contrast, is authoritative all the way through: instead of
+the pair to `Predictor::correct_level`. The frame does **not** overwrite the
+level by itself: `on_server_state` always follows `begin_reconcile`
+(`ClientGame::push_frame` calls them together), and it rewinds the state to
+the frame's step and replays the input — the level is recomputed there by
+the same rules the host uses. The old "adopt the frame's level outside a
+transition" correction broke the DESCENT: the frames in flight while a tank
+falls still carry the upper level, so a replica that had already landed was
+lifted back onto the bridge (`level = 1, z = 1`). Everything downstream then
+ran on the wrong level: the collision mask banged the tank against railings
+that do not exist for it on the host, and the renderer gave the hull the
+scale and tint of the overpass. The fall, in contrast, is authoritative all
+the way through: instead of
 dropping an unfinished `Falling`, the reconciliation rebuilds its phase out
 of the frame's height (`level::fall_elapsed()` inverts the fall lerp of
 `step_level`). Otherwise the height of one's own tank would follow the
@@ -635,12 +649,18 @@ So the predictor snapshots `LevelState` every step
 (`Predictor::push_level_snapshot`, a history as deep as the input history)
 and rewinds the state to the step the frame was taken on
 (`rewind_level_state`) before replaying; everything predicted later is
-recomputed by the replay.
+recomputed by the replay. When the history does NOT cover the frame (after
+a `reset()`, a map change, a long pause or an RTT spike) there is nothing to
+rewind to, and the level and height are then taken from the frame itself
+rather than left over from the prediction — `on_server_state` rebuilds the
+fall phase out of them right away.
 
 The **first** frame is the exception: the engine sets the client's own
 `gameId` only after `begin_reconcile` (`client/game.rs`), so there is
 nothing yet to look the local tank's row up by. That one time, on the row's
-first sighting, `track_frame` reads it instead — otherwise a tank spawned on
+first sighting, `track_frame` reads it and hands it to
+`Predictor::adopt_level` — the only path that applies a frame as is: there
+is no prediction yet and nothing to replay, and otherwise a tank spawned on
 a slab (`overpass` has such respawns) would be predicted on the ground for a
 whole frame. On that frame the sample lags by nothing: there is nothing to
 interpolate between yet.

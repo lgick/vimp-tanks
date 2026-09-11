@@ -378,10 +378,24 @@ fn is_lane_change(
     along == 0 && across.abs() == 1 && a.block == b.block
 }
 
+// Насколько высота прогона в точке входа может отстоять от высоты тела при
+// заходе сбоку или наискось (в уровнях). Заход в лоб начинается у самого
+// торца, а вход поперёк оси попадает в любую точку клетки — без потолка
+// крутая горка подкидывала бы танк на целый уровень.
+const MAX_SIDE_ENTRY_RISE: f32 = 0.5;
+
 // Законен ли заход на прогон: бок и торцы прогона открыты (в клетку у
 // вершины на `overpass` можно въехать прямо с земли), и без гейта это
-// бесплатный подъём мимо самой рампы. Переход даёт только заход с торца,
-// отвечающего своему уровню: снизу — подъём, сверху — спуск.
+// бесплатный подъём мимо самой рампы.
+//
+// Судит гейт КЛЕТКУ входа, а не направление въезда: крайние клетки прогона
+// — подножие и вершина — пускают тех, чей уровень им отвечает, с ЛЮБОЙ
+// стороны, включая бок и диагональ. Середина прогона не пускает никого:
+// вход туда означал бы прыжок по высоте на пол-уровня, и её же держат
+// борта-стражи движка (`map::ramp_guards`, борт начинается на клетку дальше
+// подножия). Правило по направлению («сосед строго вдоль оси») отменено: с
+// ним танк, подъехавший к подножию наискось, оставался на своём уровне и
+// ехал по горке как по плоской клетке.
 fn entry_is_legal(
     state: &LevelState,
     ramp: &RampSample,
@@ -397,8 +411,7 @@ fn entry_is_legal(
     };
 
     // клетка неизвестна (спавн прямо на прогоне, первый шаг): судить не по
-    // чему, поэтому работает правило первой итерации — половина прогона.
-    // Заехать так сбоку нельзя: в движении клетка известна всегда
+    // чему, поэтому работает правило первой итерации — половина прогона
     if prev.0 < 0 || prev.1 < 0 {
         return (ramp.progress >= 0.5) == (state.level == high);
     }
@@ -408,23 +421,76 @@ fn entry_is_legal(
         return false;
     }
 
-    let (dx, dy) = (cell.0 - prev.0, cell.1 - prev.1);
-    let (along, across, uphill) = if ramp.axis == 0 {
-        (dx, dy, ramp.dir[0])
-    } else {
-        (dy, dx, ramp.dir[1])
+    let Some((foot, top)) = run_end_cells(levels, ramp) else {
+        return false;
     };
 
-    // сосед клетки входа ВДОЛЬ оси прогона: ни диагональ, ни бок
-    if along.abs() != 1 || across != 0 {
-        return false;
+    let (dx, dy) = (cell.0 - prev.0, cell.1 - prev.1);
+    let (along, across, uphill, index) = if ramp.axis == 0 {
+        (dx, dy, ramp.dir[0], cell.0)
+    } else {
+        (dy, dx, ramp.dir[1], cell.1)
+    };
+
+    // заход НЕ строго по оси (бок, диагональ) высоту не перепрыгивает:
+    // тело обязано стоять на высоте своего уровня (иначе застрявший на
+    // середине чужого прогона танк перешагивал бы сбоку на соседнюю горку),
+    // а высота прогона в точке входа — отличаться от неё не больше чем на
+    // пол-уровня. Прямой заход с торца этим не связан: там высота торца и
+    // есть высота уровня
+    if across != 0 {
+        let entry_z = lerp(ramp.from as f32, ramp.to as f32, ramp.progress);
+
+        if (state.z - state.level as f32).abs() > 1e-3
+            || (entry_z - state.z).abs() > MAX_SIDE_ENTRY_RISE
+        {
+            return false;
+        }
     }
 
-    // торец обязан отвечать уровню танка: у подножия — нижний, у вершины —
-    // верхний
-    let expected = if along as f32 * uphill > 0.0 { low } else { high };
+    // через какой ТОРЕЦ зашли: знак шага вдоль оси против направления
+    // подъёма. Диагональ считается тем же торцом, что и прямой заход, —
+    // именно она и была запрещена прежним правилом
+    let expected = if along as f32 * uphill > 0.0 {
+        (foot, low)
+    } else if (along as f32) * uphill < 0.0 {
+        (top, high)
+    } else if index == foot {
+        // чистый заход сбоку: торец выбирает сама клетка входа
+        (foot, low)
+    } else if index == top {
+        (top, high)
+    } else {
+        // бок СЕРЕДИНЫ прогона: вход туда означал бы прыжок по высоте
+        return false;
+    };
 
-    state.level == expected
+    // клетка входа обязана быть тем самым торцом, а не серединой
+    index == expected.0 && state.level == expected.1
+}
+
+// Крайние клетки прогона по его оси: `(подножие, вершина)`. `None` — прогон
+// неизвестен. У прогона длиной в одну клетку обе совпадают, и торец такого
+// прогона выбирает направление входа.
+fn run_end_cells(levels: &MapLevels, ramp: &RampSample) -> Option<(i32, i32)> {
+    let run = levels.runs().get(ramp.run as usize)?;
+    let size = levels.tile_size();
+
+    if size <= 0.0 {
+        return None;
+    }
+
+    // границы прогона приходят в МИРОВЫХ единицах — тех же, в которых
+    // считается клетка (`cell_of`)
+    let first = (run.min / size).round() as i32;
+    let last = (run.max / size).round() as i32 - 1;
+
+    // подножие — тот конец, от которого идёт подъём
+    if run.sign > 0 {
+        Some((first, last))
+    } else {
+        Some((last, first))
+    }
 }
 
 #[cfg(test)]
@@ -760,22 +826,40 @@ mod tests {
     }
 
     #[test]
-    fn ramp_is_not_entered_from_the_side() {
+    fn foot_cell_is_entered_from_the_side() {
         let levels = layered();
         let mut state = LevelState::default();
 
-        // клетка (1, 0) — соседняя ПОПЕРЁК оси прогона
-        step_level(&mut state, 15.0, 5.0, &levels, &rules(), DT);
-        step_level(&mut state, 15.0, 15.0, &levels, &rules(), DT);
+        // клетка (1, 0) — соседняя ПОПЕРЁК оси прогона. Клетка (1, 1) —
+        // подножие: заход в неё сбоку законен, высоту он не перепрыгивает
+        step_level(&mut state, 12.0, 5.0, &levels, &rules(), DT);
+        step_level(&mut state, 12.0, 15.0, &levels, &rules(), DT);
+
+        assert!(
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
+            "{:?}",
+            state.transit
+        );
+        assert_eq!(state.level, 0);
+        assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
+    }
+
+    #[test]
+    fn side_entry_does_not_lift_a_body_by_a_whole_level() {
+        let levels = layered();
+        let mut state = LevelState::default();
+
+        // заход сбоку в дальний край клетки подножия: прогон там уже на
+        // 0.8 уровня выше танка — это подкидывание, а не заезд
+        step_level(&mut state, 18.0, 5.0, &levels, &rules(), DT);
+        step_level(&mut state, 18.0, 15.0, &levels, &rules(), DT);
 
         assert!(
             matches!(state.transit, Transit::Ramp { climbing: false, .. }),
             "{:?}",
             state.transit
         );
-        assert_eq!(state.level, 0);
         assert_eq!(state.z, 0.0);
-        assert_eq!(state.slope_vec, [0.0, 0.0]);
     }
 
     #[test]
@@ -1004,21 +1088,22 @@ mod tests {
     }
 
     #[test]
-    fn ramp_is_not_entered_diagonally() {
+    fn foot_cell_is_entered_diagonally() {
         let levels = layered();
         let mut state = LevelState::default();
 
-        // клетка (0, 0) — диагональный сосед клетки входа
+        // клетка (0, 0) — диагональный сосед подножия: заезд под углом
+        // поднимает так же, как заезд в лоб
         step_level(&mut state, 5.0, 5.0, &levels, &rules(), DT);
         step_level(&mut state, 12.0, 15.0, &levels, &rules(), DT);
 
         assert!(
-            matches!(state.transit, Transit::Ramp { climbing: false, .. }),
+            matches!(state.transit, Transit::Ramp { climbing: true, .. }),
             "{:?}",
             state.transit
         );
         assert_eq!(state.level, 0);
-        assert_eq!(state.z, 0.0);
+        assert!((state.z - 0.2).abs() < 1e-5, "z = {}", state.z);
     }
 
     #[test]

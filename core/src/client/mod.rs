@@ -333,7 +333,7 @@ impl GameClientDef for TanksClient {
                     // респаун бывает и на плите. Сэмпл здесь ещё не
                     // отстаёт — интерполировать не с чем
                     if known_id != Some(my_id) {
-                        self.predictor.correct_level(
+                        self.predictor.adopt_level(
                             field_f32(row, TANK_FIELD_Z),
                             field_u8(row, TANK_FIELD_LEVEL),
                         );

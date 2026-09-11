@@ -133,8 +133,9 @@ export default class Tank extends Container {
     this._teamId = data[M1_TEAM];
 
     // 2.5D: непрерывная высота (рампа/падение) и дискретный уровень
+    // ОТРИСОВКИ (о нём — в update)
     this._z = data[M1_Z] || 0;
-    this._level = data[M1_LEVEL] || 0;
+    this._level = Math.min(data[M1_LEVEL] || 0, Math.round(this._z));
     this.zIndex = levelZ(TANK_BASE_Z, this._level);
 
     // свой танк — единственный, кто вправе писать в levelView: по нему
@@ -271,9 +272,14 @@ export default class Tank extends Container {
     // (сравнение `rate !== activeInstance.rate` для NaN всегда истинно)
     this._engineLoad = data[M1_ENGINE_LOAD] || 0;
 
-    const level = data[M1_LEVEL] || 0;
-
     this._z = data[M1_Z] || 0;
+
+    // уровень ОТРИСОВКИ, а не физический: пока тело падает, хост держит
+    // `level` тем уровнем, с которого оно сорвалось (crate::level), и танк
+    // рисовался бы слоем, тинтом и прозрачностью эстакады до самого
+    // касания. По высоте он переходит на нижний слой на середине падения.
+    // Подъём правило не трогает: на рампе `level` и есть `round(z)`
+    const level = Math.min(data[M1_LEVEL] || 0, Math.round(this._z));
 
     if (level !== this._level) {
       this._level = level;

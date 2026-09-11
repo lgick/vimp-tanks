@@ -148,15 +148,21 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   its level colour, the layer tinting on the radar, the dimming of levels
   below the player, the transparency of the slab above them, the shadow on
   the layer under the tank and the height parallax.
-- **Ramps are entered from their ends.** A run lifts (or lowers) only the
-  tank that drove in through the end matching its own level: from the foot
-  going up, from the top going down. A tank that entered a ramp cell from
-  the side — a cell near the top is often reachable straight off the
-  ground — keeps its level, and the run behaves as ordinary flat ground for
-  it until it leaves and comes back through an end. More than that: the
-  run's sides and its "wrong" end are closed off — driving onto the wedge
-  sideways, or in under it from the top, physically stops the tank. A legal
-  climber does not see those barriers at all. A **wide** ramp — a rectangular
+- **Ramps are entered at their ends, from any direction.** A run lifts (or
+  lowers) only the tank that drove into an END CELL matching its own level:
+  the foot cell takes tanks of the lower level, the top cell tanks of the
+  upper one. HOW the tank got there does not matter — head-on, at an angle
+  or from the side all count, so a hill can be taken on the diagonal. Two
+  limits keep that from becoming a lift: a tank entering across the axis
+  must be standing at its own level's height (not stuck halfway up another
+  run), and the ramp's height at the entry point may not be more than half
+  a level above it. A tank that drove into the MIDDLE of a run keeps its
+  level, and the run behaves as ordinary flat ground for it until it leaves
+  and comes back through an end. The middle is closed off physically too:
+  the run's side rails start one cell past the foot, and its "wrong" end is
+  capped, so driving onto the wedge sideways mid-climb, or in under it from
+  the top, stops the tank. A legal climber does not see those barriers at
+  all — leaving a run sideways is always allowed. A **wide** ramp — a rectangular
   block of ramp tiles — is driven through whole: the core cuts such a block
   into parallel lane runs, and changing lanes mid-climb keeps the climb
   going instead of being judged as a fresh entry. Lanes of DIFFERENT length
