@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A deeply overlapping body no longer jerks apart in the prediction.**
+  A tank that fell inside a crate (falling bodies collide with walls only,
+  never with other bodies) was pushed back out by the replica in a single
+  step — several units at once — while the host crept out of the same
+  overlap fractions of a unit per tick, and the drift budget broke for as
+  long as the two disagreed. The replica now meters its positional
+  correction by the host's own contact-spring law
+  (`vimp-engine-core` 0.18.0, `rigid_body::penetration_correction`).
 - **Driving off a ledge is judged by the hull, not by its centre point.**
   A tank fell the instant its CENTRE crossed the last floor tile, with half
   the hull still lying on the slab — and the fall is irreversible, so

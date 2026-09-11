@@ -1213,11 +1213,12 @@ impl Predictor {
         if !contacts.is_empty() {
             // развод по глубине — ровно один раз на ПАРУ: повтор на каждой
             // итерации (или на каждой точке манифольда) расталкивал бы тела
-            // кратно их числу
+            // кратно их числу. Глубина за шаг уходит не вся, а по закону
+            // контактной пружины хоста (`penetration_correction`)
             for (a, b, contact) in &separations {
                 let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
 
-                separate_bodies(body_a, body_b, contact);
+                separate_bodies(body_a, body_b, contact, dt);
             }
 
             // контакты собраны один раз, импульсы проходят по ним несколько

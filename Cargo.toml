@@ -14,7 +14,7 @@ opt-level = 3
 lto = true
 
 # Временная связка с локальным движком на время работ плана
-# plan/ramp-entry-descent.md — снимается на этапе 4.
+# plan/replica-deep-overlap.md — снимается после публикации 0.18.0.
 # Патч обязан жить в корне воркспейса: в core/Cargo.toml cargo его игнорирует.
 [patch.crates-io]
 vimp-engine-core = { path = "/Users/dmitry/Sites/my/vimp/packages/engine/core" }
