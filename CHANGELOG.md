@@ -13,8 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   spatial-sound geometry in `src/config/sounds.js`
   (`mode: 'topDown'`, `virtualElevation: 108`, `innerRadius: 5`, all in
   world units, where one unit is a fifth of a screen pixel). An explosion
-  under the tank no longer jumps into one ear with a change of timbre.
-  Requires a `vimp-engine` that supports `parts.sounds.spatial`.
+  under the tank no longer jumps into one ear with a change of timbre. Both
+  numbers are calibrated for a 1920×1080 window; the engine scales them for
+  other window sizes itself. An engine without `parts.sounds.spatial`
+  support ignores the block and sounds as it did before — no version bump is
+  required.
 
 ## [0.19.0] - 2026-09-06
 

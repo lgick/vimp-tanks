@@ -320,7 +320,14 @@ few degrees. `5` is the half-diagonal of the `m1` hull, which is `8 x 6`
 world units (`size * 4 x size * 3` at `size: 2` in `src/data/models.js`), so
 an explosion inside the hull is split evenly between both ears.
 `refDistance` / `maxDistance` / `rolloffFactor` are deliberately left to the
-engine. What the keys mean and how the position is computed —
+engine.
+
+Both numbers are calibrated for the **design window, 1920×1080**; on any
+other window size the engine scales them itself through the scene scale, so
+they need no per-resolution variant. `108` is still the calculated starting
+point: the audible range to tune it in is 90–150, and nothing has confirmed
+the exact value by ear yet — treat it as a defensible default, not as a
+measured one. What the keys mean and how the position is computed —
 [client.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/client.md#soundmanager).
 
 The local player's own tank is registered with `spatial: false`
