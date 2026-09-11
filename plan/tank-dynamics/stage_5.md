@@ -171,18 +171,25 @@ const rate = spinning ? DUST_CONFIG.spawnRate * Math.min(strain, 1) : 0;
 
 ## 5.4. Звук приземления
 
-1. `src/config/sounds.js` — запись рядом с существующими:
+1. Исходник звука выбран: [Heavy Metal Thud on Ground](https://freesound.org/people/7of9Designs/sounds/640204/)
+   by 7of9Designs (freesound.org) — проверить лицензию на странице звука и,
+   если требуется атрибуция, сохранить её в том же комментарии. Скачать в
+   `assets/audio-raw/tank-landing.<ext>` и прогнать через
+   `scripts/process-audio.js` (нормализация, как остальные звуки) —
+   результат ложится в `assets/sounds/tank-landing.{webm,mp3}`
+   (`codecList` в том же файле `sounds.js`). Если к моменту исполнения
+   этапа файла ещё нет — завести задачу отдельно; код обязан переживать
+   отсутствие ассета без исключения (звук просто не проигрывается).
+
+2. `src/config/sounds.js` — запись рядом с существующими, с комментарием-
+   ссылкой на источник (как у остальных звуков):
 
    ```js
+   // https://freesound.org/people/7of9Designs/sounds/640204/
    tankLanding: { file: 'tank-landing', priority: 60, volume: 0.7 },
    ```
 
-   Файлы `assets/sounds/tank-landing.{webm,mp3}` (`codecList` в том же
-   файле) — если исходника нет, завести задачу отдельно; код обязан
-   переживать отсутствие ассета без исключения (звук просто не
-   проигрывается).
-
-2. Проигрывание — в `Dust.js`, там же, где детектируется приземление:
+3. Проигрывание — в `Dust.js`, там же, где детектируется приземление:
    `this._soundManager?.registerSound('tankLanding', { position: { x, y }, spatial: true })`,
    громкость домножить на силу удара. Мягкое касание
    (`|vz| < landing.minImpact`) звука не даёт.
