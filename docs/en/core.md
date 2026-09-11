@@ -648,9 +648,23 @@ the level snaps to `z.round()`, so a frame taken on the upper half of any
 ramp carries exactly that pair — and a fall locks the input, so reading it
 as one would drop the throttle on half of every climb while the host held
 it. The frame is read as a fall only for a body that is **not climbing a
-run** and only where the geometry has no floor of that level under the
-tank: the same two questions the host asks in `step_level` before it starts
-one.
+run** and only where the geometry has no support of that level under the
+tank's hull: the same two questions the host asks in `step_level` before it
+starts one.
+
+One correction does come straight from the frame: a level BELOW the
+replica's own. A late frame can only lie in one direction — "still up
+there" — because the host reports a lower level only once the descent has
+actually happened. So a frame under the replica means the replica missed a
+descent, and it adopts the frame's level and height (`Grounded`). Without
+it the divergence is permanent: reversing at the very brink is applied by
+the replay at the CLIENT's timing, so the hull comes back onto the slab and
+the replica never falls, while the host — which receives that same reverse
+when it is already falling — lands a level below, and nothing ever brings
+the two back together. A level ABOVE the replica is never adopted (that is
+the late-frame bug above), and a run is excluded entirely: there the frame
+lags downwards, by the replica's own state and by the map under the
+authoritative position alike.
 
 The `LevelState` itself takes part in reconciliation too. The replay starts
 from the authoritative position, and the level state is not a position: its

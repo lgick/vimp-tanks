@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A replica that missed a descent is pulled down by the frame.** The level
+  was recomputed by the replay alone, and the replay applies a reverse at
+  the CLIENT's timing: braking at the very brink put the hull back on the
+  slab, so the replica never fell — while the host, which gets that same
+  reverse when it is already falling, landed a level below. The two never
+  came back together: for the rest of the round the tank was drawn, lit and
+  collided a level too high. A frame whose level is BELOW the replica's is
+  now adopted as it is — a late frame can only claim the tank is still up
+  there, never that it is already down. A level above is still never
+  adopted, and a ramp run is excluded, where frames lag downwards by nature.
 - **A deeply overlapping body no longer jerks apart in the prediction.**
   A tank that fell inside a crate (falling bodies collide with walls only,
   never with other bodies) was pushed back out by the replica in a single

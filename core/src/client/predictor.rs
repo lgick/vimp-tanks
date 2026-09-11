@@ -653,6 +653,30 @@ impl Predictor {
                 from: level,
                 to,
             };
+        } else if let Some((z, level)) = self
+            .authoritative_level
+            .filter(|&(_, level)| !on_ramp && level < self.level_state.level)
+        {
+            // ПОНИЖЕНИЕ уровня из кадра принимается всегда. Запоздавший
+            // кадр может врать только в одну сторону — «я ещё наверху»:
+            // ниже своего уровня хост объявляет танк лишь по факту
+            // приземления. Поэтому кадр НИЖЕ реплики означает, что спуск
+            // случился, а реплика его не предсказала, — и без этой ветки
+            // расхождение вечное: уровень считает один реплей, а он
+            // применяет реверс по СВОИМ временам и у самой кромки
+            // возвращает корпус на плиту, тогда как хост тот же реверс
+            // получает уже в падении (замер: реплика застревает на
+            // `level = 1, z = 1`, хост стоит на земле).
+            //
+            // Подъём так принимать нельзя (вернётся старый баг: кадры,
+            // летящие к клиенту во время спуска, несут верхний уровень и
+            // подбрасывают приземлившуюся реплику обратно на мост), и
+            // прогон рампы исключён: там кадр отстаёт как раз вниз —
+            // и по состоянию реплики, и по карте под авторитетной позицией.
+            self.level_state.level = level;
+            self.level_state.z = z;
+            self.level_state.transit = Transit::Grounded;
+            self.level_state.slope_vec = [0.0, 0.0];
         } else if !climbing
             && let Transit::Falling { .. } = self.level_state.transit
         {
@@ -2424,6 +2448,68 @@ mod tests {
 
         assert_eq!(p.level_state().level, 0, "реплику подняло реплеем");
         assert_eq!(p.level_state().z, 0.0);
+    }
+
+    #[test]
+    fn frame_below_the_replica_lowers_its_level() {
+        // зеркало `late_frame_from_the_bridge_does_not_lift_a_landed_replica`:
+        // кадр НИЖЕ реплики — это уже случившийся спуск, который реплика не
+        // предсказала (реверс у самой кромки она применяет по своим
+        // временам и падения не начинает). Без этой ветки расхождение
+        // вечное: хост на земле, реплика на мосту
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // на плите моста (колонки 3–4: x от 120 до 200)
+        p.state.x = 140.0;
+        p.state.y = 100.0;
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Grounded,
+            ..LevelState::default()
+        };
+        p.step_time = 0.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().level, 1);
+
+        // хост давно на земле
+        p.correct_level(0.0, 0);
+        p.on_server_state([140.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert_eq!(p.level_state().level, 0, "понижение из кадра не принято");
+        assert_eq!(p.level_state().z, 0.0);
+        assert_eq!(p.level_state().transit, Transit::Grounded);
+    }
+
+    #[test]
+    fn a_frame_from_the_ramp_does_not_lower_a_climbing_replica() {
+        // на прогоне кадр отстаёт как раз ВНИЗ: реплика поднялась, а кадр
+        // ещё везёт нижний уровень. Понижение там принимать нельзя
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+
+        // колонка 2 — прогон рампы (x от 80 до 120)
+        p.state.x = 110.0;
+        p.state.y = 100.0;
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Grounded,
+            ..LevelState::default()
+        };
+        p.step_time = 0.0;
+        // шаг нужен, чтобы история уровня покрыла кадр: с пустой историей
+        // откат и так берёт состояние из кадра (`rewind_level_state`)
+        p.step(0);
+
+        p.correct_level(0.0, 0);
+        p.on_server_state([110.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], false, 0.0, 0.0, 0.0);
+
+        assert_eq!(p.level_state().level, 1, "кадр с прогона стянул реплику вниз");
     }
 
     #[test]
