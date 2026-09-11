@@ -19,7 +19,9 @@ pub mod tanks;
 
 use client::ClientState;
 use config::{RootClientConfig, RootConfig};
+use serde::Serialize;
 use tanks::GameState;
+use vimp_engine_core::map::RampRun;
 use vimp_engine_core::snapshot::SnapshotPacker;
 
 /// Публичный ABI ядра для JS-оболочки (Worker хоста / тестовый харнесс).
@@ -121,6 +123,57 @@ impl ClientCore {
             .and_then(|dynamics| dynamics.to_world(key, local_x, local_y))
             .map(|point| point.to_vec())
             .unwrap_or_default()
+    }
+
+    /// Прогоны рамп текущей карты для РЕНДЕРА клина: тот же
+    /// `MapLevels::runs`, по которому физика ставит стражей. Второй обход
+    /// грида на JS расходился бы с ядром молча — горка, которую видно и
+    /// нельзя проехать.
+    /// Формат: JSON-массив
+    /// `{ axis, sign, from, to, min, max, crossMin, crossMax, block }`,
+    /// координаты — МИРОВЫЕ (уже масштабированные), как в `RampRun`.
+    /// Пустой массив — карты нет или она одноуровневая.
+    pub fn ramp_runs(&self) -> String {
+        let runs: Vec<RampRunView> = self
+            .state
+            .game()
+            .levels()
+            .map(|levels| levels.runs().iter().map(RampRunView::from).collect())
+            .unwrap_or_default();
+
+        serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string())
+    }
+}
+
+/// Прогон рампы за WASM-границей: те же поля, что у `RampRun` движка, но в
+/// camelCase — по ту сторону их читает JS.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RampRunView {
+    axis: u8,
+    sign: i8,
+    from: u8,
+    to: u8,
+    min: f32,
+    max: f32,
+    cross_min: f32,
+    cross_max: f32,
+    block: u16,
+}
+
+impl From<&RampRun> for RampRunView {
+    fn from(run: &RampRun) -> Self {
+        RampRunView {
+            axis: run.axis,
+            sign: run.sign,
+            from: run.from,
+            to: run.to,
+            min: run.min,
+            max: run.max,
+            cross_min: run.cross_min,
+            cross_max: run.cross_max,
+            block: run.block,
+        }
     }
 }
 

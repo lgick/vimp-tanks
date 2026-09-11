@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import clientConfig from '../../src/config/client.js';
+import clientPlugin from '../../src/client/index.js';
 
 // componentDependencies: движок раздаёт сервис только тем партам, которые
 // названы здесь. Пропуск имени не ломает сборку — парт молча получает
@@ -20,6 +21,15 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
       'ExplosionEffect',
       'Tracks',
     ]);
+  });
+
+  // прогоны рамп из ядра: сервис доливает hooks.services(core), и его имя
+  // обязаны знать ОБА списка — иначе контрактный чекер (правило C4) не
+  // отличит игровой сервис от опечатки, а парт молча получит undefined и
+  // перестанет рисовать клин горки
+  it('rampRuns объявлен и в componentDependencies, и в serviceNames', () => {
+    expect(deps.rampRuns).toEqual(['Map']);
+    expect(clientPlugin.serviceNames).toContain('rampRuns');
   });
 
   // парт, не названный в gameSets и entitiesOnCanvas, просто не будет

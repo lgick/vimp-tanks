@@ -120,6 +120,7 @@ export default class Smoke extends Container {
             this._level,
             this._emitterX,
             this._emitterY,
+            this._z,
           );
           this.tint = this._levelView.tintFor(this._level);
         }

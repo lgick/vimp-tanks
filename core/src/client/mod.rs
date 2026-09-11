@@ -161,6 +161,13 @@ impl TanksClient {
         self.predictor.map_dynamics()
     }
 
+    /// Слоистая геометрия карты (уровни, прогоны рамп) — та же, по которой
+    /// предиктор ставит стражей. Потребитель за WASM-границей — рендер
+    /// клина горки (`ClientCore::ramp_runs`).
+    pub fn levels(&self) -> Option<&Rc<MapLevels>> {
+        self.predictor.levels()
+    }
+
     // чужие танки заводятся заново кадрами, поэтому их, в отличие от
     // геометрии карты, сбросить можно (и нужно: полотно очищено)
     fn reset_remote_tanks(&mut self) {

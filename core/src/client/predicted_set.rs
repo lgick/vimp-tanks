@@ -111,6 +111,11 @@ pub struct PredictedBody {
     /// траектории, что на хосте.
     pub z: f32,
     pub falling: Option<(u8, f32)>,
+    /// Тело стоит на клетке прогона рампы: стражи прогона его не держат —
+    /// то же правило, что у хоста (`map::body_filter`). Считается по КАРТЕ
+    /// под позицией тела, а не по его состоянию: `BodyLevelState` фазы
+    /// рампы не знает, а хост пропускает тело по факту клетки.
+    pub on_ramp: bool,
 }
 
 impl PredictedBody {
@@ -141,6 +146,7 @@ impl PredictedBody {
             level: 0,
             z: 0.0,
             falling: None,
+            on_ramp: false,
         }
     }
 

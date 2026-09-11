@@ -49,15 +49,18 @@ holds the transitions). Each level brings its own `layers`, over its own
   underneath as the block's base. Visual only: the core knows nothing about
   the height, and `parts.volume.enabled = false` switches the effect off
   entirely.
-- **A ramp needs nothing extra to get a volume.** From `ramps[]` and the
-  level grid, `Map` rebuilds the runs and draws each of them as a slope
-  whose every vertex carries its own height, plus a **skirt** — the two
+- **A ramp needs nothing extra to get a volume.** `Map` takes the runs from
+  the core (the `rampRuns` service — the same `MapLevels::runs` the physics
+  puts its guards on) and draws each of them as a slope whose every vertex
+  carries its own height, plus a **skirt** — the two
   sides along the axis and the end face at the top, pulled down to the
   run's base plane. So a ramp reads as a solid embankment from the side,
   a tank driving under it (a `rampSide` passage) is hidden by it, and where
   a gap is visible under a high run (`1 → 2`) driving through really is
   allowed. The wedge is drawn by the render layer that draws the ramp tiles
-  themselves.
+  themselves. A DESCENDING ramp (`from > to`, its tile in the upper level's
+  grid) is drawn the same way — the wedge goes down from the layer's level
+  to the lower one.
 - **A wide ramp is a rectangular block of one ramp tile.** The core cuts
   such a block into parallel lane runs and lets a tank change lanes
   mid-climb; the picture merges them back into one run. Lanes of DIFFERENT

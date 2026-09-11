@@ -211,6 +211,7 @@ exists. Its config is assembled by the engine's
 | `set_model(name)` / `set_active(bool)` / `set_map(json)` / `sync_panel(json)` / `reset()` | client port mirrors: auth, KEYSET, MAP_DATA, PANEL_DATA, CLEAR. `reset()` also drops the local tank's meta, so the prediction overlay disappears right away instead of waiting for the spectator keyset |
 | `decode_frame(bytes)` | a plain v5 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
 | `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
+| `ramp_runs()` | the current map's ramp runs as a JSON array `{axis, sign, from, to, min, max, crossMin, crossMax, block}` in WORLD units — the very `MapLevels::runs` the physics puts its ramp guards on; `[]` when there is no map or it is single-level. The renderer draws the wedge by it (the `rampRuns` service), so the picture and the physics cannot drift apart |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
 immediately under a local id (`L1`, `L2`, …) while the request travels to
@@ -558,11 +559,15 @@ run's GUARDS straight through (`map::levels_interaction_on_ramp`), while
 everyone else sees them. The guards are the run's sides and its "wrong"
 end: separate engine colliders (`GameMap::create_ramp_guards`) that live in
 no grid and fence a whole BLOCK of ramp lanes, never a single lane. The
-client replica builds them itself with the same formulas
-(`Predictor::resolve_world`) — otherwise prediction would drive onto a run
-from the side where the host holds it. Walls the replica reads as the glued
-blocks of `MapLevels::static_blocks` (`collect_block_contacts`), the very
-list the host puts its colliders by.
+client replica takes the very same geometry from the engine
+(`map::ramp_guards`, computed once per map load by both the host and
+`Predictor::set_map`) — one formula for both sides, a copy would drift
+silently. And the replica lets through ANY body standing on a run cell, not
+just the local tank: the "on a run" flag is read off the map under the body
+(`MapLevels::ramp_at`), exactly as the host reads it. Walls the replica
+reads as the glued blocks of `MapLevels::static_blocks`
+(`collect_block_contacts_into`), the very list the host puts its colliders
+by.
 
 The guards are invisible to a bot's obstacle-avoidance rays
 (`bots::controller::avoid_obstacles` casts with

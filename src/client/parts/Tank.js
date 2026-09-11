@@ -328,21 +328,31 @@ export default class Tank extends Container {
   // признаки уровня и высоты: прозрачность над игроком, затемнение под ним
   // и тень. Зовётся из `onRender` каждый кадр
   _updateView() {
-    if (this._levelView) {
-      this.alpha = this._levelView.alphaFor(
-        this._level,
-        this._worldX,
-        this._worldY,
-      );
-      this.tint = this._levelView.tintFor(this._level);
-    }
-
     // проекция 2.5D: смещается КОРПУС — на свою высоту и тем сильнее, чем
     // дальше он от центра экрана (src/client/parallax.js). Тем же числом
     // смещается плита уровня, поэтому танк с неё не съезжает.
     // Раньше сдвигалась тень, а корпус стоял в мировой точке — проекция
     // была вывернута наизнанку, и тень выглядела выше танка
     const camera = cameraCenter(this.parent, this._renderer);
+
+    // свой танк — владелец центра камеры на кадр: по нему сервис проецирует
+    // и игрока, и сущность, когда считает alpha (src/client/levelView.js).
+    // Считается ДО alphaFor: иначе первый кадр после смены камеры
+    // проецировался бы старым центром
+    if (this._levelView && this._isLocal()) {
+      this._levelView.setCamera(camera);
+    }
+
+    if (this._levelView) {
+      this.alpha = this._levelView.alphaFor(
+        this._level,
+        this._worldX,
+        this._worldY,
+        this._z,
+      );
+      this.tint = this._levelView.tintFor(this._level);
+    }
+
     const view = offsetPoint(
       this._worldX,
       this._worldY,

@@ -151,18 +151,22 @@
 - **`componentDependencies`** — какие сервисы инжектируются в компоненты
   (`renderer` → Map, Tank, Tracks; `assetsBase` → Map;
   `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank; `mapDynamics` →
-  ShotEffect; `levelView` → Tank, Map, MapRadar, Smoke, Bomb,
+  ShotEffect; `rampRuns` → Map; `levelView` → Tank, Map, MapRadar, Smoke, Bomb,
   ShotEffect, ExplosionEffect, Tracks; `localPlayer` → Tank). `mapDynamics` —
   геометрия динамики карты из клиентского ядра (`toWorld(key, localX, localY)`
   поверх `ClientCore.map_dynamics_to_world`), которую в пул кладёт сам плагин
   (`hooks.services`, см. [architecture.md](architecture.md)): эффект выстрела
   держит якорь на теле и спрашивает, где тело нарисовано, в момент рождения
   попадания. Сервис есть только при включённом client-side prediction —
-  необъявленный сервис молча приходит как `undefined`. `levelView` — тоже
+  необъявленный сервис молча приходит как `undefined`. `rampRuns` — сервис
+  игры поверх `ClientCore.ramp_runs`: `forLevel(level)` отдаёт прогоны рамп
+  уровня в мировых единицах, и по ним слой строит клин горки — ту же
+  геометрию, по которой физика ставит стражей, вместо второго обхода грида
+  на JS. `levelView` — тоже
 сервис самой игры (`src/client/levelView.js`): где, на каком уровне и на
 какой высоте локальный игрок. Пишет его локальный `Tank` (что он локальный,
 ему сообщает движковый сервис `localPlayer`), читают все, кто обязан уступить
-ему видимость, — по одной общей формуле `levelView.alphaFor(level, x, y)`:
+ему видимость, — по одной общей формуле `levelView.alphaFor(level, x, y, z)`:
 слои карты и ящики на них, чужие танки, дым, бомбы, эффекты и следы (см.
 [architecture.md](architecture.md)). `renderer` парту нужен ещё и затем,
 чтобы восстановить по нему центр камеры (`src/client/camera.js`) для
@@ -209,9 +213,11 @@
 | `sizeFactor` | Размер тени долей от ДЛИНЫ корпуса: текстура уже в его пропорции, поэтому при `z = 0` тень лежит ровно под корпусом и из-под него не выглядывает |
 
 Высота уровня в мировых единицах — поле **карты**, а не константа рендера:
-`levelHeight` (см. [extending.md](extending.md)). Число нужно физике и
-валидации (клиент уклон больше не считает); `parallax.shear` отвечает
-только за то, насколько сильно эта высота видна на картинке.
+`levelHeight` (см. [extending.md](extending.md)). Это величина **физики** —
+из неё ядро делает уклон рампы и падение, — и рендер её НЕ читает:
+вертикальный масштаб картинки задаёт один `parallax.shear`, и он намеренно
+не зависит от карты, иначе слои разных карт разъезжались бы по виду. Карта
+с нестандартным `levelHeight` поэтому едет иначе, а выглядит так же.
 
 ### `modules.controls.keySetList`
 

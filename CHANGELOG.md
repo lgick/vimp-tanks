@@ -7,7 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A point entity's transparency and the hole in the slab above the player
+  were measured in different coordinate systems. The hole is centred on the
+  player's **drawn** point — offset by his own height — while
+  `levelView.alphaFor` measured the distance between raw world points, so a
+  box on a bridge stayed opaque inside the hole, or faded past its edge; the
+  gap grew with the distance from the screen centre and with the entity's
+  height. Both sides now project through the same camera centre, which the
+  local `Tank` publishes once per frame (`levelView.setCamera`), and an
+  entity passes its own height (`alphaFor(level, x, y, z)`).
+
+- The ramp-run guards no longer hold other players' tanks the host lets
+  through. The replica decided "this body is climbing" by body index — only
+  the local tank was released — so a remote tank driving legally up a run
+  hit a side or a top guard that does not exist for it on the host, and
+  jerked on the slope. The flag is now read off the map under each predicted
+  body (`MapLevels::ramp_at`), exactly as the host reads it
+  (`map::body_filter`).
+- The replica takes the guards' geometry from the engine
+  (`map::ramp_guards`, `vimp-engine-core` 0.16.0) instead of rebuilding it
+  with its own copy of the formula, and builds it once per map load rather
+  than on every simulation step.
+- A descending ramp (`from > to`) is drawn again. The renderer skipped every
+  run whose rise was not positive, so such a hill got full physics — a run,
+  a grade, guards — and not a single pixel: neither wedge nor skirt. The
+  wedge's height now follows `lerp(from, to, progress)`, the formula the
+  core moves the tank's `z` by, and its skirt stands on the run's LOWER
+  level instead of the layer's own.
+
 ### Changed
+
+- The crate requirement is raised to `vimp-engine-core` 0.16.0
+  (`core/Cargo.toml`): the replica needs `map::ramp_guards` (the shared
+  guard geometry), `client::collision::collect_block_contacts_into` (the
+  buffered collection) and the degenerate-OBB fix in the speculative
+  contacts.
+
+- The ramp wedge is built from the core's runs (the new
+  `ClientCore.ramp_runs` and the `rampRuns` client service) instead of a
+  second grid walk on JS. The picture and the physics now share one source
+  — `MapLevels::runs` — so a hill you can see but cannot drive up is no
+  longer possible; `src/client/parts/rampRuns.js` became
+  `src/client/parts/rampLanes.js` and only merges a block's lanes for the
+  picture.
 
 - Sound near the listener is continuous now: the game declares its own
   spatial-sound geometry in `src/config/sounds.js`

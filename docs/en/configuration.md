@@ -153,7 +153,7 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
 - **`componentDependencies`** — which services get injected into which
   components (`renderer` → Map, Tank, Tracks; `assetsBase` → Map;
   `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank;
-  `mapDynamics` → ShotEffect; `levelView` → Tank, Map, MapRadar,
+  `mapDynamics` → ShotEffect; `rampRuns` → Map; `levelView` → Tank, Map, MapRadar,
   Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks; `localPlayer` → Tank).
   `mapDynamics` is the map-dynamics geometry from the client core
   (`toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`),
@@ -161,12 +161,16 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   [architecture.md](architecture.md)): the shot effect keeps an anchor on a
   body and asks where that body is drawn at the moment the impact spawns. The
   service exists only with client-side prediction on — an undeclared service
-  silently arrives as `undefined`. `levelView` is the game's own service too
+  silently arrives as `undefined`. `rampRuns` is the game's service over
+  `ClientCore.ramp_runs`: `forLevel(level)` gives the level's ramp runs in
+  world units, and the layer draws the ramp wedge by them — the same
+  geometry the physics puts its guards on, instead of a second grid walk on
+  JS. `levelView` is the game's own service too
 (`src/client/levelView.js`): where the local player is, on which level and
 at which height — the local `Tank` writes it (`localPlayer`, an engine
 service, is what tells it that it is the local one), and everything that has
 to yield visibility to him reads it through the one shared formula
-`levelView.alphaFor(level, x, y)` — map layers and the boxes on them, other
+`levelView.alphaFor(level, x, y, z)` — map layers and the boxes on them, other
 tanks, smoke, bombs, effects and track marks (see
 [architecture.md](architecture.md)). `renderer` is what lets a part
 reconstruct the camera centre (`src/client/camera.js`) for the 2.5D
@@ -214,9 +218,12 @@ it changes both sides at once.
 | `sizeFactor` | The shadow's size as a share of the hull LENGTH: the texture is already in the hull's proportion, so at `z = 0` the shadow lies exactly under the hull and never peeks out |
 
 The height of one level in world units is a **map** field, not a render
-constant: `levelHeight` (see [extending.md](extending.md)) — the number is
-needed by physics, by the renderer and by validation alike. `parallax.shear`
-is purely how much of that height the picture shows.
+constant: `levelHeight` (see [extending.md](extending.md)). It is a
+**physics** quantity — the core makes the ramp grade and the fall out of it
+— and the renderer does NOT read it: the vertical scale of the picture is
+`parallax.shear` alone, and it is deliberately map-independent, otherwise
+layers of different maps would read differently from one another. A map with
+an unusual `levelHeight` therefore climbs differently but looks the same.
 
 ### `modules.controls.keySetList`
 
@@ -439,7 +446,7 @@ passage under the slab, crates at the gaps in the railings of both levels and
 | `ramps[]` | Transitions: `{ tile, dir, from, to }` — the tile index in the `from` level's grid, and `dir` (`north`/`south`/`west`/`east`) is the direction you drive **to climb** |
 | `physicsDynamic[].level` | The level a box stands on (`0` by default). Bodies of different levels never touch |
 | `volumes` / `levels[n].volumes` | Optional, **visual only**: `zIndex of the render layer` → its height in levels. A layer with a height is extruded by `Map` itself and shifts as the camera moves; the engine validates the value and passes it to the part in `data.volume` |
-| `levelHeight` | Optional: **world units per level** (before `scale`), the tile size by default. One number that makes the ramp grade dimensionless in the core (physics only — the client no longer computes a grade); the engine validates it (`vimp-engine >= 0.32.0`) |
+| `levelHeight` | Optional: **world units per level** (before `scale`), the tile size by default. One number that makes the ramp grade dimensionless in the core (physics only — the client no longer computes a grade); the part receives it as `data.levelHeight`, and the engine validates it (`vimp-engine >= 0.32.0`) |
 | `respawns[team][i][3]` | Optional 4th element of a respawn point — the level. Without it the level is derived from the geometry (`GameMap::level_at`), i.e. a ground point that happens to sit under the slab would spawn the tank **on** the bridge |
 
 A ramp is a directed run of level-0 tiles: the core groups equal tiles into

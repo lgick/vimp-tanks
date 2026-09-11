@@ -247,6 +247,7 @@ describe('Tank: признаки уровня и высоты', () => {
     x: 0,
     y: 0,
     set() {},
+    setCamera() {},
     alphaFor: () => 1,
     tintFor: () => 0xffffff,
   });
@@ -381,6 +382,38 @@ describe('Tank: признаки уровня и высоты', () => {
 
     expect(set).toHaveBeenLastCalledWith(1, 100, 250, 1);
     expect(tank.x).not.toBeCloseTo(100);
+  });
+
+  // центр камеры считает один владелец за кадр — свой танк: сервис
+  // проецирует по нему и игрока, и сущность, когда считает alpha
+  it('свой танк публикует центр камеры в levelView', () => {
+    const setCamera = vi.fn();
+    const localPlayer = { is: () => true };
+    const { tank } = onStage({
+      levelView: { ...makeView(), setCamera },
+      localPlayer,
+    });
+
+    tank.update(row(1, 1, 100, 250));
+    tank.onRender();
+
+    expect(setCamera).toHaveBeenLastCalledWith(
+      expect.objectContaining({ x: 400, y: 300 }),
+    );
+  });
+
+  it('чужой танк центр камеры не публикует', () => {
+    const setCamera = vi.fn();
+    const localPlayer = { is: () => false };
+    const { tank } = onStage({
+      levelView: { ...makeView(), setCamera },
+      localPlayer,
+    });
+
+    tank.update(row(1, 1, 100, 250));
+    tank.onRender();
+
+    expect(setCamera).not.toHaveBeenCalled();
   });
 
   // тень лежит на слое, НАД которым висит танк: по ней и видно, что танк

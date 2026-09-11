@@ -14,12 +14,13 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use indexmap::IndexMap;
+use rapier2d::prelude::Group;
 
 use crate::config::{KeyConfig, LevelRules, ModelConfig};
 use crate::level::{self, LevelState, Transit};
 use crate::motion::{self, TurretInput};
 use vimp_engine_core::client::collision::{
-    Contact, Manifold, collect_block_contacts, obb_manifold,
+    BlockContact, Contact, Manifold, collect_block_contacts_into, obb_manifold,
 };
 use vimp_engine_core::client::raycast::Box2;
 use vimp_engine_core::client::rigid_body::{
@@ -27,7 +28,7 @@ use vimp_engine_core::client::rigid_body::{
     combine_surfaces, separate_bodies,
 };
 use vimp_engine_core::config::PLAYER_STATE_LEN;
-use vimp_engine_core::map::{MapLevels, RampRun, STATIC_LEVEL_GROUP, level_group};
+use vimp_engine_core::map::{MapLevels, RampGuard, STATIC_LEVEL_GROUP, level_group, ramp_guards};
 use vimp_engine_core::physics::normalize_angle;
 
 use super::map_dynamics::MapDynamics;
@@ -154,6 +155,23 @@ pub struct Predictor {
     // а реплика движения остаётся бит-в-бит прежней (паритет с хостом)
     sets: Vec<Box<dyn PredictedBodies>>,
     levels: Option<Rc<MapLevels>>,
+    /// Стражи прогонов рампы текущей карты: геометрия зависит только от неё,
+    /// а шаг зовётся 120 раз в секунду плюс на каждом шаге реплея. Считается
+    /// движком (`map::ramp_guards`) — формула одна на хост и на реплику.
+    guards: Vec<RampGuard>,
+
+    // буферы шага: `resolve_world` зовётся 120 раз в секунду плюс на каждом
+    // шаге реплея, и вектор на каждый вызов — чистая нагрузка на аллокатор.
+    // Берутся через `mem::take`, потому что шаг одновременно держит `&mut
+    // self.sets`
+    sim: Vec<Body>,
+    geometry: Vec<(f32, f32)>,
+    surfaces: Vec<Surface>,
+    masks: Vec<Group>,
+    contacts: Vec<(usize, usize, Contact, Surface, ContactImpulses)>,
+    separations: Vec<(usize, usize, Contact)>,
+    block_hits: Vec<BlockContact>,
+
     /// Уровень/высота/переход своего танка. Считается теми же функциями
     /// `crate::level`, что и на хосте, — иначе реплика уедет от
     /// авторитетного уровня и на границе рампы танк начнёт мигать между
@@ -243,6 +261,14 @@ impl Predictor {
             shape: None,
             sets: Vec::new(),
             levels: None,
+            guards: Vec::new(),
+            sim: Vec::new(),
+            geometry: Vec::new(),
+            surfaces: Vec::new(),
+            masks: Vec::new(),
+            contacts: Vec::new(),
+            separations: Vec::new(),
+            block_hits: Vec::new(),
             level_state: LevelState::default(),
             level_rules,
             authoritative_level: None,
@@ -358,12 +384,13 @@ impl Predictor {
             dynamics.set_levels(Rc::clone(&levels), fall);
         }
 
+        self.guards = ramp_guards(&levels);
         self.levels = Some(levels);
     }
 
-    /// Геометрия карты предикта — для проверки того, что обе клиентские
+    /// Геометрия карты предикта: по ней же рендер берёт прогоны рамп
+    /// (`ClientCore::ramp_runs`), и по ней проверяется, что обе клиентские
     /// подсистемы получили одну и ту же карту.
-    #[cfg(test)]
     pub(crate) fn levels(&self) -> Option<&Rc<MapLevels>> {
         self.levels.as_ref()
     }
@@ -899,11 +926,28 @@ impl Predictor {
             half_h: shape.half_h,
         };
 
+        // буферы шага (поля структуры): берутся на время шага, потому что
+        // он одновременно держит `&mut self.sets`; возвращаются в конце
+        let mut sim = std::mem::take(&mut self.sim);
+        let mut geometry = std::mem::take(&mut self.geometry);
+        let mut surfaces = std::mem::take(&mut self.surfaces);
+        let mut masks = std::mem::take(&mut self.masks);
+        let mut contacts = std::mem::take(&mut self.contacts);
+        let mut separations = std::mem::take(&mut self.separations);
+        let mut block_hits = std::mem::take(&mut self.block_hits);
+
+        sim.clear();
+        geometry.clear();
+        surfaces.clear();
+        masks.clear();
+        contacts.clear();
+        separations.clear();
+
         // тела шага: индекс 0 — свой танк, дальше предсказанные тела
         // подсистем в порядке их регистрации, затем статические партнёры
         // контактов со стенами. Решатель работает по индексам: две
         // изменяемые ссылки на элементы одного среза сразу не взять
-        let mut sim = vec![Body {
+        sim.push(Body {
             x: self.state.x,
             y: self.state.y,
             angle: self.state.angle,
@@ -914,24 +958,33 @@ impl Predictor {
             inv_inertia: shape.inv_inertia,
             linear_damping: model.damping.linear,
             angular_damping: model.damping.angular,
-        }];
+        });
         // маска уровней своего танка: в падении это группа статики — тел
         // падающий не задевает, но стены обоих уровней задевает (то же
         // правило, что у хоста в `level::LevelState::collision_mask`)
         let tank_mask = self.level_state.collision_mask();
-        let mut geometry = vec![(tank_obb.half_w, tank_obb.half_h)];
-        let mut surfaces = vec![Surface {
+        // свой танк на прогоне: стражи его не держат (`map::body_filter`)
+        let tank_on_ramp = self.level_state.on_ramp();
+
+        geometry.push((tank_obb.half_w, tank_obb.half_h));
+        surfaces.push(Surface {
             friction: model.fixture.friction,
             restitution: model.fixture.restitution,
-        }];
+        });
 
         // захват и шаг предсказанных подсистем (ящики карты, чужие танки)
         let mut bodies = Vec::new();
+        let map = self.levels.as_ref();
 
         for set in &mut self.sets {
             set.capture(&tank_obb, local_now);
 
             for body in set.predicted_bodies_mut() {
+                // признак «стою на прогоне» берётся по КАРТЕ под телом: так
+                // же пропускает тело хост (`map::body_filter`), а фазы рампы
+                // в `BodyLevelState` нет вовсе
+                body.on_ramp =
+                    map.is_some_and(|levels| levels.ramp_at(body.body.x, body.body.y).is_some());
                 sim.push(body.body);
                 geometry.push((body.half_w, body.half_h));
                 surfaces.push(body.surface);
@@ -942,19 +995,25 @@ impl Predictor {
         let movable = sim.len();
         // импульсы идут по КАЖДОЙ точке манифольда, а позиционная коррекция —
         // по одной (самой глубокой) точке пары: развод по обеим точкам
-        // растолкал бы тела вдвое
-        let mut contacts: Vec<(usize, usize, Contact, Surface, ContactImpulses)> = Vec::new();
-        let mut separations: Vec<(usize, usize, Contact)> = Vec::new();
+        // растолкал бы тела вдвое, поэтому списки разные
 
         // маска тела шага: индекс 0 — свой танк (переход по рампе даёт все
         // уровни прогона), остальные — правило движка
         // (`body_collision_mask`): на опоре свой уровень, в падении только
         // статика. Тела разных уровней друг друга не касаются: танк на
         // мосту не толкает ящик под мостом
-        let mut masks = Vec::with_capacity(movable);
-
         masks.push(tank_mask);
         masks.extend(bodies.iter().map(|body| body.collision_mask()));
+
+        // стражи прогона не держат тело, законно едущее по прогону: индекс 0
+        // — свой танк, дальше предсказанные тела
+        let on_ramp = |index: usize| {
+            if index == 0 {
+                tank_on_ramp
+            } else {
+                bodies[index - 1].on_ramp
+            }
+        };
 
         // контакты со стенами (партнёр — статика в точке задетого тайла):
         // стены собираются по КАЖДОМУ уровню из маски тела
@@ -983,10 +1042,15 @@ impl Predictor {
                     // корпусу на длинной стене несколько контактов там, где у
                     // хоста один, и касательный удар об угол разрешался по
                     // другой оси — предсказание расходилось молча
-                    let hits =
-                        collect_block_contacts(&obb, levels.static_blocks(level), prediction);
+                    block_hits.clear();
+                    collect_block_contacts_into(
+                        &obb,
+                        levels.static_blocks(level),
+                        prediction,
+                        &mut block_hits,
+                    );
 
-                    for hit in hits {
+                    for hit in &block_hits {
                         let partner = sim.len();
 
                         sim.push(static_body(hit.block_x, hit.block_y));
@@ -1007,63 +1071,23 @@ impl Predictor {
             // стражи прогонов рампы: борта и «неправильный» торец. Их
             // геометрии нет ни в одном гриде — хост ставит их отдельными
             // коллайдерами (`GameMap::create_ramp_guards`), поэтому реплика
-            // обязана собрать их теми же формулами: иначе предсказание
+            // берёт их у движка (`map::ramp_guards`, посчитаны на загрузке
+            // карты): формула одна на обе стороны, иначе предсказание
             // въезжает на прогон сбоку там, где хост держит
-            let climbing = self.level_state.on_ramp();
-            let thickness = levels.tile_size() * 0.1;
-            // огораживается БЛОК полос широкой горки, а не каждая полоса:
-            // борта ставятся по внешним границам блока, торец — один во всю
-            // его ширину (`GameMap::create_ramp_guards`)
-            let mut blocks: Vec<RampRun> = Vec::new();
-
-            for run in levels.runs() {
-                if let Some(block) = blocks.iter_mut().find(|block| block.block == run.block) {
-                    block.cross_min = block.cross_min.min(run.cross_min);
-                    block.cross_max = block.cross_max.max(run.cross_max);
-                } else {
-                    blocks.push(run.clone());
-                }
-            }
-
-            for run in &blocks {
-                let low = run.from.min(run.to);
-                let half_main = (run.max - run.min) / 2.0;
-                let half_cross = (run.cross_max - run.cross_min) / 2.0;
-                let main = (run.min + run.max) / 2.0;
-                let cross = (run.cross_min + run.cross_max) / 2.0;
-                // «неправильный» торец — дальний по ходу подъёма
-                let far = if run.sign > 0 { run.max } else { run.min };
-                let guard = |main: f32, cross: f32, half_main: f32, half_cross: f32| {
-                    let (x, y) = if run.axis == 0 {
-                        (main, cross)
-                    } else {
-                        (cross, main)
-                    };
-                    let (half_w, half_h) = if run.axis == 0 {
-                        (half_main, half_cross)
-                    } else {
-                        (half_cross, half_main)
-                    };
-
-                    Box2 {
-                        x,
-                        y,
-                        angle: 0.0,
-                        half_w,
-                        half_h,
-                    }
+            for guard in &self.guards {
+                let box2 = Box2 {
+                    x: guard.x,
+                    y: guard.y,
+                    angle: 0.0,
+                    half_w: guard.half_w,
+                    half_h: guard.half_h,
                 };
-                let guards = [
-                    guard(main, run.cross_min, half_main, thickness / 2.0),
-                    guard(main, run.cross_max, half_main, thickness / 2.0),
-                    guard(far, cross, thickness / 2.0, half_cross),
-                ];
 
                 for index in 0..movable {
                     // страж существует только для тел уровня, с которого
-                    // прогон начинается, и законно поднимающийся проходит
-                    // его насквозь (`map::body_filter`)
-                    if !masks[index].intersects(level_group(low)) || (index == 0 && climbing) {
+                    // прогон начинается, и любое тело, законно едущее по
+                    // прогону, проходит его насквозь (`map::body_filter`)
+                    if !masks[index].intersects(level_group(guard.low)) || on_ramp(index) {
                         continue;
                     }
 
@@ -1074,28 +1098,25 @@ impl Predictor {
                         half_w: geometry[index].0,
                         half_h: geometry[index].1,
                     };
+                    // стражи собираются тем же манифольдом с зазором, что и
+                    // стены: иначе они держали бы не на том шаге и не тем
+                    // плечом
+                    let Some(manifold) = obb_manifold(&obb, &box2, prediction) else {
+                        continue;
+                    };
+                    let partner = sim.len();
 
-                    for box2 in &guards {
-                        // стражи собираются тем же манифольдом с зазором, что
-                        // и стены: иначе они держали бы не на том шаге и не
-                        // тем плечом
-                        let Some(manifold) = obb_manifold(&obb, box2, prediction) else {
-                            continue;
-                        };
-                        let partner = sim.len();
-
-                        sim.push(static_body(box2.x, box2.y));
-                        geometry.push((0.0, 0.0));
-                        surfaces.push(MAP_SURFACE);
-                        push_manifold(
-                            &mut contacts,
-                            &mut separations,
-                            index,
-                            partner,
-                            &manifold,
-                            combine_surfaces(&surfaces[index], &MAP_SURFACE),
-                        );
-                    }
+                    sim.push(static_body(box2.x, box2.y));
+                    geometry.push((0.0, 0.0));
+                    surfaces.push(MAP_SURFACE);
+                    push_manifold(
+                        &mut contacts,
+                        &mut separations,
+                        index,
+                        partner,
+                        &manifold,
+                        combine_surfaces(&surfaces[index], &MAP_SURFACE),
+                    );
                 }
             }
         }
@@ -1182,6 +1203,16 @@ impl Predictor {
         for set in &mut self.sets {
             set.demote_idle(local_now);
         }
+
+        // буферы возвращаются на место — со следующего шага они работают уже
+        // на своей ёмкости
+        self.sim = sim;
+        self.geometry = geometry;
+        self.surfaces = surfaces;
+        self.masks = masks;
+        self.contacts = contacts;
+        self.separations = separations;
+        self.block_hits = block_hits;
     }
 }
 
@@ -1655,6 +1686,20 @@ mod tests {
         &p.predicted_sets_mut()[0].set().bodies()["box"]
     }
 
+    // ящик подсистемы на заданной точке карты (стражи судят по клетке, а
+    // конструктор двойника кладёт ящик в фиксированную точку)
+    fn place_box(p: &mut Predictor, x: f32, y: f32) {
+        let body = p.predicted_sets_mut()[0]
+            .set_mut()
+            .bodies_mut()
+            .get_mut("box")
+            .unwrap();
+
+        body.body.x = x;
+        body.body.y = y;
+        body.follow = Transform { x, y, angle: 0.0 };
+    }
+
     #[test]
     fn without_map_and_sets_there_are_no_collisions() {
         // предиктор без карты стоит внутри стены — и всё равно едет как
@@ -1944,6 +1989,57 @@ mod tests {
         assert_eq!(p.level_state().transit, Transit::Grounded);
         assert_eq!(p.level_state().level, 1);
         assert_eq!(p.level_state().z, 1.0);
+    }
+
+    // Д2: стражи прогона освобождают ЛЮБОЕ тело, стоящее на клетке
+    // прогона, а не только свой танк: хост снимает бит стража по факту
+    // клетки (`map::body_filter`), и чужой танк на горке обязан ехать, а не
+    // упираться в борт, которого у него на хосте нет
+    #[test]
+    fn a_predicted_body_on_the_run_passes_the_guard() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        // свой танк уведён за карту: проверяются только стражи
+        p.state.x = 400.0;
+        p.state.y = 400.0;
+        p.add_predicted_set(Box::new(BoxSet::new(0.0)));
+        // клетка прогона (1, 2): корпус лежит на нижнем борту блока полос
+        place_box(&mut p, 100.0, 50.0);
+        p.step(0);
+
+        let body = box_body(&mut p);
+
+        assert!(body.on_ramp, "тело на клетке прогона не помечено");
+        assert!(
+            (body.body.y - 50.0).abs() < 1e-5,
+            "страж вытолкнул тело с прогона: y = {}",
+            body.body.y
+        );
+    }
+
+    // обратная половина того же правила: тело того же уровня РЯДОМ с
+    // прогоном борт держит — иначе «сняли стражей всем»
+    #[test]
+    fn a_predicted_body_off_the_run_is_held_by_the_side_guard() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wide_ramp_map());
+        p.state.x = 400.0;
+        p.state.y = 400.0;
+        p.add_predicted_set(Box::new(BoxSet::new(0.0)));
+        // клетка (0, 2) — не прогон, но корпус заходит на борт блока
+        place_box(&mut p, 100.0, 32.0);
+        p.step(0);
+
+        let body = box_body(&mut p);
+
+        assert!(!body.on_ramp, "тело вне прогона помечено как на прогоне");
+        assert!(
+            body.body.y < 32.0,
+            "борт прогона тело не удержал: y = {}",
+            body.body.y
+        );
     }
 
     #[test]

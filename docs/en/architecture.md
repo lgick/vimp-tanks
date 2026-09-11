@@ -92,6 +92,17 @@ Rendering is built from engine MVC components + this plugin's PixiJS
 entities (`src/client/parts/`) on two canvases (`vimp`, `radar`); procedural
 textures are baked at startup from `src/client/bakers/`.
 
+The `Map` part is a **dispatcher over two strategies**: the engine hands
+static layers (`s0..sN`) and dynamic bodies (`d0..dN`) to the SAME list of
+part names (`gameSets[setId]`, `src/config/client.js`), so the part name is
+one and the data kind is resolved inside. `src/client/parts/Map.js` only
+checks `assetsBase`, picks the strategy and wires its `render` to
+`onRender`; the work lives in `src/client/parts/map/` — `MapLayer.js` (baked
+layer, its parallax, volume occluder, ramp wedge, bridge-slab transparency),
+`MapObject.js` (the crate: its own frame row, level and alpha),
+`extrusion.js` (pure geometry of volume slices and the ramp wedge) and
+`holeOverlay.js` (the see-through hole: state and the filter).
+
 A part that needs something out of the game core gets it as a **service**:
 `ClientPlugin.hooks.services(core)` (`src/client/index.js`) returns the game
 services, the engine merges them into its own pool and hands them out by
@@ -127,7 +138,7 @@ every level-0 one — the bridge slab hides what drives under it.
 The consequences the parts implement themselves:
 
 - **See-through above the player.** One formula for every part —
-  `levelView.alphaFor(level, x, y)` (`src/client/seeThrough.js`), in two
+  `levelView.alphaFor(level, x, y, z)` (`src/client/seeThrough.js`), in two
   modes switched by `parts.seeThrough.mode` (`src/config/render.js`):
   `'hole'` opens a radial hole around the player, `'layer'` fades the whole
   slab (the old behaviour, the fallback path). Only what is **above** the
@@ -136,7 +147,14 @@ The consequences the parts implement themselves:
   pixels rather than a single alpha, so it runs the hole as a filter
   (`createHoleFilter`, both a WebGL and a WebGPU branch — the second one
   would silently vanish otherwise). Either way the transition is
-  time-smoothed (`fadeRate`), or driving under an edge blinks.
+  time-smoothed (`fadeRate`), or driving under an edge blinks. Both sides
+  measure the distance in **drawn** coordinates: the player and the entity
+  are each offset by their own height (the 2.5D projection below), and the
+  hole in the slab is centred on the same offset point. The camera centre
+  that projection needs is computed once per frame by the local `Tank` and
+  published through `levelView.setCamera()` — raw world points would drift
+  the entity's fade circle away from the drawn hole the further the player
+  is from the screen centre and the higher the entity sits.
 - **Boxes ride their level.** The dynamic row (`c1`/`c2`) carries `level`,
   so `Map`'s dynamic branch re-sorts by `levelZ` and recomputes its alpha
   every frame: a box that falls off the bridge is visibly falling off it.
@@ -190,16 +208,22 @@ The consequences the parts implement themselves:
   it. The extrusion goes away from the camera centre, that is, it covers the
   area BEHIND the wall — where the tank is. The occluder keeps the wall solid: the
   hole around the player opens only when the volume actually covers the
-  tank on screen (`Map._volumeHidesPlayer` computes, back through the
+  tank on screen (`MapLayer._volumeHidesPlayer` computes, back through the
   projection, the source cell of the slice that lands on the player), while
   a volume ABOVE the player fades together with its own layer, as the slab
   does.
-- **A ramp is a slope, not a flat sprite.** `Map` rebuilds the ramp runs
-  from the level grid the way the core does (`src/client/parts/rampRuns.js`
-  mirrors `MapLevels::build_runs`), bakes a texture out of the ramp tiles
-  only, and builds ONE mesh (`MeshSimple`) per run: a strip of
+- **A ramp is a slope, not a flat sprite.** `Map` takes the ramp runs FROM
+  THE CORE — the `rampRuns` service (`src/client/index.js` over
+  `ClientCore.ramp_runs`) returns the very `MapLevels::runs` the physics
+  puts its guards on, in world units; `src/client/parts/rampLanes.js` only
+  converts them into the layer's cells and merges the lanes. A second grid
+  walk on JS used to live there and could drift from the core silently — a
+  hill you can see and cannot drive up. The part then bakes a texture out of
+  the ramp tiles only and builds ONE mesh (`MeshSimple`) per run: a strip of
   `volume.rampSegments` segments per cell whose every vertex carries its own
-  height, `level + rise * progress`. A container transform cannot express
+  height, `lerp(from, to, progress)` — the same formula the core moves the
+  tank's `z` by, so a DESCENDING ramp (`from > to`) is drawn as well: its
+  tile lies in the upper level's grid and the wedge goes down from there. A container transform cannot express
   that shift — it differs per vertex — so the vertices are recomputed every
   frame with the same `offsetPoint` formula. The height now grows along the
   run continuously (the wedge used to be a staircase of `slices` steps, and
@@ -212,9 +236,10 @@ The consequences the parts implement themselves:
   under it, where driving through really is allowed. The wedge stays a
   child of the PART, unlike the volume: a tank climbing the ramp has to be
   drawn on top of its surface. For the picture the lanes of one wide ramp
-  are merged into a single run (`rampRuns.js`) — the core keeps them
-  separate because the entry gate is judged per lane, and skirts on the lane
-  borders would draw partitions that do not exist in the physics.
+  are merged into a single run (`rampLanes.js`, by the core's `block`
+  number) — the core keeps them separate because the entry gate is judged
+  per lane, and skirts on the lane borders would draw partitions that do not
+  exist in the physics.
 - **Tracks keep their level**: track marks live in a per-level container
   that is a sibling of the `Tracks` part on the stage, so a mark left on the
   overpass stays on the overpass after the tank drives down.
@@ -225,7 +250,8 @@ The consequences the parts implement themselves:
   are generated once at startup and shared for the whole session — parts
   that use them call `destroy({ texture: false, textureSource: false })` so
   their own teardown never frees a texture another part still uses. The one
-  exception is `Map.js`'s `mapSprite`, whose texture is generated per map
+  exception is `mapSprite` in `parts/map/MapLayer.js`, whose texture is
+  generated per map
   instance via `renderer.generateTexture(...)` and is exclusively owned by
   it — its `destroy()` passes `textureSource: true` to release the GPU
   source when the map changes. The order matters: take the object off the
