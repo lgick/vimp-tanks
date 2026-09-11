@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
 use crate::config::{KeyConfig, LevelRules, ModelConfig, PanelValue, WeaponConfig};
-use crate::level::LevelState;
+use crate::level::{Footprint, LevelState};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
 use crate::motion::{self, TurretInput};
@@ -538,6 +538,17 @@ impl Tank {
         self.level_state = LevelState::default();
 
         self.reset_keys();
+    }
+
+    /// Опора корпуса под текущим курсом: срыв с обрыва судит габарит, а не
+    /// точку центра (`level::has_support`). Полугабариты те же, что у
+    /// коллайдера корпуса (`ColliderBuilder::cuboid` в `Tank::new`).
+    pub fn footprint(&self, angle: f32) -> Footprint {
+        Footprint {
+            angle,
+            half_w: self.width / 2.0,
+            half_h: self.height / 2.0,
+        }
     }
 
     /// Явный уровень (точка респауна назвала его) — снапом, без перехода.

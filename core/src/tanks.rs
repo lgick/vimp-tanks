@@ -854,14 +854,23 @@ impl TanksSim {
                 continue;
             };
             let pos = body.translation();
+            // курс нужен опоре: срыв с обрыва судит габарит корпуса
+            let footprint = tank.footprint(body.rotation().angle());
 
             if dirty {
                 tank.set_level(levels.level_at(pos.x, pos.y));
             }
 
             let before = tank.level_state;
-            let event =
-                level::step_level(&mut tank.level_state, pos.x, pos.y, levels, level_rules, dt);
+            let event = level::step_level(
+                &mut tank.level_state,
+                pos.x,
+                pos.y,
+                &footprint,
+                levels,
+                level_rules,
+                dt,
+            );
 
             // не только маска уровней: смена «еду по прогону» открывает и
             // закрывает стражей прогона при неизменной маске

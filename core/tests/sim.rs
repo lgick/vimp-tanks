@@ -959,6 +959,39 @@ fn landing_applies_fall_damage() {
 }
 
 #[test]
+fn hull_hanging_over_the_edge_does_not_fall() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // плита уровня 1 — колонки 10..12, то есть восточная кромка на x=416.
+    // Центр корпуса уже за кромкой, но сам корпус ещё лежит на плите
+    core.spawn_actor(1, "m1", 1, 418.0, 272.0, 0.0).unwrap();
+    steps(&mut core, 2);
+    core.set_actor_level(1, 1);
+    steps(&mut core, 30);
+
+    assert_eq!(level_of(&core, 1), 1, "свес за кромку — ещё не срыв");
+
+    // ввод не заперт: реверс возвращает танк на плиту
+    core.apply_input(1, 1, "down", "back");
+    steps(&mut core, 60);
+
+    assert_eq!(level_of(&core, 1), 1, "реверс у кромки удержал на уровне");
+    assert!(
+        tank_x(&core, 1) < 414.0,
+        "танк не поехал назад: x={}",
+        tank_x(&core, 1)
+    );
+
+    // а корпус целиком за кромкой падает, как и прежде
+    core.apply_input(1, 1, "up", "back");
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 200);
+
+    assert_eq!(level_of(&core, 1), 0, "корпус за кромкой — падение");
+}
+
+#[test]
 fn second_layered_map_of_the_same_size_rebuilds_levels() {
     let mut core = make_core();
 

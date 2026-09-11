@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Driving off a ledge is judged by the hull, not by its centre point.**
+  A tank fell the instant its CENTRE crossed the last floor tile, with half
+  the hull still lying on the slab — and the fall is irreversible, so
+  reversing at that very moment changed nothing and the tank went down
+  anyway. Support is now the hull's centre or any of its four corners over a
+  floor tile of its own level (`level::has_support`), so a tank may hang
+  over the void, keeps its input and reverses back onto the slab; it falls
+  once the hull has left the slab entirely. Host and replica read the same
+  function, with the hull angle from the body and from the predicted state.
 - **A late frame no longer lifts a landed tank back onto the bridge.**
   While a tank descends, the frames still in flight carry the level it left,
   and the replica adopted them whenever it was grounded — snapping itself to

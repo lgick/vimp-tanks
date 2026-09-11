@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use rapier2d::prelude::Group;
 
 use crate::config::{KeyConfig, LevelRules, ModelConfig};
-use crate::level::{self, LevelState, Transit};
+use crate::level::{self, Footprint, LevelState, Transit};
 use crate::motion::{self, TurretInput};
 use vimp_engine_core::client::collision::{
     BlockContact, Contact, Manifold, collect_block_contacts_into, obb_manifold,
@@ -625,13 +625,17 @@ impl Predictor {
         // под телом нет плиты своего уровня: кадр, снятый на прогоне, может
         // приехать к реплике, уже съехавшей с него, и «z ниже уровня» тогда
         // говорит лишь о запаздывании кадра
-        let has_floor = |z_level: u8| {
-            self.levels
-                .as_ref()
-                .is_some_and(|levels| levels.has_floor(z_level, self.state.x, self.state.y))
+        // опора — по габариту корпуса, ровно как у хоста: кадр, снятый у
+        // самой кромки, иначе читался бы как «танк в воздухе», хотя хост
+        // держит его на плите углом корпуса
+        let footprint = self.footprint();
+        let supported = |z_level: u8| {
+            self.levels.as_ref().is_some_and(|levels| {
+                level::has_support(levels, z_level, self.state.x, self.state.y, &footprint)
+            })
         };
         let airborne = self.authoritative_level.filter(|&(z, level)| {
-            !on_ramp && level >= 1 && z < level as f32 && !has_floor(level)
+            !on_ramp && level >= 1 && z < level as f32 && !supported(level)
         });
 
         if let Some((z, level)) = airborne {
@@ -913,6 +917,17 @@ impl Predictor {
         self.level_state.slope_vec = [0.0, 0.0];
     }
 
+    /// Опора корпуса под текущим курсом — тот же прямоугольник, что у
+    /// хоста (`Tank::footprint`): срыв с обрыва судит габарит, а не точку
+    /// центра. Без модели габаритов ещё нет, и правило падает на центр.
+    fn footprint(&self) -> Footprint {
+        self.shape.as_ref().map_or_else(Footprint::point, |shape| Footprint {
+            angle: self.state.angle,
+            half_w: shape.half_w,
+            half_h: shape.half_h,
+        })
+    }
+
     /// Правила уровня одного шага — до применения ввода, ровно как в
     /// TanksSim::update_levels: иначе шаг падения посчитался бы по позиции,
     /// которую ввод уже сдвинул. Событие приземления реплика игнорирует:
@@ -922,10 +937,13 @@ impl Predictor {
             return;
         };
 
+        let footprint = self.footprint();
+
         level::step_level(
             &mut self.level_state,
             self.state.x,
             self.state.y,
+            &footprint,
             levels,
             &self.level_rules,
             dt,
@@ -1896,6 +1914,7 @@ mod tests {
             &mut state,
             x,
             y,
+            &p.footprint(),
             &levels,
             &p.level_rules,
             (STEP_MS / 1000.0) as f32,
@@ -2162,6 +2181,37 @@ mod tests {
         assert_eq!(p.level_state().transit, Transit::Grounded);
         assert_eq!(p.level_state().level, 0);
         assert_eq!(p.level_state().z, 0.0);
+    }
+
+    #[test]
+    fn replica_hanging_over_the_edge_keeps_its_level() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &layered_map());
+        p.level_state = LevelState {
+            level: 1,
+            z: 1.0,
+            transit: Transit::Grounded,
+            ..LevelState::default()
+        };
+        // плита моста — колонки 3–4 (x от 120 до 200), корпус 8×6: центр за
+        // кромкой, задние углы (x=198) ещё на плите
+        p.state.x = 202.0;
+        p.state.y = 100.0;
+        p.step(0);
+
+        assert_eq!(p.level_state().transit, Transit::Grounded);
+        assert_eq!(p.level_state().level, 1);
+        assert!(!p.level_state().input_locked(), "ввод у кромки не заперт");
+
+        // ещё немного вперёд — корпус целиком за кромкой, и реплика падает
+        p.state.x = 206.0;
+        p.step(0);
+
+        assert!(matches!(
+            p.level_state().transit,
+            Transit::Falling { from: 1, to: 0, .. }
+        ));
     }
 
     #[test]

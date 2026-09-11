@@ -537,8 +537,19 @@ the authoritative one.
   climbGravity` from the thrust and trims the speed ceiling by
   `climbMaxSpeedFactor * grade`. Off a ramp the grade is exactly 0 and the
   formula is bit-for-bit the old one.
-- **Ledges.** A tank on level `L >= 1` over a tile with no floor of its own
-  level enters `Falling`. The landing level is chosen at the moment of the
+- **Ledges.** A tank on level `L >= 1` enters `Falling` when its HULL has
+  left the slab: support is judged by `level::has_support` — the hull's
+  centre or any of its four corners over a floor tile of its own level.
+  While a corner still rests on the slab the tank hangs over the void but
+  stays `Grounded`, with its input free, so reversing at the very brink
+  brings it back; the old centre-point test dropped it — irreversibly, as
+  `Falling` locks input — with half the hull still on the slab. Host
+  (`TanksSim::update_levels`, hull angle from the body) and replica
+  (`Predictor::footprint`, angle from the predicted state) ask the same
+  function; map bodies (crates) keep the engine's centre rule
+  (`map::step_body_level`). A started fall is never cancelled: drifting
+  back under the slab does not put the tank back on it. The landing level
+  is chosen at the moment of the
   drop — `MapLevels::landing_level` (the nearest floor below with a surface
   in that cell) — so a tank falling off level 2 over a level 1 slab lands on
   that slab. The stored `to` only shapes the trajectory: the landing level
