@@ -50,6 +50,41 @@ const NOTHING = {
   rampTexture: null,
 };
 
+// Освобождение всего, что успела собрать сборка уничтоженному парту.
+// Владение то же, что и в `MapLayer.destroy`: запечённую текстуру слоя
+// делят спрайт и срезы объёма — отдаёт её спрайт; текстуру клина делят
+// его меши — она своя и отдаётся отдельно
+function disposeAssets({
+  mapSprite,
+  bakedTexture,
+  occluder,
+  slices,
+  rampTexture,
+}) {
+  for (const slice of slices) {
+    slice.target.parent?.removeChild(slice.target);
+    slice.target.destroy({ texture: false, textureSource: false });
+  }
+
+  occluder?.destroy({ children: true, texture: false, textureSource: false });
+
+  if (rampTexture) {
+    rampTexture.destroy(true);
+  }
+
+  // запечённая текстура отдаётся ОТДЕЛЬНО от спрайта, а не через
+  // `texture: true`: спрайт уже лежал в контейнере парта, и `super.destroy`
+  // парта (`children: true`) успел уничтожить его сам, обнулив `_texture`
+  // — второй destroy с `texture: true` упал бы на `null.destroy()`, а
+  // источник так и остался бы жив
+  if (mapSprite) {
+    mapSprite.parent?.removeChild(mapSprite);
+    mapSprite.destroy({ texture: false, textureSource: false });
+  }
+
+  bakedTexture?.destroy(true);
+}
+
 export async function buildLayerAssets(spec) {
   try {
     const baseTexture = await spec.baseTexture;
@@ -88,8 +123,19 @@ export async function buildLayerAssets(spec) {
     }
 
     const extrusion = await buildExtrusion(spec, baseTexture, bakedTexture);
+    const assets = { mapSprite, ...extrusion };
 
-    return { mapSprite, ...extrusion };
+    // экструзия — это ещё один await (запекание клина), и парт мог уйти в
+    // нём. Освобождать собранное обязан ЭТОТ вызов: слой уже прошёл свой
+    // `destroy()`, поля ему присвоятся мёртвому и текстуру клина не
+    // отдаст никто
+    if (spec.isAborted()) {
+      disposeAssets({ ...assets, bakedTexture });
+
+      return NOTHING;
+    }
+
+    return assets;
   } catch (error) {
     console.error(
       `Failed to create static map with asset ${spec.assetUrl}:`,
@@ -150,11 +196,11 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
       renderer: spec.renderer,
     });
 
-    // третий await: парт мог уйти, пока пеклась текстура клина
+    // третий await: парт мог уйти, пока пеклась текстура клина. Работа
+    // бросается, а освобождение уходит одним местом наверх
+    // (`disposeAssets` в `buildLayerAssets`)
     if (spec.isAborted()) {
-      rampTexture.destroy(true);
-
-      return { occluder, slices: [], rampTexture: null };
+      return { occluder, slices: built, rampTexture };
     }
 
     built.push(
@@ -171,7 +217,7 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
   }
 
   if (spec.isAborted()) {
-    return { occluder, slices: [], rampTexture };
+    return { occluder, slices: built, rampTexture };
   }
 
   // порядок отрисовки — по высоте: выше срез, позже он нарисован. Плоский

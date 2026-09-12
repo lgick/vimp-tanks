@@ -129,6 +129,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A blank screen and a `BindGroup.setResource` crash on the second switch
+  to a map with a long ramp** (`terraces`): the ramp skirt is longer than
+  PixiJS's 100-vertex batching threshold, so it was drawn by the
+  renderer-wide `GlMeshAdaptor` shader, and freeing the ramp texture on the
+  map change nulled that shader's bind group for the rest of the session.
+  Ramp meshes now set `batchMode: 'batch'` explicitly and never reach the
+  shared shader (the tank's hull mesh states the same mode as a guard: at
+  the shipped `tilt.vertices` it was already under the threshold).
+- **A map changed while its ramp texture was still baking leaked that
+  texture** (and the layer's own baked texture with it): assets built for a
+  part that is already destroyed are now freed in `layerAssets.js` instead
+  of being assigned to the dead part.
 - **A landing of ANOTHER player's tank gave no squash, no dust and no
   sound**: the detector wanted an exact zero from an interpolated `vz`.
 - **A zero `vz` in the frame now means the tank is on its support, and

@@ -116,11 +116,21 @@ export default class Tank extends Container {
     // масштаб и поворот. Якоря и масштаб у меша уходят ВНУТРЬ углов —
     // их считает `src/client/tilt.js`, здесь остаётся только раздать
     // результат в `setCorners` (см. _applyTilt)
-    const mesh = () =>
-      new PerspectiveMesh({
+    const mesh = () => {
+      const view = new PerspectiveMesh({
         verticesX: tiltConfig.vertices,
         verticesY: tiltConfig.vertices,
       });
+
+      // батчер задаётся явно, чтобы режим не зависел молча от конфига:
+      // при нынешних 6×6 меш батчится и сам, но `tiltConfig.vertices`
+      // больше 10 увело бы его за порог `Mesh.batched` (100 вершин) — в
+      // общий шейдер `GlMeshAdaptor`, который навсегда ломается на
+      // уничтожении текстуры (см. src/client/parts/map/extrusion.js)
+      view.geometry.batchMode = 'batch';
+
+      return view;
+    };
 
     this.body = mesh();
     this.gun = mesh();

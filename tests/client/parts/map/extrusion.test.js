@@ -106,6 +106,20 @@ describe('extrusion: клин рампы', () => {
     expect(surface.base[last]).toBeCloseTo(10, 6);
   });
 
+  // юбка длинного прогона (terraces.rampLong — 9 клеток) длиннее порога
+  // батчинга PixiJS (100 вершин): без явного `batchMode` её рисовал бы
+  // общий шейдер `GlMeshAdaptor`, чья `BindGroup` ломается НАВСЕГДА на
+  // уничтожении текстуры клина — пустой экран через одну смену карты
+  it('меши клина батчатся и на длинном прогоне', () => {
+    const [skirt, surface] = build({
+      runs: [lane({ col1: 8, rail0: 0, rail1: 8 })],
+    });
+
+    expect(skirt.target.geometry.positions.length / 2).toBeGreaterThan(100);
+    expect(skirt.target.batched).toBe(true);
+    expect(surface.target.batched).toBe(true);
+  });
+
   it('нисходящий прогон спускается от верхнего уровня к нижнему', () => {
     const [skirt, surface] = build({ runs: [lane({ from: 1, to: 0 })] });
     const { heights } = surface;

@@ -314,11 +314,28 @@ The consequences the parts implement themselves:
   it. The ramp wedge has a second baked texture of its own (ramp tiles
   only), shared by every run's mesh, so `destroy()` releases the source
   exactly once and the meshes go with the container's children.
+- **Every mesh is batched explicitly.** The ramp meshes
+  (`parts/map/extrusion.js`) set `geometry.batchMode = 'batch'` instead of
+  leaving the default `'auto'`. With `'auto'` PixiJS sends a mesh longer
+  than 100 vertices (`Mesh.batched`) around the batcher, into the
+  renderer-wide `GlMeshAdaptor` shader, which holds the texture source in
+  its own `BindGroup`. Destroying that source — a map change frees the ramp
+  texture — nulls the bind group FOREVER (`resources = null`), and the next
+  unbatched mesh throws in `BindGroup.setResource`: a blank screen one map
+  change later. The threshold is crossed by map content, not by the code
+  (`terraces.rampLong` is long enough, `overpass`'s runs are not), so the
+  mode is stated, not inferred. The tank's `PerspectiveMesh`
+  (`parts/Tank.js`) states it for the same reason and as a guard only: at
+  the shipped `tilt.vertices` (6×6) it batches on its own, and would cross
+  the threshold above 10.
 - **Async part constructors** (`createStatic`, `createDynamic`,
   `_createExtrusion`) check `this.destroyed` after EVERY `await`: a map change
   tears down the old parts in the same tick that creates the new ones, and a
   bake finishing later would otherwise build onto a destroyed part (and its
-  texture would never be freed).
+  texture would never be freed). Whatever a bake did manage to build for a
+  part that is already gone is freed by `disposeAssets` in
+  `parts/map/layerAssets.js` — one place, with the same ownership rules as
+  `MapLayer.destroy()`.
 - **Particle systems**: `Smoke.js` and `SmokeEffect.js` render their
   particles through `ParticleContainer` + `Particle` (wrapped in a plain
   `Container` per part, since `ParticleContainer` only accepts particles,

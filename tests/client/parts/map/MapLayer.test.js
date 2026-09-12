@@ -852,6 +852,53 @@ describe('Map: параллакс и объём слоя', () => {
       expect(map._mode._slices).toHaveLength(0);
     });
 
+    // третий await сборки — запекание клина: карта могла смениться в нём.
+    // Освобождает собранное сама сборка (`disposeAssets`): слой уже прошёл
+    // `destroy()`, поля ему присвоятся мёртвому. Спрайт слоя к этому
+    // моменту уничтожен `children: true` парта, поэтому запечённая
+    // текстура отдаётся отдельно — destroy с `texture: true` упал бы на
+    // `null.destroy()`, и источник остался бы жив
+    it('смена карты во время запекания клина не теряет текстуры', async () => {
+      load.mockImplementation(async () => Texture.EMPTY);
+      bakeTileLayer.mockClear();
+
+      const layerTexture = baked();
+      const rampTexture = baked();
+      let resolveRamp;
+
+      bakeTileLayer
+        .mockImplementationOnce(async () => layerTexture)
+        .mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              resolveRamp = resolve;
+            }),
+        );
+
+      const map = make(rampData, createLevelView(seeThrough), [coreRun()]);
+
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+
+      const layerDestroy = vi.spyOn(layerTexture, 'destroy');
+      const rampDestroy = vi.spyOn(rampTexture, 'destroy');
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      map.destroy();
+      resolveRamp(rampTexture);
+
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(rampDestroy).toHaveBeenCalledWith(true);
+      expect(layerDestroy).toHaveBeenCalledWith(true);
+      expect(error).not.toHaveBeenCalled();
+
+      error.mockRestore();
+    });
+
     it('destroy освобождает текстуру клина', async () => {
       const map = await ready(rampData, null, [coreRun()]);
 

@@ -6,6 +6,23 @@ import { Sprite, MeshSimple } from 'pixi.js';
 // наружу уходят готовые срезы формата `{ target, k, base, heights,
 // occluder }` — тот же, что держит слой в `_slices`.
 
+// Меш клина ВСЕГДА рисуется батчером. При `batchMode: 'auto'` PixiJS
+// отправляет меш длиннее 100 вершин (`Mesh.batched`) в обход батчера — в
+// общий на весь рендерер шейдер `GlMeshAdaptor`. Тот держит источник
+// текстуры в своей `BindGroup`, а уничтожение источника (смена карты
+// освобождает текстуру клина) обнуляет её НАВСЕГДА: `BindGroup` слушает
+// `change`, видит `destroyed` и делает `resources = null`. Следующий
+// небатченый меш падает в `BindGroup.setResource` на чтении `resources[0]`
+// — пустой экран через одну смену карты. Батченый меш общего шейдера не
+// касается, поэтому режим задаётся явно и не зависит от длины прогона.
+function rampMesh(options) {
+  const mesh = new MeshSimple(options);
+
+  mesh.geometry.batchMode = 'batch';
+
+  return mesh;
+}
+
 // Объём слоя: K копий ТОЙ ЖЕ запечённой картинки, каждая следующая
 // сдвинута от центра камеры сильнее предыдущей. Срезы уходят в
 // контейнер-перекрыватель (`occluder: true`), потому что им нужен zIndex
@@ -158,7 +175,7 @@ export function buildRampMeshes({
       indices[slot + 5] = v + 2;
     }
 
-    const mesh = new MeshSimple({
+    const mesh = rampMesh({
       texture,
       vertices: base.slice(),
       uvs,
@@ -303,7 +320,7 @@ export function buildRampSkirt(surface) {
     }
   }
 
-  const mesh = new MeshSimple({
+  const mesh = rampMesh({
     texture,
     vertices: skirtBase.slice(),
     uvs: skirtUvs,
