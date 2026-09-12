@@ -157,7 +157,7 @@ describe('tiltShade', () => {
       ...overrides,
     });
 
-  it('ровный танк не подсвечен', () => {
+  it('ровный танк не затронут', () => {
     expect(shade()).toBe(1);
   });
 
@@ -165,20 +165,26 @@ describe('tiltShade', () => {
     expect(shade({ pitch: 0.6, roll: -0.4, shading: 0 })).toBe(1);
   });
 
-  it('наклон навстречу свету и от света симметричны', () => {
-    const toward = shade({ pitch: 0.4 });
-    const away = shade({ pitch: -0.4 });
+  it('без направления света светотени нет', () => {
+    expect(shade({ pitch: 0.4, lightDir: undefined })).toBe(1);
+  });
 
-    expect(toward).toBeGreaterThan(1);
-    expect(away).toBeLessThan(1);
-    expect(toward - 1).toBeCloseTo(1 - away, 12);
+  it('наклон от света затемняет, навстречу — не подсвечивает', () => {
+    expect(shade({ pitch: -0.4 })).toBeLessThan(1);
+    expect(shade({ pitch: 0.4 })).toBe(1);
+  });
+
+  it('полностью отвёрнутая грань темнее ровной ровно на shading', () => {
+    // нормаль против света: pitch = π/2 при lightDir = [-1, 0]
+    expect(shade({ pitch: -Math.PI / 2 })).toBeCloseTo(1 - 0.28, 6);
   });
 
   it('множитель зависит от курса', () => {
     const north = shade({ pitch: 0.4, angle: 0 });
     const south = shade({ pitch: 0.4, angle: Math.PI });
 
-    expect(north - 1).toBeCloseTo(1 - south, 12);
+    expect(north).toBe(1);
+    expect(south).toBeLessThan(1);
   });
 });
 

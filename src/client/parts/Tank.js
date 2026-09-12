@@ -27,6 +27,11 @@ import {
   M1_ROLL,
 } from '../snapshotFields.js';
 
+// светотень наклона только затемняет (см. `tiltShade` в src/client/tilt.js):
+// множитель зажат в [0, 1]
+const SHADE_MIN = 0;
+const SHADE_MAX = 1;
+
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
 
@@ -191,10 +196,6 @@ export default class Tank extends Container {
     this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
     this._levelView = dependencies.levelView || null;
 
-    // приземление: пыль и звук подписываются колбэком, чтобы сам танк не
-    // знал про эмиттер частиц
-    this._onLanded = dependencies.onLanded || null;
-
     // видимость уровня и признаки высоты считаются каждый кадр, а не по
     // приходу строки: и камера, и локальный игрок двигаются между кадрами.
     //
@@ -325,13 +326,14 @@ export default class Tank extends Container {
     this._roll = data[M1_ROLL] || 0;
 
     // касание: детектор один и для своего танка, и для чужого, и общий с
-    // `Dust.js` — отдельного поля «приземлился» в кадре не нужно
-    const impact = landingImpact(this._prevVz, this._vz);
+    // `Dust.js` — оба парта получают один и тот же ряд снапшота, поэтому
+    // связывать их колбэком не нужно, и отдельного поля «приземлился» в
+    // кадре тоже
+    const impact = landingImpact(this._prevVz, this._vz, landingConfig);
 
     if (impact > 0) {
       this._landImpact = impact;
       this._landTimer = landingConfig.duration;
-      this._onLanded?.(impact);
     }
 
     this._prevVz = this._vz;
@@ -412,7 +414,9 @@ export default class Tank extends Container {
   // По ней рисуется тень: разъезд корпуса с тенью обязан показывать
   // подъём НАД ОПОРОЙ, а не высоту над нулём карты — иначе стоящий на
   // верхнем ярусе танк уезжает от своей тени тем дальше, чем дальше он от
-  // центра экрана
+  // центра экрана.
+  // `vz` в кадре — точный флаг: ядро специально не даёт ненулевой скорости
+  // округлиться в ноль (`snapshot_row`, core/src/tank.rs)
   _groundZ() {
     return this._vz !== 0 ? this._physLevel : this._z;
   }
@@ -491,8 +495,8 @@ export default class Tank extends Container {
           lightDir: tiltConfig.lightDir,
           shading: tiltConfig.shading,
         }),
-        0.5,
-        1.5,
+        SHADE_MIN,
+        SHADE_MAX,
       );
 
       this.tint = scaleTint(baseTint, shade);

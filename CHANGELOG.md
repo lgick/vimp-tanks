@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `tilt.shading`/`tilt.lightDir` — the light and shade of the tilt.
 - `src/client/landing.js` — the shared touchdown detector.
 - Validation of the `levels.landingShake` block.
+- Validation of the jump invariants in `TanksConfig::validate()`: the arc
+  `maxLaunchVz² / (2·g)` must stay below `jumpClearance` (a longer
+  `fallTime` alone breaks it, since it lowers the gravity), and
+  `maxLaunchVz` must be at least `minLaunchVz` — the ceiling is applied
+  before the threshold, so a lower one turns jumping off silently.
 - The `tests/scenarios/overpass_jump.json` debug scenario.
 - **Ramp jumps.** Leaving a run's top end at speed throws the tank into a
   ballistic arc: the vertical speed at the exit is the grade times the speed
@@ -100,6 +105,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   its own hull and always pointed at the local player); the volume of a tank
   comes from `tilt.shading` alone.
 - **`vz` is no longer interpolated in the snapshot schema** (`discrete`).
+- **The core's default `levels.jumpClearance` went 0.2 → 0.45**, catching up
+  with the default `maxLaunchVz` (3.5): the shipped defaults now satisfy the
+  jump invariant on their own.
+- **`tilt.shading` is a one-sided darkening.** A tilt away from the light
+  darkens the hull; a tilt towards it no longer brightens — the level tint
+  of your own and the upper tiers is white, so a highlight over it hit the
+  channel ceiling and vanished on exactly the tank the effect exists for. A
+  level hull looks the same as before.
 - **Jump and landing settings**: `rampLaunchFactor` 1.0 → 0.35,
   `jumpClearance` 0.2 → 0.45, `landingShake.intensity` 6 → 3,
   `landingShake.duration` 300 → 220, `landing.squash` 0.22 → 0.14.
@@ -118,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **A landing of ANOTHER player's tank gave no squash, no dust and no
   sound**: the detector wanted an exact zero from an interpolated `vz`.
+- **A zero `vz` in the frame now means the tank is on its support, and
+  nothing else.** `vz` works as the flight flag, but was rounded like a
+  coordinate, so a frame caught inside the arc's peak reported a flying tank
+  as grounded: the shadow blinked out and the support the hull is drawn on
+  jumped for that frame. The first frame of a drop off a ledge had the same
+  problem, since the core starts that flight at exactly zero.
 - **A jump off a steep ramp cost health and could throw the tank off the
   map**: the arc reached 2.6 levels, which held `clear_walls` for almost the
   whole flight — and with it an empty collision mask, the map's perimeter
@@ -228,6 +247,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `level::fall_speed_at` — it lost its last consumer once `vz` started
   travelling in the frame.
+- `Tank`'s dead `onLanded` hook — nothing ever passed it, and `Dust`
+  detects the touchdown from the same snapshot row on its own.
 
 ## [0.20.0] - 2026-09-11
 

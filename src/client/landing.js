@@ -6,22 +6,28 @@
 //
 // `vz` в схеме снапшота объявлен `discrete` (`src/config/snapshot.js`)
 // именно ради этого детектора: сглаженная выборка точного нуля не даёт.
-import { landing as landingConfig } from '../config/render.js';
+//
+// Конфиг модуль НЕ импортирует (как и `tilt.js`): пороги приходят
+// параметром, и функция остаётся чистой — тест проверяет формулу, а не
+// настройку.
 
 /**
  * Сила удара при касании, 0 — касания не было.
  *
  * @param {number} prevVz  вертикальная скорость прошлого кадра
  * @param {number} vz      вертикальная скорость этого кадра
- * @returns {number} 0..1 — доля от `landing.fullImpact`
+ * @param {object} p
+ * @param {number} p.minImpact   порог мягкого касания (уровней/с)
+ * @param {number} p.fullImpact  скорость полной силы удара (уровней/с)
+ * @returns {number} 0..1 — доля от `fullImpact`
  */
-export function landingImpact(prevVz, vz) {
+export function landingImpact(prevVz, vz, { minImpact, fullImpact }) {
   // касание: снижение было заметным, а в этом кадре скорость обнулилась.
   // Условие вывернуто (`!(prevVz < …)` вместо `prevVz >= …`) ради NaN в
   // коротком ряду: сравнение с NaN ложно, и детектор молча даёт 0
-  if (!(prevVz < -landingConfig.minImpact) || vz !== 0) {
+  if (!(prevVz < -minImpact) || vz !== 0) {
     return 0;
   }
 
-  return Math.min(1, -prevVz / landingConfig.fullImpact);
+  return Math.min(1, -prevVz / fullImpact);
 }

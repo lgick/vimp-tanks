@@ -152,13 +152,22 @@ tank into the air, and two `coreParams.levels` numbers decide how far:
   `STATIC_LEVEL_GROUP` mask and still sees every wall — the railings, the
   buildings and the map's perimeter. Keep the invariant
   `maxLaunchVz² / (2·(2 / fallTime²)) < jumpClearance` and no regular jump
-  can leave your map. A map that WANTS a tank to fly over walls raises
-  `rampLaunchFactor`/`maxLaunchVz` or lowers `jumpClearance` for itself.
+  can leave your map. `TanksConfig::validate()` enforces it: breaking the
+  invariant is a config load error, not a silent regression — and note that
+  a longer `fallTime` alone breaks it, since it lowers gravity and grows the
+  arc. The same check requires `maxLaunchVz >= minLaunchVz` (a ceiling below
+  the threshold disables jumping entirely; use `rampLaunchFactor: 0` for
+  that). A map that WANTS a tank to fly over walls raises
+  `rampLaunchFactor`/`maxLaunchVz` and `jumpClearance` together — the check
+  does not forbid that, it only demands the intent be written into the
+  config.
 - The landing pad has to be wide enough: the jump's horizontal reach is
-  roughly `speed × 2·vz/g` — about six tiles at `maxForwardSpeed`. That is
-  exactly why the `overpass` bridge carries FIVE tiles of slab rather than
-  three: on a three-tile deck every jump off the ramp ended against the far
-  railing.
+  roughly `speed × 2·vz/g` — up to about six tiles at `maxForwardSpeed` and
+  the full `maxLaunchVz`. That ceiling is not what a real ramp delivers: on
+  `overpass` the take-off is weaker and the measured reach is 3.5 tiles.
+  That is exactly why the bridge carries FIVE tiles of slab rather than
+  three — five leaves room on both sides, while on a three-tile deck a
+  take-off from row 31 put the tank right into the far railing.
 
 The core validates the same structure at load time and refuses a broken
 map, so a mistake is loud rather than silent — see

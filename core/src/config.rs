@@ -285,8 +285,11 @@ fn default_fall_damage_free_height() -> f32 {
     0.5
 }
 
+// выше максимальной дуги при дефолтном потолке (3.5^2 / (2 * 16.33) = 0.375):
+// перелёт стен остаётся механикой, но дефолтной настройкой недостижим.
+// Менять только парой с `default_max_launch_vz`/`default_fall_time`
 fn default_jump_clearance() -> f32 {
-    0.2
+    0.45
 }
 
 fn default_tilt_gain() -> f32 {
@@ -404,6 +407,38 @@ impl TanksConfig {
                 "levels.jumpClearance must be >= 0, got {}",
                 self.levels.jump_clearance
             ));
+        }
+
+        // потолок применяется ДО порога (core/src/level.rs), поэтому потолок
+        // ниже порога — это не «низкий прыжок», а выключенный прыжок, причём
+        // молча. Выключается прыжок нулевым rampLaunchFactor
+        if self.levels.max_launch_vz > 0.0
+            && self.levels.max_launch_vz < self.levels.min_launch_vz
+        {
+            return Err(format!(
+                "levels.maxLaunchVz ({}) must be >= minLaunchVz ({}) - a lower \
+                 ceiling disables jumping entirely; use rampLaunchFactor = 0 for that",
+                self.levels.max_launch_vz, self.levels.min_launch_vz
+            ));
+        }
+
+        // инвариант задачи «динамика танка»: перелёт стен остаётся механикой
+        // ядра, но штатным прыжком недостижим. Ломается не только задранным
+        // maxLaunchVz — достаточно поднять fallTime (гравитация падает, дуга
+        // растёт). Карте, которой перелёт НУЖЕН, достаточно поднять
+        // jumpClearance заодно с maxLaunchVz — проверка этого не запрещает,
+        // она требует, чтобы намерение было записано в конфиг явно
+        if self.levels.max_launch_vz > 0.0 && self.levels.jump_clearance > 0.0 {
+            let g = 2.0 / (self.levels.fall_time * self.levels.fall_time);
+            let peak = (self.levels.max_launch_vz * self.levels.max_launch_vz) / (2.0 * g);
+
+            if peak >= self.levels.jump_clearance {
+                return Err(format!(
+                    "levels: jump arc maxLaunchVz^2/(2g) = {peak} must be < \
+                     jumpClearance ({}); g = 2/fallTime^2 = {g}",
+                    self.levels.jump_clearance
+                ));
+            }
         }
 
         if self.levels.tilt_gain < 0.0 {
@@ -607,6 +642,53 @@ mod validate_tests {
         cfg.levels.max_launch_vz = -1.0;
 
         assert!(cfg.validate().unwrap_err().contains("maxLaunchVz"));
+    }
+
+    #[test]
+    fn defaults_keep_a_regular_jump_below_the_clearance() {
+        let cfg = config_with_panel_keys(&["health"]);
+
+        assert!(cfg.validate().is_ok(), "{:?}", cfg.validate());
+    }
+
+    #[test]
+    fn validate_rejects_an_arc_that_reaches_the_clearance() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.jump_clearance = 0.1;
+
+        assert!(cfg.validate().unwrap_err().contains("jumpClearance"));
+    }
+
+    // гравитацию задаёт fallTime: поднять его — значит поднять дугу, не трогая
+    // ни одного «прыжкового» поля
+    #[test]
+    fn validate_rejects_an_arc_grown_by_a_longer_fall_time() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.fall_time = 0.5;
+
+        assert!(cfg.validate().unwrap_err().contains("jumpClearance"));
+    }
+
+    #[test]
+    fn validate_rejects_a_ceiling_below_the_launch_threshold() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.max_launch_vz = 0.2;
+        cfg.levels.min_launch_vz = 0.35;
+
+        assert!(cfg.validate().unwrap_err().contains("maxLaunchVz"));
+    }
+
+    #[test]
+    fn a_zero_ceiling_skips_the_arc_invariant() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        // 0 — потолка нет, дуга не ограничена: проверять нечего
+        cfg.levels.max_launch_vz = 0.0;
+
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

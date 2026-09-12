@@ -620,7 +620,11 @@ the authoritative one.
   and the speed alone, and a steep run throws the tank above any geometry
   the map has (measured on `terraces`: 9.2 levels/s, an arc of 2.6 levels).
   The ceiling is what keeps `clear_walls` unreachable — the arc it allows,
-  `maxLaunchVz² / (2·g)`, stays below `jumpClearance`. The check runs BEFORE the ledge test:
+  `maxLaunchVz² / (2·g)`, stays below `jumpClearance`. Note the ORDER: the
+  ceiling is applied to the raw `vz` BEFORE it is compared with
+  `minLaunchVz`, so a ceiling below the threshold does not lower the jump,
+  it removes it — which is exactly why `TanksConfig::validate()` demands
+  `maxLaunchVz >= minLaunchVz`. The check runs BEFORE the ledge test:
   a tank leaving a ramp over the void would otherwise start falling with
   `vz = 0` and lose the jump. The target of such a flight is the tank's own
   slab (when there is one under it), and the arc starts exactly at the

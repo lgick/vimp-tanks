@@ -92,16 +92,21 @@ export function tiltCorners({
  * корпуса; её проекция на направление света и есть яркость. Функция
  * чистая и не знает про PixiJS — числа приходят параметрами.
  *
+ * Эффект ОДНОСТОРОННИЙ: наклон только затемняет. Подсветки поверх белого
+ * тинта в 8 битах нет (см. хвост функции).
+ *
  * @param {object} p
  * @param {number} p.angle    курс корпуса, рад
  * @param {number} p.pitch    продольный наклон, рад
  * @param {number} p.roll     поперечный наклон, рад
  * @param {number[]} p.lightDir  направление света в экранных осях
  * @param {number} p.shading  глубина эффекта (0 — выключено)
- * @returns {number} множитель яркости, около 1.0
+ * @returns {number} множитель яркости, 1 - shading .. 1
  */
 export function tiltShade({ angle, pitch, roll, lightDir, shading }) {
-  if (!shading) {
+  // без направления света считать нечего, а Math.hypot(undefined) дал бы
+  // NaN и молча сломал тинт корпуса в `scaleTint`
+  if (!shading || !lightDir) {
     return 1;
   }
 
@@ -118,7 +123,15 @@ export function tiltShade({ angle, pitch, roll, lightDir, shading }) {
   const len = Math.hypot(lightDir[0], lightDir[1]) || 1;
   const dot = (nx * lightDir[0] + ny * lightDir[1]) / len;
 
-  return 1 + dot * shading;
+  // dot ∈ [−1, 1] — проекция наклона нормали на свет. Ровный корпус даёт
+  // dot = 0 и множитель ровно 1: плоская карта обязана выглядеть как
+  // раньше. Наклон ОТ света затемняет; наклон НАВСТРЕЧУ свету не
+  // подсвечивает, а только снимает затемнение — подсветки поверх белого
+  // тинта в 8 битах всё равно нет: тинт уровня для своего и верхних
+  // ярусов — 0xffffff (`src/client/seeThrough.js`), и множитель > 1
+  // упирается в потолок канала, то есть пропадает ровно у того танка,
+  // ради которого эффект и заведён
+  return 1 - Math.max(0, -dot) * shading;
 }
 
 /**

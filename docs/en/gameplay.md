@@ -200,7 +200,10 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   levels ABOVE the dead zone only — `fallDamage` (30) per level beyond
   `fallDamageFreeHeight` (0.5), capped by `maxFallDamage` (100) per
   landing — so a ramp jump, whose whole arc is lower than the dead zone,
-  is free, while a drop off a ledge costs the usual 15 health per level.
+  is free, while a drop of exactly one level costs the usual 15 health.
+  Deeper falls cost MORE than they used to, and not proportionally: the
+  dead zone makes the curve steeper, so two levels cost 45 instead of 30
+  and four levels reach `maxFallDamage` and kill.
   The height is measured from the ARC'S PEAK rather than from the take-off
   level: a tank thrown upwards by a jump pays for the climb too. Only driving is dead
   while airborne — **the turret turns and the gun fires**. As long as the

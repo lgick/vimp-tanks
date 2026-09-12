@@ -150,6 +150,30 @@ pub struct Tank {
     pub last_input_seq: u32,
 }
 
+/// `vz` в кадре работает ФЛАГОМ полёта (src/client/parts/Tank.js,
+/// src/client/landing.js), поэтому округляется не как координата: round2 на
+/// вершине дуги превращал реальную скорость в ровный ноль, и тень на кадр
+/// считала летящий танк стоящим. Ненулевая скорость обязана остаться
+/// ненулевой, а ноль в кадре — означать ровно «танк на опоре».
+fn frame_vz(transit: Transit) -> f32 {
+    match transit {
+        Transit::Airborne { vz, .. } => {
+            let rounded = round2(vz);
+
+            if rounded != 0.0 {
+                return rounded;
+            }
+
+            // Ноль в кадре зарезервирован под опору, поэтому его здесь быть
+            // не может. Знак сохраняем — детектор касания смотрит именно на
+            // него; ровный ноль бывает у срыва с обрыва (`step_layered`
+            // заводит полёт с `vz = 0`), и он всегда начинается падением
+            if vz > 0.0 { 0.01 } else { -0.01 }
+        }
+        _ => 0.0,
+    }
+}
+
 const FORWARD: Vector = Vector::new(1.0, 0.0);
 const RIGHT: Vector = Vector::new(0.0, 1.0);
 
@@ -680,10 +704,7 @@ impl Tank {
             angvel: round2(body.angvel()),
             z: round2(self.level_state.z),
             level: self.level_state.level,
-            vz: round2(match self.level_state.transit {
-                Transit::Airborne { vz, .. } => vz,
-                _ => 0.0,
-            }),
+            vz: frame_vz(self.level_state.transit),
             // шаг round2 по радианам — 0.01 рад ≈ 0.6°, на глаз незаметно;
             // если наклон станет ступенчатым, округление здесь — первое
             // место, куда смотреть
@@ -882,6 +903,57 @@ mod tests {
         assert_eq!(
             world.colliders[tank.collider].collision_groups().memberships,
             vimp_engine_core::map::level_group(1)
+        );
+    }
+
+    #[test]
+    fn a_tiny_flight_speed_never_rounds_to_zero_in_the_frame() {
+        // `vz` кадра — флаг полёта на клиенте: ноль означает «на опоре»,
+        // поэтому вершина дуги не имеет права выглядеть как посадка
+        let up = frame_vz(Transit::Airborne {
+            vz: 0.004,
+            from: 1,
+            to: 1,
+            peak: 1.1,
+        });
+
+        let down = frame_vz(Transit::Airborne {
+            vz: -0.004,
+            from: 1,
+            to: 1,
+            peak: 1.1,
+        });
+
+        assert_eq!(up, 0.01);
+        assert_eq!(down, -0.01);
+    }
+
+    // срыв с обрыва — единственный полёт, который ядро заводит с РОВНЫМ
+    // нулём (`step_layered`): в кадре он обязан выглядеть падением, иначе
+    // первый его кадр не отличить от опоры
+    #[test]
+    fn a_ledge_drop_reports_a_fall_on_its_very_first_frame() {
+        let vz = frame_vz(Transit::Airborne {
+            vz: 0.0,
+            from: 1,
+            to: 0,
+            peak: 1.0,
+        });
+
+        assert_eq!(vz, -0.01);
+    }
+
+    #[test]
+    fn a_grounded_tank_reports_exactly_zero_vz() {
+        assert_eq!(frame_vz(Transit::Grounded), 0.0);
+        assert_eq!(
+            frame_vz(Transit::Ramp {
+                climbing: true,
+                low: 0,
+                high: 1,
+                run: 0,
+            }),
+            0.0
         );
     }
 }

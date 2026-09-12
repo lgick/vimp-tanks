@@ -4,7 +4,10 @@ import { randomRange } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
 import { applyParallax } from '../parallax.js';
-import { parallax as parallaxConfig } from '../../config/render.js';
+import {
+  parallax as parallaxConfig,
+  landing as landingConfig,
+} from '../../config/render.js';
 import { landingImpact } from '../landing.js';
 import {
   M1_X,
@@ -192,7 +195,7 @@ export default class Dust extends Container {
     // касание: тот же детектор, что в `Tank.js` — общая функция. Обе части
     // получают один и тот же ряд снапшота, поэтому связывать их колбэком
     // не нужно
-    const impact = landingImpact(this._prevVz, this._vz);
+    const impact = landingImpact(this._prevVz, this._vz, landingConfig);
 
     if (impact > 0) {
       this._triggerLandingBurst(impact);
