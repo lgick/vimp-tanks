@@ -4,10 +4,8 @@ import { randomRange } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
 import { applyParallax } from '../parallax.js';
-import {
-  parallax as parallaxConfig,
-  landing as landingConfig,
-} from '../../config/render.js';
+import { parallax as parallaxConfig } from '../../config/render.js';
+import { landingImpact } from '../landing.js';
 import {
   M1_X,
   M1_Y,
@@ -61,8 +59,10 @@ const DUST_CONFIG = {
     side: { min: -25, max: 25 },
   },
 
-  // приземление: частиц на каждую точку контакта при полном ударе
-  landingBurst: 8,
+  // приземление: частиц на каждую точку контакта при полном ударе. Число
+  // считается от силы удара (`landingBurst × impact`), а мягкое касание
+  // (impact = 0) не даёт ни одной — порог живёт в `landing.minImpact`
+  landingBurst: 14,
 
   // радиальная скорость разлёта при приземлении
   landingVelocity: { min: 40, max: 110 },
@@ -189,11 +189,12 @@ export default class Dust extends Container {
     this._particleContainer.boundsArea.x = this._x - BOUNDS_PADDING;
     this._particleContainer.boundsArea.y = this._y - BOUNDS_PADDING;
 
-    // касание: тот же детектор, что в `Tank.js`. Обе части получают один и
-    // тот же ряд снапшота, поэтому связывать их колбэком не нужно
-    if (this._prevVz < -landingConfig.minImpact && this._vz === 0) {
-      const impact = Math.min(1, -this._prevVz / landingConfig.fullImpact);
+    // касание: тот же детектор, что в `Tank.js` — общая функция. Обе части
+    // получают один и тот же ряд снапшота, поэтому связывать их колбэком
+    // не нужно
+    const impact = landingImpact(this._prevVz, this._vz);
 
+    if (impact > 0) {
       this._triggerLandingBurst(impact);
       this._playLandingSound(impact);
     }

@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   jumps off ramps where it used to roll off.
 - Falling is ballistic instead of linear: a drop from two levels is now
   faster than twice a one-level drop.
+- `levels.fallDamage` is now the price of a level ABOVE
+  `fallDamageFreeHeight`, not the price of a level of fall. Games that
+  override the `levels` block have to recompute the value.
 
 ### Migration
 
@@ -27,9 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - To restore the previous, jump-free behaviour set
   `coreParams.levels.rampLaunchFactor` to `0`; to restore the flat hull,
   set `render.js`'s `tilt.enabled` to `false`.
+- To keep the previous price of a drop of exactly one level, double
+  `fallDamage` at `fallDamageFreeHeight: 0.5` (15 → 30 in this repository).
+  A two-level drop then goes up from 30 to 45 HP — tune it with
+  `maxFallDamage`.
 
 ### Added
 
+- `levels.maxLaunchVz` — the ceiling of the vertical take-off speed off a
+  ramp, and with it of the jump's arc.
+- `levels.fallDamageFreeHeight` — the dead zone of fall damage.
+- `tilt.shading`/`tilt.lightDir` — the light and shade of the tilt.
+- `src/client/landing.js` — the shared touchdown detector.
+- Validation of the `levels.landingShake` block.
+- The `tests/scenarios/overpass_jump.json` debug scenario.
 - **Ramp jumps.** Leaving a run's top end at speed throws the tank into a
   ballistic arc: the vertical speed at the exit is the grade times the speed
   along it (`rampLaunchFactor`), and the flight only starts above
@@ -71,8 +85,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   A tank thrown off a ramp can aim and shoot through the whole arc, while it
   stays invulnerable to rays and blasts as before.
 - **Fall damage is measured from the arc's peak** instead of the take-off
-  level, so a tank thrown upwards by a jump pays for the climb as well. The
-  formula is unchanged (`fallDamage` per level, capped by `maxFallDamage`).
+  level, so a tank thrown upwards by a jump pays for the climb as well, and
+  it is charged for the height ABOVE the dead zone only:
+  `fallDamage · max(0, height − fallDamageFreeHeight)`, capped by
+  `maxFallDamage`.
+- **The tank's shadow marks flight only.** It is drawn on the tank's
+  SUPPORT rather than in the raw world point — so the gap between the hull
+  and the shadow is the rise above that support, and a fall off a ledge
+  leaves the shadow on the deck the tank left. While the tank is grounded
+  there is no shadow at all: it had nothing to show there and read as a grey
+  halo around the hull. The hull has no extrusion of its own either (the
+  slices would shift by `thickness · shear · distance to the screen centre`,
+  which on another player's tank at the edge of the screen grew as long as
+  its own hull and always pointed at the local player); the volume of a tank
+  comes from `tilt.shading` alone.
+- **`vz` is no longer interpolated in the snapshot schema** (`discrete`).
+- **Jump and landing settings**: `rampLaunchFactor` 1.0 → 0.35,
+  `jumpClearance` 0.2 → 0.45, `landingShake.intensity` 6 → 3,
+  `landingShake.duration` 300 → 220, `landing.squash` 0.22 → 0.14.
+- **`overpass`**: the bridge deck widened from three tiles to five, and the
+  south ramp moved two tiles north.
 - **`fallTime` now sets the gravity, not a duration.** `g = 2 / fallTime²`,
   so a one-level drop still takes the same time and deals the same damage.
 - **Two level rules moved into `coreParams.levels`.** `levelAdoptFrames`
@@ -84,6 +116,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A landing of ANOTHER player's tank gave no squash, no dust and no
+  sound**: the detector wanted an exact zero from an interpolated `vz`.
+- **A jump off a steep ramp cost health and could throw the tank off the
+  map**: the arc reached 2.6 levels, which held `clear_walls` for almost the
+  whole flight — and with it an empty collision mask, the map's perimeter
+  included.
 - **Hull tilt no longer freezes under a parked tank.** It used to be
   recovered on the client from the height delta between frames — zero under
   a tank standing on a ramp — and was dropped for that reason; it is now
@@ -185,6 +223,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `onRender` ran before the tank's used the previous frame's centre too. The
   service now takes the scene (`attachStage`) from the first part of the
   game canvas that renders and computes the centre itself, once per tick.
+
+### Removed
+
+- `level::fall_speed_at` — it lost its last consumer once `vz` started
+  travelling in the frame.
 
 ## [0.20.0] - 2026-09-11
 

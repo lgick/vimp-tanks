@@ -83,7 +83,11 @@ fn flat_config_json() -> serde_json::Value {
         },
         "levels": {
             "fallTime": 0.35,
-            "fallDamage": 15
+            "fallDamage": 30,
+            "fallDamageFreeHeight": 0.5,
+            "rampLaunchFactor": 0.35,
+            "maxLaunchVz": 3.5,
+            "jumpClearance": 0.45
         },
         "panel": {
             "health": { "key": "h", "value": 100 },
@@ -2021,8 +2025,162 @@ fn terraces_ramp_launches_the_tank() {
         peak > 2.0,
         "сход с прогона обязан подбросить танк выше уровня отрыва, peak = {peak}"
     );
+    // верхняя граница так же обязательна, как нижняя: без неё регрессия
+    // настройки (rampLaunchFactor 1.0 давал дугу в 2.6 уровня) тесту
+    // невидима
+    assert!(
+        peak < 2.0 + 0.6,
+        "дуга прыжка обязана оставаться в пределах полуметра-уровня, peak = {peak}"
+    );
     assert!(landed, "прыжок обязан закончиться приземлением");
     assert_eq!(level_of(&core, 1), 2, "после прыжка танк на верхней площадке");
+}
+
+/// Клетка карты `overpass` в мировых единицах: 32 × scale 0.4.
+fn overpass_cell(x: f32, y: f32) -> (f32, f32) {
+    ((x + 0.5) * 12.8, (y + 0.5) * 12.8)
+}
+
+/// Границы карты `overpass` с запасом в одну клетку: width 80, height 60,
+/// клетка 12.8 мировых единиц.
+fn overpass_bounds() -> (f32, f32, f32, f32) {
+    (12.8, 80.0 * 12.8 - 12.8, 12.8, 60.0 * 12.8 - 12.8)
+}
+
+#[test]
+fn a_jump_never_leaves_the_map() {
+    // Главная защита проблемы 3: пока дуга ниже `jumpClearance`, маска в
+    // полёте остаётся STATIC_LEVEL_GROUP, и периметр карты держит танк.
+    // Тест ловит любую настройку, при которой это перестаёт быть правдой
+    // (maxLaunchVz вверх, jumpClearance вниз, fallTime вниз).
+    let mut core = make_core();
+
+    core.load_map(overpass_map_json()).unwrap();
+
+    // первая точка респауна team1 — подножие северной рампы, носом на север
+    let (x, y) = overpass_cell(3.0, 38.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 270.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 2);
+
+    let (min_x, max_x, min_y, max_y) = overpass_bounds();
+    let mut peak = 0.0_f32;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        let (x, y) = (tank_x(&core, 1), tank_y(&core, 1));
+
+        assert!(
+            x > min_x && x < max_x && y > min_y && y < max_y,
+            "танк вышел за периметр карты: ({x}, {y})"
+        );
+
+        peak = peak.max(tank_z(&core, 1));
+    }
+
+    // `clear_walls` наружу ядро не отдаёт, но включается он ровно по
+    // высоте: z ≥ уровень отрыва + jumpClearance. Прыжок идёт с плиты
+    // (уровень 1), значит порог — 1.45
+    assert!(
+        peak < 1.0 + 0.45,
+        "дуга обязана оставаться ниже jumpClearance, peak = {peak}"
+    );
+}
+
+#[test]
+fn a_jump_lands_on_the_bridge() {
+    // Проверка ширины проезжей плиты: горизонт прыжка с рампы — около
+    // шести тайлов, на трёхтайловой плите танк бил в дальние перила
+    let mut core = make_core();
+
+    core.load_map(overpass_map_json()).unwrap();
+
+    let (x, y) = overpass_cell(3.0, 38.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 270.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 2);
+
+    let mut climbed = false;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        if level_of(&core, 1) == 1 {
+            climbed = true;
+        }
+    }
+
+    assert!(climbed, "танк обязан подняться на плиту");
+    assert_eq!(
+        level_of(&core, 1),
+        1,
+        "после прыжка танк остаётся на плите моста"
+    );
+    assert!(
+        (tank_z(&core, 1) - 1.0).abs() < 1e-3,
+        "прыжок обязан закончиться приземлением на плиту, z = {}",
+        tank_z(&core, 1)
+    );
+}
+
+#[test]
+fn a_ramp_jump_shakes_the_camera_less_than_a_fall() {
+    // главное свойство настройки приземления: сход с рампы читается
+    // толчком слабее, чем падение с целого уровня. Оба прогона идут на
+    // одном и том же блоке landingShake, сравниваются только интенсивности
+    let config = config_json_with_landing_shake(1.5, 6.0);
+
+    let mut core = GameCore::new(&config).unwrap();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    let (x, y) = terraces_cell(58.0, 21.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 180.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 2);
+    core.take_events();
+
+    let mut jump_shake = 0.0_f64;
+    let mut climbed = false;
+    let mut peak = 0.0_f32;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        for event in events(&mut core) {
+            if let CoreEvent::Shake { intensity, .. } = event {
+                jump_shake = jump_shake.max(intensity);
+            }
+        }
+
+        if level_of(&core, 1) == 2 {
+            climbed = true;
+        }
+
+        if !climbed {
+            continue;
+        }
+
+        peak = peak.max(tank_z(&core, 1));
+
+        // дуга кончилась: высота вернулась ровно на целый уровень
+        if peak > 2.0 && (tank_z(&core, 1) - 2.0).abs() < 1e-3 {
+            break;
+        }
+    }
+
+    assert!(jump_shake > 0.0, "прыжок обязан тряхнуть камеру");
+
+    let fall_shake = shakes_after_a_fall(&config)[0].1;
+
+    assert!(
+        jump_shake < fall_shake,
+        "прыжок с рампы ({jump_shake}) обязан быть тише падения с уровня ({fall_shake})"
+    );
 }
 
 #[test]
@@ -2203,3 +2361,91 @@ fn wide_ramp_is_climbed_across_lanes() {
     );
 }
 
+#[test]
+fn a_ramp_jump_costs_no_health() {
+    // прыжок с рампы возвращает танк на ту же плиту: дуга ниже мёртвой
+    // зоны `fallDamageFreeHeight`, и платить за неё танк не обязан
+    let mut core = make_core();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    let (x, y) = terraces_cell(58.0, 21.0);
+
+    core.spawn_actor(1, "m1", 1, x, y, 180.0).unwrap();
+    steps(&mut core, 2);
+    core.take_events();
+
+    core.apply_input(1, 1, "down", "forward");
+
+    let mut climbed = false;
+    let mut landed = false;
+
+    for _ in 0..900 {
+        core.step(DT);
+
+        if level_of(&core, 1) == 2 {
+            climbed = true;
+        }
+
+        if climbed && (tank_z(&core, 1) - 2.0).abs() < 1e-3 && level_of(&core, 1) == 2 {
+            landed = true;
+        }
+
+        if landed {
+            break;
+        }
+    }
+
+    assert!(climbed, "танк не поднялся на уровень 2 одним прогоном");
+    assert!(landed, "прыжок обязан закончиться приземлением");
+
+    let health = events(&mut core)
+        .iter()
+        .filter_map(|event| match event {
+            CoreEvent::PanelSet { id: 1, field, value } if field == "health" => Some(*value),
+            _ => None,
+        })
+        .last();
+
+    assert_eq!(health, None, "подскок с рампы не обязан стоить HP");
+}
+
+#[test]
+fn a_one_level_fall_still_costs_the_old_price() {
+    // цена падения ровно с одного уровня — `fallDamage · (1 − freeHeight)`.
+    // Тест сторожит пару: поправить `fallDamage`, забыв про мёртвую зону,
+    // значит молча удвоить цену обрыва
+    const FALL_DAMAGE: f64 = 30.0;
+    const FREE_HEIGHT: f64 = 0.5;
+
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, GROUND.0, GROUND.1, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.take_events();
+
+    // над землёй плиты нет: уровень 1 в этой точке — обрыв
+    core.set_actor_level(1, 1);
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+
+    // fallTime = 0.35 c = 42 шага
+    steps(&mut core, 50);
+
+    let health = events(&mut core)
+        .iter()
+        .filter_map(|event| match event {
+            CoreEvent::PanelSet { id: 1, field, value } if field == "health" => Some(*value),
+            _ => None,
+        })
+        .last();
+
+    assert_eq!(
+        health,
+        Some(100.0 - FALL_DAMAGE * (1.0 - FREE_HEIGHT)),
+        "падение с одного уровня стоит fallDamage · (1 − freeHeight)"
+    );
+    assert_eq!(level_of(&core, 1), 0, "танк оказался на земле");
+}

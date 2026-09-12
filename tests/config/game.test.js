@@ -37,6 +37,26 @@ describe('gameConfig.coreParams.levels (2.5D)', () => {
     expect(levels.fallDamage).toBeGreaterThanOrEqual(0);
   });
 
+  it('штатный прыжок не долетает до jumpClearance', () => {
+    // инвариант настройки, а не комментария: максимальная дуга
+    // `maxLaunchVz² / (2g)` при `g = 2 / fallTime²` обязана быть ниже
+    // порога, на котором танк перестаёт видеть стены, — иначе прыжок с
+    // рампы перелетает заборы и периметр карты
+    const g = 2 / (levels.fallTime * levels.fallTime);
+    const peak = (levels.maxLaunchVz * levels.maxLaunchVz) / (2 * g);
+
+    expect(levels.maxLaunchVz).toBeGreaterThan(0);
+    expect(peak).toBeLessThan(levels.jumpClearance);
+  });
+
+  it('мёртвая зона урона падения покрывает максимальную дугу прыжка', () => {
+    // подскок с рампы возвращает танк на ту же плиту и стоить HP не обязан
+    const g = 2 / (levels.fallTime * levels.fallTime);
+    const peak = (levels.maxLaunchVz * levels.maxLaunchVz) / (2 * g);
+
+    expect(peak).toBeLessThanOrEqual(levels.fallDamageFreeHeight);
+  });
+
   it('не перекрывает известные движку ключи игровой половины', () => {
     const reserved = ['friendlyFire', 'models', 'weapons', 'playerKeys', 'panel'];
 

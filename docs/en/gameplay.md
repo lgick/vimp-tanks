@@ -141,10 +141,11 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   climbing at an angle is easier than head-on. The numbers are
   `climbGravity` and `climbMaxSpeedFactor` in
   [configuration.md](configuration.md#gamejs).
-- **A climb is visible.** The tank rises out of the wedge: the shadow stays
-  on the layer under it, the hull moves away from the shadow and grows with
-  height by the same projection as the slab, and the wedge itself is drawn
-  as a solid embankment with sides and a top end face. The hull TILTS with
+- **A climb is visible.** The tank rises out of the wedge: the hull shifts
+  and grows with height by the same projection as the slab under it, and the
+  wedge itself is drawn as a solid embankment with sides and a top end face.
+  There is no shadow on a climb: the shadow marks a tank that has LEFT its
+  support, and it appears only in a jump or a fall. The hull TILTS with
   it: nose up on a climb, nose down on a descent, rolled onto one side
   across the slope, and in flight the nose follows the vertical speed. The
   angles (`pitch`/`roll`) are computed by the host from the grade under the
@@ -160,8 +161,8 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   climb lasts a third of a second. There is no
   level number above the tank — the level reads from another tank's ring in
   its level colour, the layer tinting on the radar, the dimming of levels
-  below the player, the transparency of the slab above them, the shadow on
-  the layer under the tank and the height parallax.
+  below the player, the transparency of the slab above them and the height
+  parallax; the shadow joins them only in flight.
 - **Ramps are entered at their ends, from any direction.** A run lifts (or
   lowers) only the tank that drove into an END CELL matching its own level:
   the foot cell takes tanks of the lower level, the top cell tanks of the
@@ -195,15 +196,21 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   on the ground. The fall is BALLISTIC: the height is integrated
   (`vz -= g·dt`) instead of being played back linearly. Gravity is derived
   from `fallTime`, so a one-level drop still takes the same 0.35 s — but a
-  two-level one is faster than twice that. Damage is unchanged (15 health
-  per level, capped by `maxFallDamage`, 100, per landing), yet the height is
-  measured from the ARC'S PEAK rather than from the take-off level: a tank
-  thrown upwards by a jump pays for the climb too. Only driving is dead
+  two-level one is faster than twice that. Damage is charged for the
+  levels ABOVE the dead zone only — `fallDamage` (30) per level beyond
+  `fallDamageFreeHeight` (0.5), capped by `maxFallDamage` (100) per
+  landing — so a ramp jump, whose whole arc is lower than the dead zone,
+  is free, while a drop off a ledge costs the usual 15 health per level.
+  The height is measured from the ARC'S PEAK rather than from the take-off
+  level: a tank thrown upwards by a jump pays for the climb too. Only driving is dead
   while airborne — **the turret turns and the gun fires**. As long as the
   tank is `jumpClearance` above the level it left, it does not even see
   walls and flies over obstacles; below that the walls of every level are
   back, so a fall alongside a building ends in front of it instead of
-  inside it. Tanks, crates, rays and blasts never reach a tank in the air.
+  inside it. With the shipped settings that clearance is unreachable: the
+  arc is capped at 0.375 of a level by `maxLaunchVz` and `jumpClearance` is
+  0.45, so flying over walls remains a core mechanic that no regular jump
+  triggers — the railings hold, and so does the map's perimeter. Tanks, crates, rays and blasts never reach a tank in the air.
   A fatal landing counts as a suicide — the stats record a loss and nobody
   gets a frag. A hard touchdown SHAKES THE CAMERA of the tank that landed
   (the `levels.landingShake` rule; the shake is authoritative and comes from
@@ -215,9 +222,11 @@ A map may carry up to eight levels: the ground (0) and overhead floors
 - **Off the ramp.** Leaving a run's top end at speed throws the tank into
   the air: the vertical speed at the exit is the grade times the speed along
   it (`rampLaunchFactor`), and the jump only starts if that exceeds
-  `minLaunchVz`. A gentle ramp therefore gives no jump at all, while a steep
-  one at full throttle does. Landing back on the tank's own level deals no
-  damage (the arc is low); the touchdown squashes the hull, kicks dust from
+  `minLaunchVz` and is capped at `maxLaunchVz`. A gentle ramp therefore
+  gives no jump at all, a steep one at full throttle does, and the steepest
+  run on the map jumps no higher than the cap allows — 0.375 of a level.
+  Landing back on the tank's own level deals no damage (the arc is lower
+  than `fallDamageFreeHeight`); the touchdown squashes the hull, kicks dust from
   the tracks and thuds. To see it: `VITE_MAP='terraces' npm run dev`, team
   `team1`, its first spawn point, hold `W`.
 - **Crates fall like tanks.** A dynamic map object follows the same level

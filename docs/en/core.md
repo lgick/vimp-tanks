@@ -263,7 +263,12 @@ layout (`TanksClient::render_overlay` builds it as the same 15-value
 shape). `keyId` — numeric ids from this game's snapshot schema
 (`src/config/snapshot.js`); client JS reads the records generically off
 the same schema (record width = 2 service fields + the key's `fields`
-count).
+count). A field's `interp` mode lives in that schema alone — no copy of it
+exists on either Rust side — but the engine's interpolator reads it BY
+INDEX, and game behaviour can depend on it: `vz` is declared
+`interp: 'discrete'` precisely so that the client's touchdown detector
+(`src/client/landing.js`) still sees an exact zero on another player's
+tank.
 
 **motion.rs** — shared mass-free tick formulas for motion (turret,
 throttle, lateral grip, thrust/braking, engine load, turning): the
@@ -590,12 +595,18 @@ the authoritative one.
   the rules and `collision_mask` cannot see them, so `step_layered` computes
   the flag and the mask only reads it). A slab ABOVE the take-off level is
   caught by a branch of its own, by CROSSING a whole level downwards —
-  otherwise a tank that fell short of the slab would teleport onto it. On
+  otherwise a tank that fell short of the slab would teleport onto it. The whole flight — integrating
+  the arc, picking the touchdown cell and landing — lives in
+  `level::step_airborne`, a function of its own: `step_layered` would
+  otherwise hold three independent rules in a row (flight, the ramp run and
+  leaving a slab). On
   landing the tank is on the level of the touchdown cell and takes
-  `fallDamage` per level of height, capped by `maxFallDamage`; the height is
+  `fallDamage` per level of height ABOVE `fallDamageFreeHeight` —
+  `fallDamage · max(0, height − fallDamageFreeHeight)`, capped by
+  `maxFallDamage`; the height is
   measured from the arc's PEAK rather than from the take-off level, so a
   tank thrown up by a jump pays for the climb too, while a hop onto its own
-  slab is almost free. A lethal landing emits
+  slab, whose arc never leaves the dead zone, is free. A lethal landing emits
   `Death { victim, killer: victim }` — a suicide, so the engine's round
   meta awards no frag.
 - **Ramp jumps.** A body that was legally climbing a run does not lose its
@@ -604,7 +615,12 @@ the authoritative one.
   height converts them into levels per second) times `rampLaunchFactor`
   becomes the initial `vz`. The flight only starts if that exceeds
   `minLaunchVz` — otherwise rolling down a gentle ramp at walking pace would
-  produce a micro-jump on every cell. The check runs BEFORE the ledge test:
+  produce a micro-jump on every cell — and the take-off speed is capped by
+  `maxLaunchVz` (`0` — no cap): without a ceiling `vz` depends on the grade
+  and the speed alone, and a steep run throws the tank above any geometry
+  the map has (measured on `terraces`: 9.2 levels/s, an arc of 2.6 levels).
+  The ceiling is what keeps `clear_walls` unreachable — the arc it allows,
+  `maxLaunchVz² / (2·g)`, stays below `jumpClearance`. The check runs BEFORE the ledge test:
   a tank leaving a ramp over the void would otherwise start falling with
   `vz = 0` and lose the jump. The target of such a flight is the tank's own
   slab (when there is one under it), and the arc starts exactly at the

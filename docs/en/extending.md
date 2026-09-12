@@ -143,6 +143,23 @@ npm run sim:scenarios         # overpass and terraces scenarios
 npm run dev                   # by eye: set room.map in src/standalone.js
 ```
 
+**Jumping, for map authors.** Leaving a ramp's top end at speed throws the
+tank into the air, and two `coreParams.levels` numbers decide how far:
+
+- The arc is `maxLaunchVz² / (2·g)`, where `g = 2 / fallTime²` — 0.375 of a
+  level with the shipped settings.
+- While that arc stays BELOW `jumpClearance`, the flying tank keeps the
+  `STATIC_LEVEL_GROUP` mask and still sees every wall — the railings, the
+  buildings and the map's perimeter. Keep the invariant
+  `maxLaunchVz² / (2·(2 / fallTime²)) < jumpClearance` and no regular jump
+  can leave your map. A map that WANTS a tank to fly over walls raises
+  `rampLaunchFactor`/`maxLaunchVz` or lowers `jumpClearance` for itself.
+- The landing pad has to be wide enough: the jump's horizontal reach is
+  roughly `speed × 2·vz/g` — about six tiles at `maxForwardSpeed`. That is
+  exactly why the `overpass` bridge carries FIVE tiles of slab rather than
+  three: on a three-tile deck every jump off the ramp ended against the far
+  railing.
+
 The core validates the same structure at load time and refuses a broken
 map, so a mistake is loud rather than silent — see
 [configuration.md](configuration.md#the-25d-fields-levels-ramps). The rules

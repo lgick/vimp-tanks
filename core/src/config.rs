@@ -184,6 +184,18 @@ pub struct LevelRules {
     /// микропрыжки на каждой клетке.
     #[serde(default = "default_min_launch_vz")]
     pub min_launch_vz: f32,
+    /// Потолок вертикальной скорости вылета (уровней/с). Без него дуга
+    /// зависит только от уклона и скорости: крутой прогон `terraces`
+    /// давал 9.2 уровней/с — подскок на 2.6 уровня, перелёт периметра
+    /// карты и 39 HP урона за прыжок. 0 — потолка нет (прежнее
+    /// поведение).
+    #[serde(default = "default_max_launch_vz")]
+    pub max_launch_vz: f32,
+    /// Мёртвая зона урона падения (в уровнях): высота дуги, которая
+    /// ничего не стоит. Прыжок с рампы возвращает танк на ту же плиту и
+    /// не обязан стоить HP, а обрыв обязан.
+    #[serde(default = "default_fall_damage_free_height")]
+    pub fall_damage_free_height: f32,
     /// Насколько выше уровня взлёта (в уровнях) танк перестаёт видеть
     /// стены — то есть перепрыгивает препятствия.
     #[serde(default = "default_jump_clearance")]
@@ -225,6 +237,8 @@ impl Default for LevelRules {
             max_side_entry_rise: default_max_side_entry_rise(),
             ramp_launch_factor: default_ramp_launch_factor(),
             min_launch_vz: default_min_launch_vz(),
+            max_launch_vz: default_max_launch_vz(),
+            fall_damage_free_height: default_fall_damage_free_height(),
             jump_clearance: default_jump_clearance(),
             tilt_gain: default_tilt_gain(),
             tilt_air_gain: default_tilt_air_gain(),
@@ -257,6 +271,18 @@ fn default_ramp_launch_factor() -> f32 {
 
 fn default_min_launch_vz() -> f32 {
     0.35
+}
+
+// потолок дуги: 3.5 уровней/с при g = 16.33 дают подскок 0.375 уровня —
+// заметный на глаз прыжок, который не перелетает перила и не долетает до
+// `jump_clearance`
+fn default_max_launch_vz() -> f32 {
+    3.5
+}
+
+// дуга ниже половины уровня урона не стоит: это подскок, а не падение
+fn default_fall_damage_free_height() -> f32 {
+    0.5
 }
 
 fn default_jump_clearance() -> f32 {
@@ -359,6 +385,20 @@ impl TanksConfig {
             ));
         }
 
+        if self.levels.max_launch_vz < 0.0 {
+            return Err(format!(
+                "levels.maxLaunchVz must be >= 0, got {}",
+                self.levels.max_launch_vz
+            ));
+        }
+
+        if self.levels.fall_damage_free_height < 0.0 {
+            return Err(format!(
+                "levels.fallDamageFreeHeight must be >= 0, got {}",
+                self.levels.fall_damage_free_height
+            ));
+        }
+
         if self.levels.jump_clearance < 0.0 {
             return Err(format!(
                 "levels.jumpClearance must be >= 0, got {}",
@@ -392,6 +432,38 @@ impl TanksConfig {
                 "levels.tiltMax must be in [0, 1.5], got {}",
                 self.levels.tilt_max
             ));
+        }
+
+        if let Some(shake) = &self.levels.landing_shake {
+            if shake.intensity < 0.0 {
+                return Err(format!(
+                    "levels.landingShake.intensity must be >= 0, got {}",
+                    shake.intensity
+                ));
+            }
+
+            if shake.duration <= 0.0 {
+                return Err(format!(
+                    "levels.landingShake.duration must be > 0, got {}",
+                    shake.duration
+                ));
+            }
+
+            if shake.min_impact < 0.0 {
+                return Err(format!(
+                    "levels.landingShake.minImpact must be >= 0, got {}",
+                    shake.min_impact
+                ));
+            }
+
+            // равенство порогов — не «тряски нет», а опечатка: выключается
+            // тряска отсутствием блока целиком
+            if shake.full_impact <= shake.min_impact {
+                return Err(format!(
+                    "levels.landingShake.fullImpact ({}) must be > minImpact ({})",
+                    shake.full_impact, shake.min_impact
+                ));
+            }
         }
 
         Ok(())
@@ -529,6 +601,24 @@ mod validate_tests {
     }
 
     #[test]
+    fn validate_rejects_negative_max_launch_vz() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.max_launch_vz = -1.0;
+
+        assert!(cfg.validate().unwrap_err().contains("maxLaunchVz"));
+    }
+
+    #[test]
+    fn validate_rejects_negative_fall_damage_free_height() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.fall_damage_free_height = -1.0;
+
+        assert!(cfg.validate().unwrap_err().contains("fallDamageFreeHeight"));
+    }
+
+    #[test]
     fn validate_rejects_cap_below_fall_damage() {
         let mut cfg = config_with_panel_keys(&["health"]);
 
@@ -554,6 +644,83 @@ mod validate_tests {
         cfg.levels.climb_max_speed_factor = 1.0;
 
         assert!(cfg.validate().unwrap_err().contains("climbMaxSpeedFactor"));
+    }
+
+    fn shake() -> LandingShake {
+        LandingShake {
+            intensity: 1.0,
+            duration: 120.0,
+            min_impact: 2.0,
+            full_impact: 6.0,
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_config_without_landing_shake() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.landing_shake = None;
+
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_negative_shake_intensity() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.landing_shake = Some(LandingShake {
+            intensity: -1.0,
+            ..shake()
+        });
+
+        let err = cfg.validate().unwrap_err();
+
+        assert!(err.contains("landingShake.intensity"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_shake_duration() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.landing_shake = Some(LandingShake {
+            duration: 0.0,
+            ..shake()
+        });
+
+        let err = cfg.validate().unwrap_err();
+
+        assert!(err.contains("landingShake.duration"));
+    }
+
+    #[test]
+    fn validate_rejects_negative_shake_min_impact() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.landing_shake = Some(LandingShake {
+            min_impact: -0.5,
+            ..shake()
+        });
+
+        let err = cfg.validate().unwrap_err();
+
+        assert!(err.contains("landingShake.minImpact"));
+    }
+
+    // равные пороги — опечатка, а не «мягкая тряска»: `push_landing_shake`
+    // на них молча выходит, и приземление перестаёт трясти камеру
+    #[test]
+    fn validate_rejects_shake_full_impact_equal_to_min() {
+        let mut cfg = config_with_panel_keys(&["health"]);
+
+        cfg.levels.landing_shake = Some(LandingShake {
+            min_impact: 6.0,
+            full_impact: 6.0,
+            ..shake()
+        });
+
+        let err = cfg.validate().unwrap_err();
+
+        assert!(err.contains("landingShake.fullImpact"));
     }
 
     #[test]

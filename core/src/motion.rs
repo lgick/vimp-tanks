@@ -244,6 +244,8 @@ mod tests {
             max_side_entry_rise: 0.5,
             ramp_launch_factor: 1.0,
             min_launch_vz: 0.35,
+            max_launch_vz: 0.0,
+            fall_damage_free_height: 0.5,
             jump_clearance: 0.2,
             tilt_gain: 2.0,
             tilt_air_gain: 0.12,

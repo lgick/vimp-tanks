@@ -177,6 +177,12 @@ The consequences the parts implement themselves:
   before the tank used the previous frame's centre. Raw world points would
   drift the entity's fade circle away from the drawn hole the further the
   player is from the screen centre and the higher the entity sits.
+- **Touchdown is detected in one place.** `src/client/landing.js` holds the
+  single detector — the frame where `vz` goes from non-zero to exactly zero
+  — and both `Tank` (the hull squash and the thud) and `Dust` (the puff from
+  under the tracks) read it from there. The two used to carry a verbatim
+  copy each, and `vz` is `interp: 'discrete'` in the snapshot schema exactly
+  so the detector sees that zero on other players' tanks as well.
 - **Boxes ride their level.** The dynamic row (`c1`/`c2`) carries `level`,
   so `Map`'s dynamic branch re-sorts by `levelZ` and recomputes its alpha
   every frame: a box that falls off the bridge is visibly falling off it.
@@ -193,9 +199,16 @@ The consequences the parts implement themselves:
   gets a ring in its level's colour.
 - **Height reads as a shadow.** `Tank` keeps a shadow sprite as a **sibling
   on the stage** (its `zIndex` is that of the level the tank hangs over, and
-  the stage is flat) drawn at the tank's **unshifted world point**, while
-  the hull itself is moved by the 2.5D projection below — height is the gap
-  that opens between the two. The shadow is a **silhouette of the hull**
+  the stage is flat) drawn ON THE SUPPORT — at the tank's world point taken
+  through the same 2.5D projection as the slab underneath, `groundZ *
+  shear`, while the hull rides its own height `z`. The gap that opens
+  between them is the RISE above the support, and that is what reads as
+  height. The shadow exists ONLY in flight (the sign is a non-zero `vz` in
+  the frame): a parked or driving tank has no rise, and the shadow would lie
+  exactly under the hull and read as a grey halo around it. A shadow left in
+  the raw world point drifted away from the hull by
+  `z · shear · (distance to the screen centre)` and lived a life of its
+  own. The shadow is a **silhouette of the hull**
   (`src/client/bakers/tankShadowTexture.js`), not a circle: a blurred circle
   normalised by the model `size` stuck out from under the corners of a
   turning hull and read as a grey dot beside the tank. There is no level
@@ -221,9 +234,10 @@ The consequences the parts implement themselves:
   effects. One number for the layer and for the tank is not a coincidence: a
   tank standing on the level-1 slab has to move exactly with the slab or it
   slides off it.
-  The shadow is the one thing that stays in the world point — that is what
-  makes the height visible. Nothing recomputes vertices: a container carries
-  the whole shift in its own transform.
+  The shadow rides the same projection, but at the height of the SUPPORT
+  rather than the tank's own: that is what makes the rise visible. Nothing
+  recomputes vertices: a container carries the whole shift in its own
+  transform.
 - **Volumes shift with the camera and occlude.** A render layer with a
   height (`volumes` in the map, `data.volume` in the part) is extruded by
   `Map` itself: `slices` sprites of the layer's own baked picture, each at a

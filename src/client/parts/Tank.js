@@ -3,7 +3,8 @@ import { lerp, clamp } from 'vimp-engine/lib/math.js';
 import { levelZ, renderLevel } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
 import { offsetPoint } from '../parallax.js';
-import { tiltCorners } from '../tilt.js';
+import { tiltCorners, tiltShade, scaleTint } from '../tilt.js';
+import { landingImpact } from '../landing.js';
 import {
   parallax as parallaxConfig,
   shadow as shadowConfig,
@@ -29,8 +30,10 @@ import {
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
 
-// потолок уровней карты (`MAX_LEVELS`, движковый крейт, src/map.rs): в
-// прыжке `_z` уходит выше уровня отрыва, и слой тени иначе улетел бы за
+// потолок уровней карты: движок нумерует их 0..7 (бит 8 занят
+// STATIC_LEVEL_GROUP, vimp-engine core/src/map.rs). Копия, потому что
+// парту WASM-констант не отдают; расходиться с движком ей нельзя.
+// В прыжке `_z` уходит выше уровня отрыва, и слой тени иначе улетел бы за
 // верхнюю плиту
 const LEVEL_MAX = 7;
 
@@ -157,6 +160,10 @@ export default class Tank extends Container {
     // 2.5D: непрерывная высота (рампа/падение) и дискретный уровень
     // ОТРИСОВКИ (о нём — в update)
     this._z = data[M1_Z] || 0;
+
+    // ФИЗИЧЕСКИЙ уровень из кадра (не `renderLevel`): в полёте он держит
+    // уровень отрыва, и по нему тень знает, над какой плитой висит танк
+    this._physLevel = data[M1_LEVEL] || 0;
 
     // вертикальная динамика: наклон корпуса считает ядро (`pitch`/`roll`),
     // `vz` нужен клиенту как детектор касания
@@ -309,6 +316,7 @@ export default class Tank extends Container {
     this._engineLoad = data[M1_ENGINE_LOAD] || 0;
 
     this._z = data[M1_Z] || 0;
+    this._physLevel = data[M1_LEVEL] || 0;
 
     // `|| 0` здесь по той же причине, что у engineLoad: короткий ряд без
     // хвоста иначе уводит углы квада в NaN
@@ -316,13 +324,14 @@ export default class Tank extends Container {
     this._pitch = data[M1_PITCH] || 0;
     this._roll = data[M1_ROLL] || 0;
 
-    // касание: снижение было заметным, а в этом кадре скорость обнулилась.
-    // Детектор один и для своего танка, и для чужого — отдельного поля
-    // «приземлился» в кадре не нужно
-    if (this._prevVz < -landingConfig.minImpact && this._vz === 0) {
-      this._landImpact = Math.min(1, -this._prevVz / landingConfig.fullImpact);
+    // касание: детектор один и для своего танка, и для чужого, и общий с
+    // `Dust.js` — отдельного поля «приземлился» в кадре не нужно
+    const impact = landingImpact(this._prevVz, this._vz);
+
+    if (impact > 0) {
+      this._landImpact = impact;
       this._landTimer = landingConfig.duration;
-      this._onLanded?.(this._landImpact);
+      this._onLanded?.(impact);
     }
 
     this._prevVz = this._vz;
@@ -392,8 +401,20 @@ export default class Tank extends Container {
         pitch: tiltConfig.enabled ? this._pitch : 0,
         roll: tiltConfig.enabled ? this._roll : 0,
         shear: parallaxConfig.shear,
+        lift: tiltConfig.lift,
       }),
     );
+  }
+
+  // Высота ПОВЕРХНОСТИ под танком в уровнях. На плите и на рампе это сама
+  // высота корпуса (танк лежит на опоре), в полёте — уровень отрыва: его
+  // ядро держит в `level` всю дугу (`core/src/level.rs`, `step_airborne`).
+  // По ней рисуется тень: разъезд корпуса с тенью обязан показывать
+  // подъём НАД ОПОРОЙ, а не высоту над нулём карты — иначе стоящий на
+  // верхнем ярусе танк уезжает от своей тени тем дальше, чем дальше он от
+  // центра экрана
+  _groundZ() {
+    return this._vz !== 0 ? this._physLevel : this._z;
   }
 
   // высота читается масштабом корпуса: танк на эстакаде крупнее наземного
@@ -434,6 +455,11 @@ export default class Tank extends Container {
       ? this._levelView.camera()
       : cameraCenter(this.parent, this._renderer);
 
+    // тинт УРОВНЯ — база светотени наклона: она множитель поверх него, и
+    // считать её от `this.tint` нельзя — без сервиса уровней тот не
+    // сбрасывается и корпус темнел бы кадр за кадром
+    let baseTint = 0xffffff;
+
     if (this._levelView) {
       this.alpha = this._levelView.alphaFor(
         this._level,
@@ -441,7 +467,8 @@ export default class Tank extends Container {
         this._worldY,
         this._z,
       );
-      this.tint = this._levelView.tintFor(this._level);
+      baseTint = this._levelView.tintFor(this._level);
+      this.tint = baseTint;
     }
 
     const view = offsetPoint(
@@ -452,6 +479,24 @@ export default class Tank extends Container {
     );
 
     this.position.set(view.x, view.y);
+
+    // светотень наклона поверх тинта уровня: множитель, а не замена —
+    // затемнение нижних ярусов обязано остаться
+    if (tiltConfig.enabled && tiltConfig.shading) {
+      const shade = clamp(
+        tiltShade({
+          angle: this.rotation,
+          pitch: this._pitch,
+          roll: this._roll,
+          lightDir: tiltConfig.lightDir,
+          shading: tiltConfig.shading,
+        }),
+        0.5,
+        1.5,
+      );
+
+      this.tint = scaleTint(baseTint, shade);
+    }
 
     // просадка идёт по ВРЕМЕНИ, а не по кадрам сети, поэтому живёт здесь.
     // `sin` даёт горб без кривых и библиотек: быстрый удар, мягкий возврат
@@ -468,11 +513,28 @@ export default class Tank extends Container {
 
     this._applyTilt();
 
-    this._updateShadow();
+    this._updateShadow(camera);
   }
 
-  _updateShadow() {
+  // Тень — признак ПОЛЁТА и ничего больше: она показывает, насколько танк
+  // оторвался от опоры. У стоящего и едущего танка отрыва нет, и тень там
+  // лежала бы ровно под корпусом, читаясь серым ореолом вокруг него, —
+  // поэтому вне полёта её нет вовсе. Признак полёта тот же, что у
+  // `_groundZ`: ненулевая вертикальная скорость в кадре
+  _updateShadow(camera) {
     if (!this._shadowAsset || !this.parent) {
+      return;
+    }
+
+    const visible = this._condition !== 0 && this._vz !== 0;
+
+    if (!visible) {
+      // спрайта может не быть вовсе: танк, который ни разу не взлетал, его
+      // и не заводит
+      if (this._shadow) {
+        this._shadow.visible = false;
+      }
+
       return;
     }
 
@@ -489,34 +551,41 @@ export default class Tank extends Container {
     }
 
     const shadow = this._shadow;
-    const visible = this._condition !== 0;
 
-    shadow.visible = visible;
+    shadow.visible = true;
 
-    if (!visible) {
-      return;
-    }
+    const groundZ = this._groundZ();
 
-    // тень остаётся в МИРОВОЙ точке: высоту показывает разъезд корпуса с
-    // ней, а сама она лежит на земле и никуда не уезжает
-    shadow.x = this._worldX;
-    shadow.y = this._worldY;
-    shadow.rotation = this.rotation;
-    shadow.scale.set(
-      this._shadowScale * (1 + this._z * shadowConfig.scaleGain),
+    // тень лежит НА ОПОРЕ и живёт в той же проекции, что корпус и плита
+    // под ним: разъезд с корпусом и есть высота отрыва. Падение с обрыва
+    // оставляет её на покинутой плите — опорой ядро держит уровень отрыва
+    const view = offsetPoint(
+      this._worldX,
+      this._worldY,
+      camera,
+      groundZ * parallaxConfig.shear,
     );
+
+    shadow.x = view.x;
+    shadow.y = view.y;
+    shadow.rotation = this.rotation;
+
+    // масштаб и прозрачность читают ПОДЪЁМ над опорой, а не высоту над
+    // нулём карты: тень на верхнем ярусе обязана быть такой же, как на
+    // земле, — разной её делает только высота прыжка
+    const lift = Math.max(0, this._z - groundZ);
+
+    shadow.scale.set(this._shadowScale * (1 + lift * shadowConfig.scaleGain));
     shadow.alpha =
-      Math.max(
-        0,
-        shadowConfig.baseAlpha - this._z * shadowConfig.alphaFalloff,
-      ) * this.alpha;
+      Math.max(0, shadowConfig.baseAlpha - lift * shadowConfig.alphaFalloff) *
+      this.alpha;
 
     // тень лежит на слое, НАД которым висит танк: на рампе это ещё нижний
     // уровень, и именно поэтому по ней видно, что танк уже поднялся
     // в прыжке `_z` уходит выше любой плиты карты, а слоёв всего LEVEL_MAX
     shadow.zIndex = levelZ(
       TANK_BASE_Z - 1,
-      Math.min(LEVEL_MAX, Math.floor(this._z)),
+      Math.min(LEVEL_MAX, Math.floor(groundZ)),
     );
   }
 

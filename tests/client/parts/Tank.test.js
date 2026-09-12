@@ -352,23 +352,25 @@ describe('Tank: признаки уровня и высоты', () => {
     return { tank, stage };
   };
 
-  // проекция 2.5D: смещается КОРПУС, тень остаётся в мировой точке. Раньше
-  // было наоборот, и тень выглядела выше танка
-  it('корпус уезжает от тени тем сильнее, чем выше танк', () => {
+  // проекция 2.5D: смещается КОРПУС — на подъём НАД ОПОРОЙ. Тень лежит на
+  // самой опоре, поэтому разъезд показывает высоту прыжка, а не высоту
+  // яруса над нулём карты
+  it('корпус уезжает от тени тем выше, чем выше прыжок', () => {
     const { tank } = onStage({ levelView: makeView() });
 
-    tank.update(row(0, 0, 100, 100));
+    // начало прыжка: тень ещё ровно под корпусом
+    tank.update(row(0, 0, 100, 100, { vz: -2 }));
     tank.onRender();
 
-    expect(tank.x).toBeCloseTo(100);
+    expect(tank.x).toBeCloseTo(100, 6);
     expect(tank._shadow.x).toBeCloseTo(100);
 
-    tank.update(row(0, 2, 100, 100));
+    tank.update(row(0, 2, 100, 100, { vz: -2 }));
     tank.onRender();
 
     const low = Math.abs(tank.x - tank._shadow.x);
 
-    tank.update(row(0, 4, 100, 100));
+    tank.update(row(0, 4, 100, 100, { vz: -2 }));
     tank.onRender();
 
     expect(Math.abs(tank.x - tank._shadow.x)).toBeGreaterThan(low);
@@ -442,6 +444,17 @@ describe('Tank: признаки уровня и высоты', () => {
     expect(quad(tank.body)[2].y - quad(tank.body)[0].y).toBeCloseTo(30, 6);
   });
 
+  it('продолжающийся полёт касанием не считается', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 1, 100, 100, { vz: -6 }));
+    tank.update(row(0, 0.5, 100, 100, { vz: -3 }));
+    tank.onRender();
+
+    expect(tank._landTimer).toBe(0);
+    expect(tank._squash).toBe(0);
+  });
+
   it('мягкое касание просадки не даёт', () => {
     const { tank } = onStage({ levelView: makeView() });
 
@@ -468,10 +481,10 @@ describe('Tank: признаки уровня и высоты', () => {
   // тень — силуэт корпуса: круглая тень нормировалась по `size` (2 единицы
   // при корпусе 8 × 6) и её мягкий ореол вылезал из-под углов вращающегося
   // корпуса серым кружком
-  it('тень при z = 0 не крупнее корпуса больше, чем на sizeFactor', () => {
+  it('в начале прыжка тень не крупнее корпуса больше, чем на sizeFactor', () => {
     const { tank } = onStage({ levelView: makeView() });
 
-    tank.update(row(0, 0, 100, 100));
+    tank.update(row(0, 0, 100, 100, { vz: -2 }));
     tank.onRender();
 
     const { contentSize } = viewAssets.tankShadowTexture;
@@ -485,26 +498,104 @@ describe('Tank: признаки уровня и высоты', () => {
     expect(tank._shadow.scale.y).toBeCloseTo(tank._shadow.scale.x, 6);
   });
 
-  it('с высотой тень растёт и бледнеет', () => {
+  it('с подъёмом над опорой тень растёт и бледнеет', () => {
     const { tank } = onStage({ levelView: makeView() });
 
-    tank.update(row(0, 0, 100, 100));
+    tank.update(row(0, 0, 100, 100, { vz: -2 }));
     tank.onRender();
 
     const groundScale = tank._shadow.scale.x;
     const groundAlpha = tank._shadow.alpha;
 
-    tank.update(row(1, 1, 100, 100));
+    tank.update(row(0, 1, 100, 100, { vz: -2 }));
     tank.onRender();
 
     expect(tank._shadow.scale.x).toBeGreaterThan(groundScale);
     expect(tank._shadow.alpha).toBeLessThan(groundAlpha);
   });
 
-  it('тень всегда стоит в мировой точке танка', () => {
+  // Тень — признак ПОЛЁТА: у стоящего и едущего танка её нет вовсе. Это
+  // и есть ответ на проблему 4 ручного тестирования (тень уезжала от
+  // танка и жила своей жизнью): нечему уезжать
+  it('у стоящего на верхнем ярусе танка тени нет', () => {
     const { tank } = onStage({ levelView: makeView() });
 
-    tank.update(row(0, 3, 100, 250));
+    // камера в (400, 300): танк далеко от её центра, и прежняя тень
+    // разъехалась бы с корпусом сильнее всего именно здесь
+    tank.update(row(2, 2, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow).toBe(null);
+  });
+
+  it('тень гаснет после приземления', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 1, 100, 100, { vz: -3 }));
+    tank.onRender();
+
+    expect(tank._shadow.visible).toBe(true);
+
+    tank.update(row(0, 0, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow.visible).toBe(false);
+  });
+
+  it('в полёте тень отстаёт от корпуса', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(2, 2.3, 100, 100, { vz: -2 }));
+    tank.onRender();
+
+    const low = Math.abs(tank._shadow.x - tank.x);
+
+    expect(low).toBeGreaterThan(0);
+
+    tank.update(row(2, 3, 100, 100, { vz: -2 }));
+    tank.onRender();
+
+    expect(Math.abs(tank._shadow.x - tank.x)).toBeGreaterThan(low);
+  });
+
+  // падение с обрыва: опорой остаётся покинутая плита (ядро держит её в
+  // `level` всю дугу), и тень обязана остаться на ней
+  it('падение с обрыва оставляет тень на покинутой плите', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(1, 0.4, 100, 100, { vz: -4 }));
+    tank.onRender();
+
+    // проекция уровня 1 от центра камеры (400, 300)
+    expect(tank._shadow.x).toBeCloseTo(100 + (100 - 400) * parallax.shear, 6);
+    expect(tank._shadow.y).toBeCloseTo(100 + (100 - 300) * parallax.shear, 6);
+    // корпус ниже опоры — он уехал к центру камеры сильнее тени
+    expect(tank.x).toBeGreaterThan(tank._shadow.x);
+  });
+
+  // масштаб и прозрачность раньше росли от высоты над нулём карты — это
+  // была компенсация ошибки проекции: прыжок на верхнем ярусе обязан
+  // выглядеть так же, как такой же прыжок на земле
+  it('масштаб и прозрачность тени считают подъём над опорой', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0.5, 100, 100, { vz: -2 }));
+    tank.onRender();
+
+    const groundScale = tank._shadow.scale.x;
+    const groundAlpha = tank._shadow.alpha;
+
+    tank.update(row(2, 2.5, 100, 100, { vz: -2 }));
+    tank.onRender();
+
+    expect(tank._shadow.scale.x).toBeCloseTo(groundScale, 6);
+    expect(tank._shadow.alpha).toBeCloseTo(groundAlpha, 6);
+  });
+
+  it('тень летящего танка стоит в мировой точке покинутой земли', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 3, 100, 250, { vz: -2 }));
     tank.onRender();
 
     expect(tank._shadow.x).toBeCloseTo(100);
@@ -518,12 +609,12 @@ describe('Tank: признаки уровня и высоты', () => {
     const { tank } = onStage({ levelView: makeView() });
 
     // центр камеры — (400, 300): в нём сдвига нет вовсе
-    tank.update(row(0, 3, 400, 300));
+    tank.update(row(0, 3, 400, 300, { vz: -2 }));
     tank.onRender();
 
     expect(Math.abs(tank.x - tank._shadow.x)).toBeCloseTo(0);
 
-    tank.update(row(0, 3, 100, 300));
+    tank.update(row(0, 3, 100, 300, { vz: -2 }));
     tank.onRender();
 
     expect(Math.abs(tank.x - tank._shadow.x)).toBeGreaterThan(0);
@@ -581,17 +672,20 @@ describe('Tank: признаки уровня и высоты', () => {
     expect(attachStage).toHaveBeenCalled();
   });
 
-  // тень лежит на слое, НАД которым висит танк: по ней и видно, что танк
-  // поднялся по рампе, а не едет по земле
-  it('тень остаётся на уровне под танком', () => {
+  // тень лежит на слое ОПОРЫ — той плиты, с которой танк оторвался: ядро
+  // держит её в `level` всю дугу, поэтому и падение с эстакады рисует тень
+  // на эстакаде, а не на земле под ней
+  it('тень остаётся на уровне опоры, а не под корпусом', () => {
     const { tank } = onStage({ levelView: makeView() });
 
-    tank.update(row(1, 0.5, 100, 100));
+    // прыжок с земли
+    tank.update(row(0, 0.5, 100, 100, { vz: 2 }));
     tank.onRender();
 
     expect(tank._shadow.zIndex).toBe(2);
 
-    tank.update(row(1, 1.2, 100, 100));
+    // падение с эстакады: корпус уже ниже её плиты, тень осталась на ней
+    tank.update(row(1, 0.8, 100, 100, { vz: -2 }));
     tank.onRender();
 
     expect(tank._shadow.zIndex).toBe(102);
@@ -600,6 +694,7 @@ describe('Tank: признаки уровня и высоты', () => {
   it('тень уходит вместе с танком: движок про неё не знает', () => {
     const { tank, stage } = onStage({ levelView: makeView() });
 
+    tank.update(row(0, 1, 100, 100, { vz: -3 }));
     tank.onRender();
 
     expect(stage.children).toHaveLength(2);
@@ -607,6 +702,31 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.destroy();
 
     expect(stage.children).toHaveLength(0);
+  });
+
+  // светотень наклона — множитель ПОВЕРХ тинта уровня, а не его замена.
+  // Тинт уровня здесь белый, поэтому подсветка упирается в потолок канала,
+  // а видно только затемнение уходящей от света половины
+  it('наклон затемняет корпус, ровная земля — нет', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100));
+    tank.onRender();
+
+    expect(tank.tint).toBe(0xffffff);
+
+    tank.update(row(0, 0, 100, 100, { pitch: -0.5 }));
+    tank.onRender();
+
+    const dark = tank.tint;
+
+    expect(dark).toBeLessThan(0xffffff);
+
+    // наклон навстречу свету не темнее ровной земли
+    tank.update(row(0, 0, 100, 100, { pitch: 0.5 }));
+    tank.onRender();
+
+    expect(tank.tint).toBeGreaterThan(dark);
   });
 });
 

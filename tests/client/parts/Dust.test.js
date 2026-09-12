@@ -118,6 +118,14 @@ describe('Dust: приземление', () => {
     expect(dust._particles.length).toBeGreaterThan(0);
   });
 
+  it('продолжающийся полёт всплеска не даёт', () => {
+    const dust = makeDust({}, row({ vz: -6 }));
+
+    dust.update(row({ vz: -3 }));
+
+    expect(dust._particles.length).toBe(0);
+  });
+
   it('мягкое касание всплеска не даёт', () => {
     const dust = makeDust({}, row({ vz: -landing.minImpact / 2 }));
 

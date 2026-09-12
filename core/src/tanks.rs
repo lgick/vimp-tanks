@@ -896,7 +896,7 @@ impl TanksSim {
 
         for (id, height, impact) in landed {
             self.push_landing_shake(ctx, id, impact);
-            self.apply_fall_damage(ctx, id, height, impact);
+            self.apply_fall_damage(ctx, id, height);
         }
     }
 
@@ -912,6 +912,9 @@ impl TanksSim {
 
         let span = shake.full_impact - shake.min_impact;
 
+        // страховка на случай конфига, не прошедшего `validate()`
+        // (реплика строится из сетевых данных): деления на ноль быть не
+        // должно ни при каких входных данных
         if span <= 0.0 {
             return;
         }
@@ -934,12 +937,15 @@ impl TanksSim {
     /// Урон при приземлении после падения с моста. Стрелка нет — урон
     /// приходит от самой карты, поэтому дружественный огонь и тряска
     /// оружия не при чём, а смерть засчитывается как самоубийство.
-    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32, height: f32, _impact: f32) {
-        // урон пропорционален высоте падения от вершины дуги и зажат
-        // потолком: падение с уровня 1 стоит ровно `fallDamage`, как в
-        // первой итерации
-        let damage = (self.level_rules.fall_damage * height as f64)
-            .min(self.level_rules.max_fall_damage);
+    fn apply_fall_damage(&mut self, ctx: &mut SimCtx, game_id: u32, height: f32) {
+        // урон считает не вся дуга, а её часть выше мёртвой зоны: прыжок
+        // с рампы возвращает танк на ту же плиту и стоить HP не обязан,
+        // а обрыв обязан. `fallDamage` — цена за уровень СВЕРХ зоны,
+        // поэтому падение ровно с одного уровня стоит
+        // `fallDamage · (1 − freeHeight)`
+        let paid = (height - self.level_rules.fall_damage_free_height).max(0.0);
+        let damage =
+            (self.level_rules.fall_damage * paid as f64).min(self.level_rules.max_fall_damage);
 
         if damage <= 0.0 {
             return;

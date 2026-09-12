@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tiltCorners } from '../../src/client/tilt.js';
+import { tiltCorners, tiltShade, scaleTint } from '../../src/client/tilt.js';
 import { parallax, tilt } from '../../src/config/render.js';
 
 // Чистая математика наклона корпуса: PixiJS здесь не нужен — функция
@@ -15,6 +15,7 @@ const base = {
   pitch: 0,
   roll: 0,
   shear: parallax.shear,
+  lift: tilt.lift,
 };
 
 const corners = overrides => {
@@ -108,6 +109,23 @@ describe('tiltCorners', () => {
     expect(down[3].y).toBeLessThan(corners()[3].y);
   });
 
+  // подъём — отдельное слагаемое, а не часть проекции: без него наклон
+  // остаётся чистым сжатием квада
+  it('lift = 0 оставляет наклон чистым сжатием', () => {
+    const [lt, rt, rb, lb] = corners({ pitch: 0.3, lift: 0 });
+
+    // края разъехались по ширине (проекция высоты осталась)
+    expect(rt.x - lt.x).toBeGreaterThan(rb.x - lb.x);
+
+    // а по вертикали квад только сжался: верх опустился, низ поднялся
+    expect(lt.y).toBeGreaterThan(-15);
+    expect(rb.y).toBeLessThan(15);
+    expect(lt.y).toBeCloseTo(
+      -15 * Math.cos(0.3) * (1 + ((15 * Math.sin(0.3)) / 30) * parallax.shear),
+      6,
+    );
+  });
+
   it('нулевая высота спрайта не даёт NaN', () => {
     const flat = tiltCorners({ ...base, height: 0, pitch: 0.3, roll: 0.2 });
 
@@ -123,5 +141,61 @@ describe('tiltCorners', () => {
       -15 * Math.cos(0.3) * (1 + k) - raised * tilt.lift,
       6,
     );
+  });
+});
+
+// Светотень наклона: скалярный множитель яркости по проекции нормали
+// корпуса на направление света в экранных осях.
+describe('tiltShade', () => {
+  const shade = overrides =>
+    tiltShade({
+      angle: 0,
+      pitch: 0,
+      roll: 0,
+      lightDir: [-1, 0],
+      shading: 0.28,
+      ...overrides,
+    });
+
+  it('ровный танк не подсвечен', () => {
+    expect(shade()).toBe(1);
+  });
+
+  it('shading = 0 выключает светотень при любом наклоне', () => {
+    expect(shade({ pitch: 0.6, roll: -0.4, shading: 0 })).toBe(1);
+  });
+
+  it('наклон навстречу свету и от света симметричны', () => {
+    const toward = shade({ pitch: 0.4 });
+    const away = shade({ pitch: -0.4 });
+
+    expect(toward).toBeGreaterThan(1);
+    expect(away).toBeLessThan(1);
+    expect(toward - 1).toBeCloseTo(1 - away, 12);
+  });
+
+  it('множитель зависит от курса', () => {
+    const north = shade({ pitch: 0.4, angle: 0 });
+    const south = shade({ pitch: 0.4, angle: Math.PI });
+
+    expect(north - 1).toBeCloseTo(1 - south, 12);
+  });
+});
+
+describe('scaleTint', () => {
+  it('половинит каналы', () => {
+    expect(scaleTint(0xffffff, 0.5)).toBe(0x808080);
+  });
+
+  it('не выходит за 0xffffff', () => {
+    expect(scaleTint(0xffffff, 2)).toBe(0xffffff);
+  });
+
+  it('чёрный остаётся чёрным', () => {
+    expect(scaleTint(0x000000, 1.5)).toBe(0x000000);
+  });
+
+  it('каналы независимы', () => {
+    expect(scaleTint(0x804020, 2)).toBe(0xff8040);
   });
 });

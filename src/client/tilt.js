@@ -6,7 +6,6 @@
 // корпуса с последующей ортографической проекцией ТОЙ ЖЕ формулой высоты,
 // что и весь 2.5D (`src/client/parallax.js`): точка, поднявшаяся на высоту
 // `h`, отъезжает от центра на `h * shear`.
-import { tilt as tiltConfig } from '../config/render.js';
 
 /**
  * Углы квада спрайта, наклонённого по тангажу и крену.
@@ -20,6 +19,8 @@ import { tilt as tiltConfig } from '../config/render.js';
  * @param {number} p.pitch      продольный наклон, рад
  * @param {number} p.roll       поперечный наклон, рад
  * @param {number} p.shear      parallax.shear
+ * @param {number} p.lift       экранный подъём поднявшегося края, доля
+ *   его высоты
  * @returns {number[]} [x0,y0, x1,y1, x2,y2, x3,y3] — левый верх, правый
  *   верх, правый низ, левый низ: порядок, которого ждёт
  *   `PerspectiveMesh.setCorners`
@@ -33,6 +34,7 @@ export function tiltCorners({
   pitch,
   roll,
   shear,
+  lift,
 }) {
   const u0 = -anchorX * width;
   const u1 = (1 - anchorX) * width;
@@ -79,8 +81,60 @@ export function tiltCorners({
     // `lift` — насколько поднявшаяся часть корпуса уезжает вверх по
     // экрану: без него наклон читается только сжатием и выглядит как
     // «сплющивание»
-    out.push(up * (1 + k), vp * (1 + k) - h * tiltConfig.lift);
+    out.push(up * (1 + k), vp * (1 + k) - h * lift);
   }
 
   return out;
+}
+
+/**
+ * Множитель яркости корпуса по его наклону. Наклон поворачивает нормаль
+ * корпуса; её проекция на направление света и есть яркость. Функция
+ * чистая и не знает про PixiJS — числа приходят параметрами.
+ *
+ * @param {object} p
+ * @param {number} p.angle    курс корпуса, рад
+ * @param {number} p.pitch    продольный наклон, рад
+ * @param {number} p.roll     поперечный наклон, рад
+ * @param {number[]} p.lightDir  направление света в экранных осях
+ * @param {number} p.shading  глубина эффекта (0 — выключено)
+ * @returns {number} множитель яркости, около 1.0
+ */
+export function tiltShade({ angle, pitch, roll, lightDir, shading }) {
+  if (!shading) {
+    return 1;
+  }
+
+  // наклон корпуса = поворот его нормали. Малые углы: наклон вокруг
+  // локального X даёт составляющую вдоль курса, вокруг Y — поперёк
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  // нормаль в экранных осях (её вертикальная составляющая нам не нужна:
+  // свет задан в плоскости экрана)
+  const nx = -Math.sin(pitch) * cos - Math.sin(roll) * sin;
+  const ny = -Math.sin(pitch) * sin + Math.sin(roll) * cos;
+
+  const len = Math.hypot(lightDir[0], lightDir[1]) || 1;
+  const dot = (nx * lightDir[0] + ny * lightDir[1]) / len;
+
+  return 1 + dot * shading;
+}
+
+/**
+ * Умножает тинт `0xRRGGBB` на скаляр поканально. Нужен, чтобы светотень
+ * наклона легла ПОВЕРХ тинта уровня, а не заменила его.
+ *
+ * @param {number} tint   исходный цвет 0xRRGGBB
+ * @param {number} factor множитель яркости
+ * @returns {number} новый цвет 0xRRGGBB
+ */
+export function scaleTint(tint, factor) {
+  const channel = shift => {
+    const value = Math.round(((tint >> shift) & 0xff) * factor);
+
+    return Math.min(0xff, Math.max(0, value));
+  };
+
+  return (channel(16) << 16) | (channel(8) << 8) | channel(0);
 }

@@ -181,17 +181,6 @@ pub fn gravity(rules: &LevelRules) -> f32 {
     2.0 / (t * t)
 }
 
-/// Вертикальная скорость свободного падения с уровня `from` на высоте `z`
-/// — обратная к параболе полёта (h = g·t²/2, v = -√(2·g·h)). Нужна
-/// клиентской реплике: кадр везёт авторитетные `z`/`level`, но не фазу
-/// полёта, а восстанавливать её нулём нельзя — высота своего танка тогда
-/// зависела бы от длины реплея, а не от времени падения.
-pub fn fall_speed_at(z: f32, from: u8, rules: &LevelRules) -> f32 {
-    let drop = (from as f32 - z).max(0.0);
-
-    -(2.0 * gravity(rules) * drop).sqrt()
-}
-
 /// Опора корпуса: прямоугольник тела в мировых единицах. Срыв с обрыва
 /// судит ГАБАРИТ, а не точку центра — иначе танк, у которого за кромкой
 /// оказался только центр, а половина корпуса ещё лежит на плите, уже
@@ -329,6 +318,91 @@ pub fn step_level(
     event
 }
 
+// Шаг тела в полёте: интегрирование дуги, выбор клетки касания и
+// приземление. Отдельная функция, потому что `step_layered` иначе держит
+// три независимых правила подряд (полёт, прогон рампы, сход с плиты).
+// Возвращает событие; состояние правится на месте.
+#[allow(clippy::too_many_arguments)]
+fn step_airborne(
+    state: &mut LevelState,
+    x: f32,
+    y: f32,
+    vz: f32,
+    from: u8,
+    to: u8,
+    peak: f32,
+    levels: &MapLevels,
+    rules: &LevelRules,
+    dt: f32,
+) -> LevelEvent {
+    let prev_z = state.z;
+    // трапеция (скорость усредняется по шагу) — это ТОЧНАЯ выборка
+    // параболы в моменты `n·dt`, а не приближение: v² = v0² − 2g·Δz
+    // держится на каждом шаге. Реплика берёт `vz` из кадра и обязана
+    // попадать в те же моменты: с полушаговой схемой её падение
+    // кончалось тиком раньше хостового, и газ расходился на каждом
+    // падении
+    let next_vz = vz - gravity(rules) * dt;
+    let z = prev_z + (vz + next_vz) * 0.5 * dt;
+    let vz = next_vz;
+    let peak = peak.max(z);
+
+    state.slope_vec = [0.0, 0.0];
+    state.z = z;
+    state.clear_walls = z >= from as f32 + rules.jump_clearance;
+
+    // цель `to` выбрана в момент отрыва, а тело всё это время летело
+    // горизонтально: на длинном сносе плиты `to` под ним уже может не
+    // быть. Приземление судит КЛЕТКА КАСАНИЯ, сохранённое `to`
+    // остаётся только траекторией
+    let target = if levels.has_floor(to, x, y) {
+        to
+    } else {
+        levels.landing_level(to, x, y)
+    };
+
+    // ВВЕРХ дуги приземления быть не может: пока `vz > 0`, проверять
+    // касание бессмысленно и вредно — танк, прыгнувший со своей же
+    // плиты, коснулся бы её на первом же шаге
+    let landed = if vz > 0.0 {
+        None
+    } else {
+        // плита ВЫШЕ уровня отрыва: прыжок закинул танк на соседний
+        // ярус. Проверяется отдельно, потому что `to` считался вниз, и
+        // ловится по ПЕРЕСЕЧЕНИЮ целого уровня сверху вниз: иначе танк,
+        // не долетевший до плиты, телепортировался бы на неё
+        let crossed = z.floor() + 1.0;
+        let jumped = crossed > from as f32
+            && prev_z >= crossed
+            && crossed <= u8::MAX as f32
+            && levels.has_floor(crossed as u8, x, y);
+
+        if jumped {
+            Some(crossed as u8)
+        } else if z <= target as f32 {
+            Some(target)
+        } else {
+            None
+        }
+    };
+
+    if let Some(level) = landed {
+        state.level = level;
+        state.z = level as f32;
+        state.transit = Transit::Grounded;
+        state.clear_walls = false;
+
+        return LevelEvent::Landed {
+            height: (peak - level as f32).max(0.0),
+            impact: vz.abs(),
+        };
+    }
+
+    state.transit = Transit::Airborne { vz, from, to, peak };
+
+    LevelEvent::None
+}
+
 // шаг на многоуровневой карте; `prev_cell` обновляет вызывающий
 #[allow(clippy::too_many_arguments)]
 fn step_layered(
@@ -343,72 +417,7 @@ fn step_layered(
     dt: f32,
 ) -> LevelEvent {
     if let Transit::Airborne { vz, from, to, peak } = state.transit {
-        let prev_z = state.z;
-        // трапеция (скорость усредняется по шагу) — это ТОЧНАЯ выборка
-        // параболы в моменты `n·dt`, а не приближение: v² = v0² - 2g·Δz
-        // держится на каждом шаге. Без этого `fall_speed_at` (реплика
-        // восстанавливает скорость полёта по высоте кадра) промахивался бы
-        // на полшага, и падение у реплики кончалось тиком раньше — газ
-        // расходился с авторитетным на каждом падении
-        let next_vz = vz - gravity(rules) * dt;
-        let z = prev_z + (vz + next_vz) * 0.5 * dt;
-        let vz = next_vz;
-        let peak = peak.max(z);
-
-        state.slope_vec = [0.0, 0.0];
-        state.z = z;
-        state.clear_walls = z >= from as f32 + rules.jump_clearance;
-
-        // цель `to` выбрана в момент отрыва, а тело всё это время летело
-        // горизонтально: на длинном сносе плиты `to` под ним уже может не
-        // быть. Приземление судит КЛЕТКА КАСАНИЯ, сохранённое `to`
-        // остаётся только траекторией
-        let target = if levels.has_floor(to, x, y) {
-            to
-        } else {
-            levels.landing_level(to, x, y)
-        };
-
-        // ВВЕРХ дуги приземления быть не может: пока `vz > 0`, проверять
-        // касание бессмысленно и вредно — танк, прыгнувший со своей же
-        // плиты, коснулся бы её на первом же шаге
-        let landed = if vz > 0.0 {
-            None
-        } else {
-            // плита ВЫШЕ уровня отрыва: прыжок закинул танк на соседний
-            // ярус. Проверяется отдельно, потому что `to` считался вниз, и
-            // ловится по ПЕРЕСЕЧЕНИЮ целого уровня сверху вниз: иначе танк,
-            // не долетевший до плиты, телепортировался бы на неё
-            let crossed = z.floor() + 1.0;
-            let jumped = crossed > from as f32
-                && prev_z >= crossed
-                && crossed <= u8::MAX as f32
-                && levels.has_floor(crossed as u8, x, y);
-
-            if jumped {
-                Some(crossed as u8)
-            } else if z <= target as f32 {
-                Some(target)
-            } else {
-                None
-            }
-        };
-
-        if let Some(level) = landed {
-            state.level = level;
-            state.z = level as f32;
-            state.transit = Transit::Grounded;
-            state.clear_walls = false;
-
-            return LevelEvent::Landed {
-                height: (peak - level as f32).max(0.0),
-                impact: vz.abs(),
-            };
-        }
-
-        state.transit = Transit::Airborne { vz, from, to, peak };
-
-        return LevelEvent::None;
+        return step_airborne(state, x, y, vz, from, to, peak, levels, rules, dt);
     }
 
     if let Some(ramp) = levels.ramp_at(x, y) {
@@ -483,8 +492,18 @@ fn step_layered(
         // `slope_vec` безразмерен (`rise * levelHeight / span`), `vel` — в
         // мировых единицах в секунду: произведение — мировая вертикальная
         // скорость, и в уровни её переводит высота уровня
-        let vz = (prev_slope[0] * vel[0] + prev_slope[1] * vel[1]) / levels.level_height()
+        let raw_vz = (prev_slope[0] * vel[0] + prev_slope[1] * vel[1]) / levels.level_height()
             * rules.ramp_launch_factor;
+
+        // потолок дуги: без него `vz` зависит только от уклона и
+        // скорости, и крутой прогон закидывает танк выше любой геометрии
+        // карты (замер на `terraces`: 9.2 уровней/с, дуга 2.6 уровня).
+        // 0 — потолка нет
+        let vz = if rules.max_launch_vz > 0.0 {
+            raw_vz.min(rules.max_launch_vz)
+        } else {
+            raw_vz
+        };
 
         if vz >= rules.min_launch_vz {
             state.transit = Transit::Airborne {
@@ -641,7 +660,7 @@ fn entry_is_legal(
         // граница ИСКЛЮЧАЮЩАЯ: скачок ровно на `max_side_entry_rise`
         // (по умолчанию пол-уровня) уже незаконен — на прогоне длиной в
         // одну клетку он давал мгновенный щелчок корпуса и тени
-        if (state.z - state.level as f32).abs() > 1e-3
+        if (state.z - state.level as f32).abs() > LEVEL_EPSILON
             || (entry_z - state.z).abs() >= rules.max_side_entry_rise
         {
             return false;
@@ -940,6 +959,8 @@ mod tests {
             max_side_entry_rise: 0.5,
             ramp_launch_factor: 1.0,
             min_launch_vz: 0.35,
+            max_launch_vz: 0.0,
+            fall_damage_free_height: 0.5,
             jump_clearance: 0.2,
             tilt_gain: 2.0,
             tilt_air_gain: 0.12,
@@ -1587,22 +1608,6 @@ mod tests {
     }
 
     #[test]
-    fn fall_speed_is_the_inverse_of_the_flight_parabola() {
-        let rules = rules();
-        let g = gravity(&rules);
-
-        // на своём уровне тело ещё не разогналось
-        assert_eq!(fall_speed_at(1.0, 1, &rules), 0.0);
-        // высота вне диапазона (кадр старой карты) не даёт разгона вверх
-        assert_eq!(fall_speed_at(2.0, 1, &rules), 0.0);
-        // v = -√(2·g·h)
-        assert!((fall_speed_at(0.5, 1, &rules) + (g).sqrt()).abs() < 1e-5);
-        assert!((fall_speed_at(0.0, 1, &rules) + (2.0 * g).sqrt()).abs() < 1e-5);
-        // падение на нижнюю плиту разгоняет слабее падения до земли
-        assert!(fall_speed_at(1.0, 2, &rules) > fall_speed_at(0.0, 2, &rules));
-    }
-
-    #[test]
     fn falling_lands_after_fall_time() {
         let levels = layered();
         let rules = rules();
@@ -1774,6 +1779,115 @@ mod tests {
 
         assert_eq!(state.transit, Transit::Grounded);
         assert_eq!(state.z, 1.0);
+    }
+
+    #[test]
+    fn launch_speed_is_capped() {
+        let levels = layered();
+        let rules = LevelRules {
+            ramp_launch_factor: 1.0,
+            max_launch_vz: 1.0,
+            ..rules()
+        };
+        let mut state = on_the_ramp_top();
+
+        // уклон 1.0 и скорость 100 при высоте уровня 10 дают сырые
+        // 10 уровней/с — потолок обязан срезать их до 1.0
+        step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [100.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules,
+            DT,
+        );
+
+        let Transit::Airborne { vz, .. } = state.transit else {
+            panic!("вылет обязан состояться: {:?}", state.transit);
+        };
+
+        assert!(vz <= 1.0 + 1e-6, "потолок вылета не сработал, vz = {vz}");
+    }
+
+    #[test]
+    fn zero_cap_means_no_cap() {
+        let levels = layered();
+        let rules = LevelRules {
+            ramp_launch_factor: 1.0,
+            max_launch_vz: 0.0,
+            ..rules()
+        };
+        let mut state = on_the_ramp_top();
+
+        step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [100.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules,
+            DT,
+        );
+
+        let Transit::Airborne { vz, .. } = state.transit else {
+            panic!("вылет обязан состояться: {:?}", state.transit);
+        };
+
+        assert!(vz > 1.0, "0 означает отсутствие потолка, vz = {vz}");
+    }
+
+    #[test]
+    fn a_capped_jump_never_clears_walls() {
+        let levels = layered();
+        let rules = LevelRules {
+            fall_time: 0.35,
+            ramp_launch_factor: 1.0,
+            max_launch_vz: 3.5,
+            jump_clearance: 0.45,
+            ..rules()
+        };
+        let mut state = on_the_ramp_top();
+
+        // дуга при потолке 3.5 и g = 2/fallTime² равна 0.375 уровня —
+        // ниже jumpClearance, поэтому стены обязаны быть видны весь полёт
+        step_level(
+            &mut state,
+            25.0,
+            15.0,
+            [100.0, 0.0],
+            &Footprint::point(),
+            &levels,
+            &rules,
+            DT,
+        );
+
+        assert!(state.airborne(), "вылет обязан состояться: {:?}", state.transit);
+        assert!(!state.clear_walls, "прыжок не обязан отключать стены");
+
+        for _ in 0..1000 {
+            let event = step_level(
+                &mut state,
+                25.0,
+                15.0,
+                [100.0, 0.0],
+                &Footprint::point(),
+                &levels,
+                &rules,
+                DT,
+            );
+
+            assert!(
+                !state.clear_walls,
+                "штатный прыжок обязан оставаться ниже jumpClearance"
+            );
+
+            if event != LevelEvent::None {
+                break;
+            }
+        }
     }
 
     #[test]

@@ -44,4 +44,13 @@ describe('snapshotFields.js согласован со схемой snapshot.js',
 
     expect(names.slice(fields.M1_Z)).toEqual(['z', 'level', 'vz', 'pitch', 'roll']);
   });
+
+  // `vz` — детектор касания, а не плавная величина: сглаженная выборка
+  // точного нуля не даёт, и приземление чужого танка перестаёт
+  // детектироваться (см. src/client/landing.js)
+  it('vz не интерполируется', () => {
+    expect(snapshot.m1.fields[fields.M1_VZ].interp).toBe('discrete');
+    expect(snapshot.m1.fields[fields.M1_PITCH].interp).toBe('lerp');
+    expect(snapshot.m1.fields[fields.M1_ROLL].interp).toBe('lerp');
+  });
 });

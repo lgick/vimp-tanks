@@ -252,6 +252,7 @@ the snapshot schema or the panel. The scenarios:
 | `terraces_backside.json` | `terraces`: two players enter the same run through the wrong side — from the passage under the slab and from the flank; neither is lifted |
 | `terraces_crate.json` | `terraces`: a crate pushed through a gap in the railings of level 2 lands on the slab of level 1, while the second player climbs the steep run |
 | `jump.json` | `terraces`: full throttle up the steep 0 → 2 run from `team1`'s first spawn — the take-off, the flight and the landing all pass without prediction drift or a panic in the core |
+| `overpass_jump.json` | `overpass`: full throttle up the north ramp from `team1`'s first spawn — the tank jumps onto the bridge deck and stays on it, without prediction drift or a panic in the core |
 
 A scenario asserts **nothing about the game rules**: the runner checks the
 engine's invariants and the prediction drift, and the 2.5D scenarios
