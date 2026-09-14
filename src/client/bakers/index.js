@@ -5,6 +5,11 @@ import tankRadarTexture from './tankRadarTexture.js';
 import bombTexture from './bombTexture.js';
 import trackMarkTexture from './trackMarkTexture.js';
 import tankShadowTexture from './tankShadowTexture.js';
+import scorchTexture from './scorchTexture.js';
+import debrisTexture from './debrisTexture.js';
+import lightRadialTexture from './lightRadialTexture.js';
+import headlightConeTexture from './headlightConeTexture.js';
+import lampHeadTexture from './lampHeadTexture.js';
 
 export default {
   // четыре ассета - один и тот же размытый круг, различаются параметрами
@@ -18,4 +23,9 @@ export default {
   tankRadarTexture,
   bombTexture,
   trackMarkTexture,
+  scorchTexture,
+  debrisTexture,
+  lightRadialTexture,
+  headlightConeTexture,
+  lampHeadTexture,
 };

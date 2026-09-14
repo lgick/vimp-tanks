@@ -36,6 +36,9 @@ use vimp_engine_core::client::unpack::DecodedSnapshot;
 use vimp_engine_core::map::{BodyLevelState, body_collision_mask};
 use vimp_engine_core::physics::normalize_angle;
 
+use crate::config::SurfaceRules;
+use crate::surface::SurfaceMap;
+
 /// Насколько раздувается OBB своего танка при проверке захвата: контакт
 /// лучше предсказать чуть раньше касания, чем опоздать — опоздание видно,
 /// ранний захват нет. Экспортируется: тем же запасом подсистема динамики
@@ -117,6 +120,10 @@ pub struct PredictedBody {
     /// (`level::body_on_ramp` плюс `climbs_ramps` подсистемы): у тел карты
     /// подъёма нет вовсе, а чужой танк судится по высоте строки кадра.
     pub on_ramp: bool,
+    /// Тело участвует в контактах. Разрушенный проп (байт `state` ≥ 2)
+    /// остаётся в множестве обломками, но не держит ни танк, ни луч.
+    /// Выставляет только `MapDynamics`; удалённые танки всегда `true`.
+    pub collidable: bool,
 }
 
 impl PredictedBody {
@@ -148,6 +155,7 @@ impl PredictedBody {
             z: 0.0,
             falling: None,
             on_ramp: false,
+            collidable: true,
         }
     }
 
@@ -195,7 +203,13 @@ impl PredictedBody {
     /// Маска уровней тела: то же правило, что у хоста
     /// (`map::body_collision_mask`) — падающее тело видит только статику,
     /// иначе оно цеплялось бы за танки, которых на хосте не касается.
+    /// Несталкиваемое тело (обломки) получает пустую группу и в контактах
+    /// не участвует — одно место на правило, `resolve_world` его не дублирует.
     pub fn collision_mask(&self) -> Group {
+        if !self.collidable {
+            return Group::NONE;
+        }
+
         body_collision_mask(&self.level_state())
     }
 
@@ -445,6 +459,13 @@ pub fn inflate_tank(tank: &Box2) -> Box2 {
 /// Подсистема предсказанного мира: своё каждой подсистемы плюс общие
 /// обёртки над [`PredictedSet`]. Предиктор держит подсистемы за этим
 /// трейтом — контракт для него один, как утиный контракт в JS.
+/// Данные карты для [`PredictedBodies::pre_step`]: таблица поверхностей и
+/// их правила — те же, что у своего танка.
+pub struct PreStepCtx<'a> {
+    pub surfaces: Option<&'a SurfaceMap>,
+    pub rules: &'a SurfaceRules,
+}
+
 pub trait PredictedBodies {
     /// Общая механика подсистемы.
     fn set(&self) -> &PredictedSet;
@@ -478,6 +499,11 @@ pub trait PredictedBodies {
     /// hot-буфер после predicted-хвоста своего танка, и они перекрывают
     /// интерполированные строки тех же сущностей.
     fn render_data(&self) -> Vec<PredictedRow>;
+
+    /// Силы шага до контактов (`Predictor::step_inner`, перед
+    /// `resolve_world`): поверхности под предсказанными телами. По
+    /// умолчанию сил нет — чужие танки поверхностей не видят.
+    fn pre_step(&mut self, _ctx: &PreStepCtx, _dt: f32) {}
 
     // — общие обёртки: тело у них одно на все подсистемы —
 
@@ -835,6 +861,22 @@ mod tests {
         assert_eq!(body.body.x, 20.0);
         assert!(body.has_server);
         assert_eq!(body.last_server.x, 30.0);
+    }
+
+    #[test]
+    fn new_body_is_collidable() {
+        assert!(PredictedBody::new(Transform::default()).collidable);
+    }
+
+    #[test]
+    fn collision_mask_is_empty_for_a_non_collidable_body() {
+        let mut body = PredictedBody::new(Transform::default());
+
+        assert_ne!(body.collision_mask(), Group::NONE);
+
+        body.collidable = false;
+
+        assert_eq!(body.collision_mask(), Group::NONE);
     }
 
     #[test]

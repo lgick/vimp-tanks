@@ -114,7 +114,7 @@ export default {
     id: 5,
     kind: 'indexedNoNull8',
     class: 'hot',
-    optionalFrom: 5,
+    optionalFrom: 6,
     fields: [
       { name: 'x', ty: 'f32', interp: 'lerp' },
       { name: 'y', ty: 'f32', interp: 'lerp' },
@@ -123,6 +123,9 @@ export default {
       // покоящееся тело хвост не шлёт, и уровень читался бы нулём
       { name: 'z', ty: 'f32', interp: 'lerp', role: 'z' },
       { name: 'level', ty: 'u8', role: 'level' },
+      // состояние тела карты (0 — цело): смысл значений задаёт игра,
+      // движок лишь пишет байт на позицию роли. Голова по той же причине
+      { name: 'state', ty: 'u8', role: 'state' },
       { name: 'vx', ty: 'f32', interp: 'lerp' },
       { name: 'vy', ty: 'f32', interp: 'lerp' },
       { name: 'angvel', ty: 'f32', interp: 'lerp' },
@@ -132,7 +135,7 @@ export default {
     id: 6,
     kind: 'indexedNoNull8',
     class: 'hot',
-    optionalFrom: 5,
+    optionalFrom: 6,
     fields: [
       { name: 'x', ty: 'f32', interp: 'lerp' },
       { name: 'y', ty: 'f32', interp: 'lerp' },
@@ -141,6 +144,9 @@ export default {
       // покоящееся тело хвост не шлёт, и уровень читался бы нулём
       { name: 'z', ty: 'f32', interp: 'lerp', role: 'z' },
       { name: 'level', ty: 'u8', role: 'level' },
+      // состояние тела карты (0 — цело): смысл значений задаёт игра,
+      // движок лишь пишет байт на позицию роли. Голова по той же причине
+      { name: 'state', ty: 'u8', role: 'state' },
       { name: 'vx', ty: 'f32', interp: 'lerp' },
       { name: 'vy', ty: 'f32', interp: 'lerp' },
       { name: 'angvel', ty: 'f32', interp: 'lerp' },

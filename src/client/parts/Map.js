@@ -13,7 +13,7 @@ import MapObject from './map/MapObject.js';
 // сцену — подменить экземпляр из конструктора нельзя. Стратегия рисует В
 // ЭТОТ контейнер: ей нужны и дети, и zIndex, и alpha, и filters самого парта
 export default class Map extends Container {
-  constructor(data, _assets, dependencies) {
+  constructor(data, assets, dependencies) {
     super();
 
     this._mode = null;
@@ -44,8 +44,8 @@ export default class Map extends Container {
 
     this._mode =
       data.type === 'dynamic'
-        ? new MapObject(this, data, dependencies, imageBase)
-        : new MapLayer(this, data, dependencies, imageBase);
+        ? new MapObject(this, data, dependencies, imageBase, assets)
+        : new MapLayer(this, data, dependencies, imageBase, assets);
 
     // `onRender` у Container — АКСЕССОР, а не метод: назначается только
     // свойством. Метод с этим именем на прототипе подкласса затенил бы

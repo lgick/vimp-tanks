@@ -43,28 +43,35 @@ use vimp_engine_core::config::{FieldValue, SnapshotConfig};
 use vimp_engine_core::map::{BodyLevelState, FallModel, MapLevels, step_body_level};
 use vimp_engine_core::physics::deg_to_rad;
 
+use crate::surface;
+
 use super::ClientMapConfig;
 use super::predicted_set::{
-    CAPTURE_MARGIN, PredictedBodies, PredictedBody, PredictedSet, ServerState, Transform,
-    inflate_tank,
+    CAPTURE_MARGIN, PreStepCtx, PredictedBodies, PredictedBody, PredictedSet, ServerState,
+    Transform, inflate_tank,
 };
 
 // потолок предсказанного множества: транзитивный захват в стене canopy
 // (20 ящиков) иначе втянул бы её целиком
 const MAX_PREDICTED_BODIES: usize = 12;
 
-// индексы полей строки cN (x, y, angle, z, level, vx, vy, angvel) —
+// индексы полей строки cN (x, y, angle, z, level, state, vx, vy, angvel) —
 // позиционный контракт со схемой снапшота игры (src/config/snapshot.js).
-// Высота и уровень стоят в ГОЛОВЕ строки: покоящееся тело не шлёт хвост
-// скоростей, и уровень из хвоста читался бы нулём
+// Высота, уровень и состояние стоят в ГОЛОВЕ строки: покоящееся тело не
+// шлёт хвост скоростей, и значения из хвоста читались бы нулём
 const FIELD_X: usize = 0;
 const FIELD_Y: usize = 1;
 const FIELD_ANGLE: usize = 2;
 const FIELD_Z: usize = 3;
 const FIELD_LEVEL: usize = 4;
-const FIELD_VX: usize = 5;
-const FIELD_VY: usize = 6;
-const FIELD_ANGVEL: usize = 7;
+const FIELD_STATE: usize = 5;
+const FIELD_VX: usize = 6;
+const FIELD_VY: usize = 7;
+const FIELD_ANGVEL: usize = 8;
+
+// байт `state` строки тела: 0 — цел, 1 — повреждён, 2 — разрушен. С этого
+// значения тело остаётся лежать обломками, но в контактах не участвует
+const STATE_DESTROYED: u8 = 2;
 
 /// «Угол объекта» из центра бокса — обратный перевод
 /// `box_center_from_origin`.
@@ -113,6 +120,10 @@ pub struct MapDynamics {
     // кончилась плита, обязано падать теми же правилами, что на хосте
     levels: Option<Rc<MapLevels>>,
     fall: FallModel,
+    // байт состояния тела (роль `state`) из последнего кадра по ключу тела:
+    // рендер-строка предсказанного тела обязана нести его, иначе движок
+    // дописал бы голову нулём и сломанный забор у зрителя «чинился» бы
+    states: HashMap<String, u8>,
 }
 
 impl MapDynamics {
@@ -125,6 +136,7 @@ impl MapDynamics {
             set_key_id: None,
             levels: None,
             fall: FallModel::default(),
+            states: HashMap::new(),
         }
     }
 
@@ -135,6 +147,7 @@ impl MapDynamics {
 
         self.set.bodies_mut().clear();
         self.indices.clear();
+        self.states.clear();
         self.set_id = cfg.set_id.clone();
         self.set_key_id = self
             .set_id
@@ -205,10 +218,12 @@ impl MapDynamics {
 
     /// Все симуляционные боксы (raycast выстрела идёт по всей динамике).
     /// Третий элемент — уровень ящика: сегмент луча видит только свой.
+    /// Обломки (`!collidable`) луч не обрывают — на хосте их тело отключено.
     pub fn sim_boxes(&self) -> Vec<(&str, Box2, u8)> {
         self.set
             .bodies()
             .iter()
+            .filter(|(_, body)| body.collidable)
             .map(|(key, body)| (key.as_str(), sim_obb(body), body.level))
             .collect()
     }
@@ -279,6 +294,10 @@ impl PredictedBodies for MapDynamics {
                 continue;
             };
 
+            let state = field_u8(&row.fields, FIELD_STATE);
+
+            self.states.insert(key.clone(), state);
+
             let angle = field_f32(&row.fields, FIELD_ANGLE);
             let center = box_center_from_origin(
                 field_f32(&row.fields, FIELD_X),
@@ -303,6 +322,10 @@ impl PredictedBodies for MapDynamics {
                 body.level = field_u8(&row.fields, FIELD_LEVEL);
                 body.z = field_f32(&row.fields, FIELD_Z);
                 body.falling = None;
+                // только у тела интерполяции: предсказанным владеет
+                // симуляция, а сэмпл отстаёт на буфер и вернул бы
+                // `collidable` телу, которое сырой кадр уже разрушил
+                body.collidable = state < STATE_DESTROYED;
             }
         }
     }
@@ -311,7 +334,7 @@ impl PredictedBodies for MapDynamics {
     fn snapshot_bodies(&self, snapshot: &DecodedSnapshot) -> Vec<(String, ServerState)> {
         self.snapshot_rows(snapshot)
             .into_iter()
-            .map(|(key, state, _)| (key, state))
+            .map(|(key, state, ..)| (key, state))
             .collect()
     }
 
@@ -323,17 +346,18 @@ impl PredictedBodies for MapDynamics {
     fn begin_reconcile(&mut self, snapshot: &DecodedSnapshot) {
         let rows = self.snapshot_rows(snapshot);
 
-        // уровень пишется ДО реконсиляции: переигранные шаги обязаны видеть
-        // авторитетную маску с первого же шага
-        for (key, _, level) in &rows {
+        // уровень и сталкиваемость пишутся ДО реконсиляции: переигранные
+        // шаги обязаны видеть авторитетную маску с первого же шага
+        for (key, _, level, collidable) in &rows {
             if let Some(body) = self.set.bodies_mut().get_mut(key) {
                 body.set_level_state(*level);
+                body.collidable = *collidable;
             }
         }
 
         let entries: Vec<(String, ServerState)> = rows
             .into_iter()
-            .map(|(key, state, _)| (key, state))
+            .map(|(key, state, ..)| (key, state))
             .collect();
 
         self.set.begin_reconcile(&entries);
@@ -350,10 +374,11 @@ impl PredictedBodies for MapDynamics {
             .bodies()
             .values()
             .enumerate()
-            .filter(|(_, body)| body.is_predicted())
+            .filter(|(_, body)| body.is_predicted() && body.collidable)
             .map(|(index, _)| index)
             .collect();
 
+        // обломки не захватываются: ни прямым контактом, ни через соседей
         // прямой контакт с раздутым OBB своего танка
         let seeds: Vec<usize> = self
             .set
@@ -361,7 +386,9 @@ impl PredictedBodies for MapDynamics {
             .values()
             .enumerate()
             .filter(|(_, body)| {
-                !body.is_predicted() && obb_vs_obb(&inflated, &body.obb(0.0)).is_some()
+                !body.is_predicted()
+                    && body.collidable
+                    && obb_vs_obb(&inflated, &body.obb(0.0)).is_some()
             })
             .map(|(index, _)| index)
             .collect();
@@ -389,7 +416,7 @@ impl PredictedBodies for MapDynamics {
                 let bodies = self.set.bodies();
                 let body = &bodies[index];
 
-                if body.is_predicted() {
+                if body.is_predicted() || !body.collidable {
                     continue;
                 }
 
@@ -405,6 +432,19 @@ impl PredictedBodies for MapDynamics {
                 }
             }
         }
+    }
+
+    /// Возврат в интерполяцию: разрушенное тело понижается сразу, без
+    /// удержания и схождения — толкать больше нечего, а обломками владеет
+    /// кадр. Остальные — общим правилом множества.
+    fn demote_idle(&mut self, local_now: f64) {
+        for body in self.set.bodies_mut().values_mut() {
+            if body.is_predicted() && !body.collidable {
+                body.demote();
+            }
+        }
+
+        self.set.demote_idle(local_now);
     }
 
     /// Шаг предсказанных тел: интеграция общая, плюс правила уровня —
@@ -423,6 +463,29 @@ impl PredictedBodies for MapDynamics {
 
             step_body_level(&mut state, body.body.x, body.body.y, &levels, &fall, dt);
             body.set_level_state(state);
+        }
+    }
+
+    /// Поверхности под предсказанными телами: те же `surface::body_mix`,
+    /// `body_dv` и `boost_dv`, что у хоста (`TanksSim::apply_body_surfaces`),
+    /// по центру бокса (боксы и так хранятся центром). Состояния нет, и
+    /// реконсиляция ничего сверх трансформа не восстанавливает. Тело в
+    /// `Follow` сил не получает: его ведёт интерполяция.
+    fn pre_step(&mut self, ctx: &PreStepCtx, dt: f32) {
+        let Some(map) = ctx.surfaces else {
+            return;
+        };
+
+        for body in self.set.predicted_bodies_mut() {
+            let (x, y) = (body.body.x, body.body.y);
+            let (vx, vy) = (body.body.vx, body.body.vy);
+            let falling = body.falling.is_some();
+            let (mix, kind) = surface::body_mix(map, body.level, falling, x, y);
+            let (drag_x, drag_y) = surface::body_dv(mix, kind, ctx.rules, vx, vy, dt);
+            let (boost_x, boost_y) = surface::boost_dv(map, body.level, falling, x, y, vx, vy, dt);
+
+            body.body.vx += drag_x + boost_x;
+            body.body.vy += drag_y + boost_y;
         }
     }
 
@@ -457,15 +520,16 @@ impl PredictedBodies for MapDynamics {
                 Some(PredictedRow {
                     key_id,
                     id,
-                    // z и level идут в строке за трансформом: без них движок
-                    // дописал бы голову схемы нулями, и предсказанный ящик
-                    // на мосту рисовался бы на земле
+                    // z, level и state идут в строке за трансформом: без них
+                    // движок дописал бы голову схемы нулями, и предсказанный
+                    // ящик на мосту рисовался бы на земле
                     fields: vec![
                         origin[0],
                         origin[1],
                         render.angle,
                         body.z,
                         body.level as f32,
+                        self.states.get(key).copied().unwrap_or(0) as f32,
                     ],
                 })
             })
@@ -475,11 +539,11 @@ impl PredictedBodies for MapDynamics {
 
 impl MapDynamics {
     // строки блока динамики из сырого кадра: авторитетный трансформ со
-    // скоростями плюс состояние уровня тела
+    // скоростями, состояние уровня тела и его сталкиваемость (байт `state`)
     fn snapshot_rows(
         &self,
         snapshot: &DecodedSnapshot,
-    ) -> Vec<(String, ServerState, BodyLevelState)> {
+    ) -> Vec<(String, ServerState, BodyLevelState, bool)> {
         let Some(BlockData::IndexedNoNull8(items)) =
             self.block_key().and_then(|key| snapshot.block_by_key(key))
         else {
@@ -519,6 +583,7 @@ impl MapDynamics {
                     center[0],
                     center[1],
                 ),
+                field_u8(fields, FIELD_STATE) < STATE_DESTROYED,
             ));
         }
 
@@ -601,23 +666,28 @@ fn render_obb(body: &PredictedBody) -> Box2 {
 mod tests {
     use super::*;
     use indexmap::IndexMap;
+    use rapier2d::prelude::Group;
     use vimp_engine_core::client::interpolator::InterpolatedRow;
     use vimp_engine_core::client::unpack::DecodedBlock;
     use vimp_engine_core::config::BlockSchema;
 
     use crate::client::predicted_set::Mode;
 
-    // блок динамики c1 (id 5) — как в схеме снапшота игры
+    // блок динамики c1 (id 5) — как в схеме снапшота игры: слоёная строка
+    // со state, её и читают FIELD_*
     fn snapshot_config() -> SnapshotConfig {
         let schema: BlockSchema = serde_json::from_value(serde_json::json!({
             "id": 5,
             "kind": "indexedNoNull8",
             "class": "hot",
-            "optionalFrom": 3,
+            "optionalFrom": 6,
             "fields": [
                 { "name": "x", "ty": "f32", "interp": "lerp" },
                 { "name": "y", "ty": "f32", "interp": "lerp" },
                 { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+                { "name": "z", "ty": "f32", "interp": "lerp", "role": "z" },
+                { "name": "level", "ty": "u8", "role": "level" },
+                { "name": "state", "ty": "u8", "role": "state" },
                 { "name": "vx", "ty": "f32", "interp": "lerp" },
                 { "name": "vy", "ty": "f32", "interp": "lerp" },
                 { "name": "angvel", "ty": "f32", "interp": "lerp" }
@@ -720,8 +790,17 @@ mod tests {
         game_at_level(key, rows, 0)
     }
 
-    // строка интерполяции: трансформ плюс голова 2.5D (z, level)
+    // строка интерполяции: трансформ плюс голова 2.5D (z, level, state)
     fn game_at_level(key: &str, rows: &[(u32, [f32; 3])], level: u8) -> InterpolatedGame {
+        game_with_state(key, rows, level, 0)
+    }
+
+    fn game_with_state(
+        key: &str,
+        rows: &[(u32, [f32; 3])],
+        level: u8,
+        state: u8,
+    ) -> InterpolatedGame {
         let mut blocks = IndexMap::new();
 
         blocks.insert(
@@ -733,6 +812,7 @@ mod tests {
 
                     fields.push(FieldValue::F32(level as f32));
                     fields.push(FieldValue::U8(level));
+                    fields.push(FieldValue::U8(state));
 
                     InterpolatedRow { id: *id, fields }
                 })
@@ -756,10 +836,21 @@ mod tests {
         z: f32,
         level: u8,
     ) -> DecodedSnapshot {
+        snapshot_with_state(key, rows, z, level, 0)
+    }
+
+    // тот же кадр с байтом состояния тел (роль `state`)
+    fn snapshot_with_state(
+        key: &str,
+        rows: &[(u8, [f32; 6])],
+        z: f32,
+        level: u8,
+        state: u8,
+    ) -> DecodedSnapshot {
         let mut items = IndexMap::new();
 
         for (index, values) in rows {
-            // [x, y, angle] + голова 2.5D (z, level) + хвост [vx, vy, angvel]
+            // [x, y, angle] + голова 2.5D (z, level, state) + хвост [vx, vy, angvel]
             let mut fields: Vec<FieldValue> = values[..3]
                 .iter()
                 .map(|v| FieldValue::F32(*v))
@@ -767,6 +858,7 @@ mod tests {
 
             fields.push(FieldValue::F32(z));
             fields.push(FieldValue::U8(level));
+            fields.push(FieldValue::U8(state));
             fields.extend(values[3..].iter().map(|v| FieldValue::F32(*v)));
 
             items.insert(*index, fields);
@@ -1313,6 +1405,155 @@ mod tests {
         // без z и level движок дописал бы голову схемы нулями
         assert_eq!(rows[0].fields[3], 1.0);
         assert_eq!(rows[0].fields[4], 1.0);
+    }
+
+    #[test]
+    fn render_data_carries_the_state_from_the_last_frame() {
+        let mut dynamics = setup(1.0);
+
+        // повреждённое тело: разрушенное (2) в предсказание не захватывается
+        dynamics.update(&game_with_state("c1", &[(0, [100.0, 0.0, 0.0])], 0, 1));
+        dynamics.capture(&tank_obb(96.0, 10.0), 1000.0);
+
+        let rows = dynamics.render_data();
+
+        // строка новой ширины: state на своей позиции, а не нуль от движка
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fields.len(), FIELD_STATE + 1);
+        assert_eq!(rows[0].fields[FIELD_STATE], 1.0);
+
+        // карта сменилась — состояние прошлой карты не переживает её
+        dynamics.set_map(&map_config(
+            serde_json::json!([
+                { "position": [100.0, 0.0], "angle": 0.0, "width": 40.0, "height": 20.0,
+                  "density": 1.0 }
+            ]),
+            1.0,
+        ));
+        dynamics.capture(&tank_obb(96.0, 10.0), 1000.0);
+
+        assert_eq!(dynamics.render_data()[0].fields[FIELD_STATE], 0.0);
+    }
+
+    // — разрушенные тела (байт `state`) —
+
+    #[test]
+    fn update_takes_collidable_from_the_row_state() {
+        let mut dynamics = setup(1.0);
+
+        dynamics.update(&game_with_state("c1", &[(0, [100.0, 0.0, 0.0])], 0, 2));
+
+        assert!(!body(&dynamics, "d0").collidable);
+
+        // новый раунд: тело снова цело
+        dynamics.update(&game_with_state("c1", &[(0, [100.0, 0.0, 0.0])], 0, 0));
+
+        assert!(body(&dynamics, "d0").collidable);
+
+        // повреждённое тело по-прежнему твёрдое
+        dynamics.update(&game_with_state("c1", &[(0, [100.0, 0.0, 0.0])], 0, 1));
+
+        assert!(body(&dynamics, "d0").collidable);
+    }
+
+    #[test]
+    fn begin_reconcile_takes_collidable_from_the_raw_frame() {
+        let mut dynamics = setup(1.0);
+
+        dynamics.capture(&tank_obb(96.0, 10.0), 1000.0);
+        dynamics.begin_reconcile(&snapshot_with_state(
+            "c1",
+            &[(0, [100.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
+            0.0,
+            0,
+            2,
+        ));
+
+        // переигранные шаги видят пустую маску с первого шага
+        assert!(!body(&dynamics, "d0").collidable);
+        assert_eq!(body(&dynamics, "d0").collision_mask(), Group::NONE);
+    }
+
+    #[test]
+    fn update_does_not_revive_a_predicted_destroyed_body() {
+        let mut dynamics = setup(1.0);
+
+        dynamics.capture(&tank_obb(96.0, 10.0), 1000.0);
+        dynamics.begin_reconcile(&snapshot_with_state(
+            "c1",
+            &[(0, [100.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
+            0.0,
+            0,
+            2,
+        ));
+        dynamics.finish_reconcile();
+
+        assert_eq!(body(&dynamics, "d0").mode, Mode::Predicted);
+
+        // интерполированный сэмпл отстаёт: в нём тело ещё цело
+        dynamics.update(&game_with_state("c1", &[(0, [100.0, 0.0, 0.0])], 0, 0));
+
+        assert!(!body(&dynamics, "d0").collidable);
+    }
+
+    #[test]
+    fn destroyed_body_is_not_captured() {
+        let mut dynamics = setup(1.0);
+
+        dynamics.update(&game_with_state("c1", &[(0, [100.0, 0.0, 0.0])], 0, 2));
+        dynamics.capture(&tank_obb(96.0, 10.0), 1000.0);
+
+        assert_eq!(body(&dynamics, "d0").mode, Mode::Follow);
+    }
+
+    #[test]
+    fn destroyed_body_is_not_a_capture_neighbour() {
+        // d0 цел и касается танка, d1 разрушен, d2 цел за ним
+        let mut dynamics = setup_row(3, 20.0);
+
+        dynamics.begin_reconcile(&snapshot_with_state(
+            "c1",
+            &[(1, [20.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
+            0.0,
+            0,
+            2,
+        ));
+        dynamics.capture(&tank_obb(-4.0, 10.0), 1000.0);
+
+        assert_eq!(body(&dynamics, "d0").mode, Mode::Predicted);
+        assert_eq!(body(&dynamics, "d1").mode, Mode::Follow);
+    }
+
+    #[test]
+    fn captured_body_is_demoted_once_destroyed() {
+        let mut dynamics = setup(1.0);
+
+        dynamics.capture(&tank_obb(96.0, 10.0), 1000.0);
+        dynamics.begin_reconcile(&snapshot_with_state(
+            "c1",
+            &[(0, [100.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
+            0.0,
+            0,
+            2,
+        ));
+        dynamics.finish_reconcile();
+
+        // без удержания PREDICTION_HOLD_MS: толкать больше нечего
+        dynamics.demote_idle(1000.0);
+
+        assert_eq!(body(&dynamics, "d0").mode, Mode::Follow);
+        assert!(dynamics.render_data().is_empty());
+    }
+
+    #[test]
+    fn destroyed_body_is_not_in_sim_boxes() {
+        let mut dynamics = setup_row(2, 20.0);
+
+        dynamics.update(&game_with_state("c1", &[(0, [0.0, 0.0, 0.0])], 0, 2));
+
+        let keys: Vec<&str> = dynamics.sim_boxes().iter().map(|(key, ..)| *key).collect();
+
+        assert_eq!(keys, vec!["d1"]);
     }
 
     #[test]

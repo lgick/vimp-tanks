@@ -3,6 +3,7 @@
 
 use vimp_engine_core::config::FieldValue;
 use vimp_engine_core::events::CoreEvent;
+use vimp_engine_core::snapshot::Block;
 use vimp_tanks_core::GameCore;
 
 const DT: f32 = 1.0 / 120.0;
@@ -88,6 +89,26 @@ fn flat_config_json() -> serde_json::Value {
             "rampLaunchFactor": 0.35,
             "maxLaunchVz": 3.5,
             "jumpClearance": 0.45
+        },
+        "surfaces": {
+            "trackYawGain": 0.004,
+            "trackSampleX": 0.6,
+            "trackSampleY": 0.75,
+            "types": {
+                "sand": { "accel": 0.6, "maxSpeed": 0.55, "drag": 1.2, "grip": 1.0, "brake": 1.0, "turn": 0.8 },
+                "mud": { "accel": 0.45, "maxSpeed": 0.4, "drag": 2.0, "grip": 0.9, "brake": 1.0, "turn": 0.7 },
+                "water": { "accel": 0.7, "maxSpeed": 0.6, "drag": 1.5, "grip": 0.8, "brake": 0.8, "turn": 0.85 },
+                "oil": { "accel": 0.35, "maxSpeed": 1.0, "drag": 0.0, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5 },
+                "conveyor": { "belt": 60 },
+                "boost": { "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20 }
+            }
+        },
+        "props": {
+            "fence": { "hp": 30, "damagedAt": 0, "bulletFactor": 1.0, "blastFactor": 1.0, "ramThreshold": 60, "ramDamagePerSpeed": 0.5 },
+            "crate": { "hp": 120, "damagedAt": 0.5, "bulletFactor": 0.5, "blastFactor": 1.5, "ramThreshold": 140, "ramDamagePerSpeed": 0.6 },
+            "barrel": { "hp": 40, "damagedAt": 0, "bulletFactor": 1.0, "blastFactor": 1.0, "ramThreshold": 150, "ramDamagePerSpeed": 1.0,
+                "chainDelay": 0.15,
+                "blast": { "radius": 70, "damage": 80, "impulse": 2500000, "cameraShake": { "intensity": 30, "duration": 400 } } }
         },
         "panel": {
             "health": { "key": "h", "value": 100 },
@@ -649,6 +670,133 @@ fn state_dump_restores_identical_simulation() {
     assert_eq!(core.position_of(2), restored.position_of(2));
 }
 
+// ***** производные данные карты (поле `game`) ***** //
+
+/// Дамп состояния с подменённым полем `game` карты: так в ядро попадает
+/// карта, которую хук `on_map_loaded` не видел.
+fn dump_with_map_game(core: &mut GameCore, game: serde_json::Value) -> Vec<u8> {
+    core.pack_body().unwrap();
+    core.take_events();
+
+    let mut dump: serde_json::Value =
+        serde_json::from_slice(&core.serialize_state().unwrap()).unwrap();
+
+    dump["map"]["game"] = game;
+
+    serde_json::to_vec(&dump).unwrap()
+}
+
+#[test]
+fn map_load_rebuilds_derived_data_and_resets_the_round() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+
+    let sim = &core.state().sim;
+
+    assert_eq!((sim.map_derived_rebuilds(), sim.round_state_resets()), (1, 1));
+
+    // рестарт раунда — та же карта: хук зовётся снова
+    core.load_map(&map_json()).unwrap();
+    steps(&mut core, 2);
+
+    let sim = &core.state().sim;
+
+    assert_eq!((sim.map_derived_rebuilds(), sim.round_state_resets()), (2, 2));
+}
+
+#[test]
+fn map_game_is_parsed_on_load_and_broken_game_fails_the_load() {
+    let mut core = make_core();
+    let mut map: serde_json::Value = serde_json::from_str(&map_json()).unwrap();
+
+    map["game"] = serde_json::json!({
+        "surfaces": { "0": { "41": "sand" } },
+        "lighting": { "ambient": 0.2 }
+    });
+    core.load_map(&map.to_string()).unwrap();
+
+    assert_eq!(core.state().sim.map_game().surfaces["0"].len(), 1);
+
+    map["game"] = serde_json::json!({ "surfaces": { "0": { "41": 5 } } });
+
+    // ошибка — через EngineSim: JsError вне WASM не создаётся
+    let error = core.state_mut().load_map(&map.to_string()).unwrap_err();
+
+    assert!(error.contains("map game"), "{error}");
+}
+
+#[test]
+fn deserialize_rebuilds_map_derived_data_once_on_first_step() {
+    for map in [map_json(), layered_map_json()] {
+        let mut core = make_core();
+
+        core.load_map(&map).unwrap();
+        steps(&mut core, 5);
+
+        let dump = dump_with_map_game(&mut core, serde_json::json!({
+            "surfaces": { "0": { "41": "sand" } }
+        }));
+        let mut restored = make_core();
+
+        restored.deserialize_state(&dump).unwrap();
+
+        let sim = &restored.state().sim;
+
+        assert_eq!((sim.map_derived_rebuilds(), sim.round_state_resets()), (0, 0));
+
+        steps(&mut restored, 1);
+
+        let sim = &restored.state().sim;
+
+        // только пересборка, без сброса раунда: разрушения из дампа живут
+        assert_eq!((sim.map_derived_rebuilds(), sim.round_state_resets()), (1, 0));
+        assert_eq!(sim.map_game().surfaces["0"].len(), 1);
+
+        steps(&mut restored, 1);
+
+        assert_eq!(restored.state().sim.map_derived_rebuilds(), 1);
+    }
+}
+
+#[test]
+fn broken_map_game_after_deserialize_reports_an_event_and_keeps_stepping() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    steps(&mut core, 5);
+
+    let dump = dump_with_map_game(&mut core, serde_json::json!({ "surfaces": 5 }));
+    let mut restored = make_core();
+
+    restored.deserialize_state(&dump).unwrap();
+
+    let before = restored.position_of(1);
+
+    steps(&mut restored, 30);
+
+    // танк едет дальше по нейтральному пути
+    assert!(restored.position_of(1) != before);
+    assert!(restored.state().sim.map_game().surfaces.is_empty());
+
+    let raw: Vec<serde_json::Value> = serde_json::from_str(&restored.take_events()).unwrap();
+    let reported: Vec<&serde_json::Value> = raw
+        .iter()
+        .filter(|event| event["type"] == "custom")
+        .filter(|event| event["data"]["type"] == "mapDerivedError")
+        .collect();
+
+    assert_eq!(reported.len(), 1, "{raw:?}");
+    assert!(reported[0]["data"]["message"].as_str().unwrap().contains("map game"));
+
+    // флаг снят: второй шаг ошибку не повторяет
+    steps(&mut restored, 1);
+
+    assert!(!restored.take_events().contains("mapDerivedError"));
+}
+
 #[test]
 fn clear_resets_world() {
     let mut core = make_core();
@@ -763,8 +911,10 @@ fn hitscan_impulse_independent_of_weapon_range() {
 /// тело из целей детонации (импульс без урона, как в Bomb.detonate).
 #[test]
 fn explosion_pushes_dynamic_map_box() {
-    const BOX_X: f32 = 120.0;
-    const BOX_Y: f32 = 130.0;
+    // угол ящика; расстояние до бомбы считается от центра коллайдера
+    // (126, 126), он должен лечь в радиус 50
+    const BOX_X: f32 = 110.0;
+    const BOX_Y: f32 = 110.0;
 
     // общий сценарий: выстрел бомбой рядом с ящиком (fire) либо покой
     let displacement = |fire: bool| {
@@ -2510,4 +2660,821 @@ fn a_one_level_fall_still_costs_the_old_price() {
         "падение с одного уровня стоит fallDamage · (1 − freeHeight)"
     );
     assert_eq!(level_of(&core, 1), 0, "танк оказался на земле");
+}
+
+// ---- поверхности (этап 2) ----
+
+/// Плоская карта `cols`×20 клеток без стен (шаг 32, масштаб 1): `fill` —
+/// тайл клетки, `game` — поле `game` карты.
+fn surface_map_json(cols: usize, fill: impl Fn(usize, usize) -> i32, game: serde_json::Value) -> String {
+    let grid: Vec<Vec<i32>> = (0..20).map(|y| (0..cols).map(|x| fill(x, y)).collect()).collect();
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": { "team1": [[100, 100, 0]], "team2": [[500, 100, 180]] },
+        "game": game
+    })
+    .to_string()
+}
+
+fn boost_game(tile: i32, dir: &str) -> serde_json::Value {
+    serde_json::json!({ "surfaces": { "0": { tile.to_string(): { "type": "boost", "dir": dir } } } })
+}
+
+/// Строка m1 танка из players_data: x, y, angle, gunRotation, vx, vy, …
+fn tank_row_of(core: &GameCore, game_id: u32) -> Vec<f32> {
+    let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+    data["m1"][game_id.to_string()]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_f64().unwrap_or(0.0) as f32)
+        .collect()
+}
+
+/// Сколько импульсов бустера получил танк за `count` шагов после первого: скачок
+/// скорости за шаг больше 60 (тяга за шаг — не больше 8.3).
+fn count_boosts(core: &mut GameCore, game_id: u32, count: usize) -> usize {
+    // строка танка появляется в players_data только после первого шага
+    core.step(DT);
+
+    let mut last = tank_row_of(core, game_id);
+    let mut boosts = 0;
+
+    for _ in 0..count {
+        core.step(DT);
+
+        let row = tank_row_of(core, game_id);
+
+        if ((row[4] - last[4]).powi(2) + (row[5] - last[5]).powi(2)).sqrt() > 60.0 {
+            boosts += 1;
+        }
+
+        last = row;
+    }
+
+    boosts
+}
+
+#[test]
+fn sand_lowers_the_steady_speed() {
+    let run = |game: serde_json::Value| {
+        let mut core = make_core();
+
+        core.load_map(&surface_map_json(80, |_, _| 41, game)).unwrap();
+        core.spawn_actor(1, "m1", 1, 100.0, 336.0, 0.0).unwrap();
+        core.apply_input(1, 1, "down", "forward");
+        steps(&mut core, 480);
+
+        tank_row_of(&core, 1)[4]
+    };
+    let sand = run(serde_json::json!({ "surfaces": { "0": { "41": "sand" } } }));
+    let asphalt = run(serde_json::Value::Null);
+
+    assert!(sand <= 0.55 * 260.0, "песок выше потолка maxSpeed · maxForwardSpeed: {sand}");
+    assert!(sand <= asphalt * 0.7, "песок обязан быть медленнее асфальта на 30 %: {sand} vs {asphalt}");
+}
+
+#[test]
+fn boost_fires_once_per_entry() {
+    // плита 2×3 на восток: строки 10..12, колонки 10..13
+    let mut core = make_core();
+    let plate = |x: usize, y: usize| if (10..13).contains(&x) && (10..12).contains(&y) { 47 } else { 0 };
+
+    core.load_map(&surface_map_json(40, plate, boost_game(47, "east"))).unwrap();
+    core.spawn_actor(1, "m1", 1, 200.0, 336.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    assert_eq!(count_boosts(&mut core, 1, 150), 1, "проезд вдоль плиты 2×3 — один импульс");
+
+    // стоянка на плите 60 шагов
+    let mut core = make_core();
+
+    core.load_map(&surface_map_json(40, plate, boost_game(47, "east"))).unwrap();
+    core.spawn_actor(1, "m1", 1, 368.0, 336.0, 0.0).unwrap();
+
+    assert_eq!(count_boosts(&mut core, 1, 60), 0, "стоянка на плите — ни одного");
+}
+
+#[test]
+fn boost_entry_from_off_the_grid_fires() {
+    let mut core = make_core();
+
+    core.load_map(&surface_map_json(40, |x, _| if x == 0 { 47 } else { 0 }, boost_game(47, "east")))
+        .unwrap();
+    core.spawn_actor(1, "m1", 1, -60.0, 336.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    assert_eq!(count_boosts(&mut core, 1, 120), 1, "прошлая клетка вне карты — это въезд");
+}
+
+#[test]
+fn conveyor_under_a_bridge_does_not_move_the_bridge_tank() {
+    let ground: Vec<Vec<i32>> = vec![vec![45; 20]; 20];
+    let slab: Vec<Vec<i32>> = (0..20)
+        .map(|y| (0..20).map(|x| if (5..16).contains(&x) && (5..16).contains(&y) { 2 } else { 0 }).collect())
+        .collect();
+    let map = serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": ground,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": { "team1": [[100, 100, 0]], "team2": [[500, 100, 180]] },
+        "levels": { "1": { "map": slab, "floor": [2], "walls": [] } },
+        "game": { "surfaces": { "0": { "45": { "type": "conveyor", "dir": "south" } } } }
+    })
+    .to_string();
+    let mut core = make_core();
+
+    core.load_map(&map).unwrap();
+    core.spawn_actor(1, "m1", 1, 320.0, 320.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 100.0, 100.0, 0.0).unwrap();
+    steps(&mut core, 120);
+
+    assert_eq!(level_of(&core, 1), 1);
+    assert!(tank_row_of(&core, 1)[5].abs() < 0.5, "танк на мосту стоит: {:?}", tank_row_of(&core, 1));
+    assert!(tank_row_of(&core, 2)[5] > 20.0, "танк на земле едет с лентой: {:?}", tank_row_of(&core, 2));
+}
+
+#[test]
+fn oil_turn_keeps_more_sideways_speed_than_asphalt() {
+    let lateral = |game: serde_json::Value| {
+        let mut core = make_core();
+
+        core.load_map(&surface_map_json(80, |_, _| 44, game)).unwrap();
+        core.spawn_actor(1, "m1", 1, 100.0, 320.0, 0.0).unwrap();
+        core.apply_input(1, 1, "down", "forward");
+        steps(&mut core, 240);
+        core.apply_input(1, 2, "down", "right");
+        steps(&mut core, 30);
+
+        let row = tank_row_of(&core, 1);
+        let (sin, cos) = row[2].sin_cos();
+
+        (-row[4] * sin + row[5] * cos).abs()
+    };
+    let oil = lateral(serde_json::json!({ "surfaces": { "0": { "44": "oil" } } }));
+    let asphalt = lateral(serde_json::Value::Null);
+
+    assert!(oil > asphalt, "на масле танк заносит сильнее: {oil} vs {asphalt}");
+}
+
+#[test]
+fn map_without_surfaces_moves_exactly_as_before() {
+    let run = |map: String| {
+        let mut core = make_core();
+
+        core.load_map(&map).unwrap();
+        core.spawn_actor(1, "m1", 1, 100.0, 200.0, 0.0).unwrap();
+        core.apply_input(1, 1, "down", "forward");
+        steps(&mut core, 120);
+        core.apply_input(1, 2, "down", "right");
+        steps(&mut core, 120);
+
+        core.players_data()
+    };
+    let bare = run(map_json());
+    // поверхность объявлена, но её тайла на карте нет: таблица строится,
+    // а движение обязано остаться бит-в-бит прежним
+    let mut with_game: serde_json::Value = serde_json::from_str(&map_json()).unwrap();
+
+    with_game["game"] = serde_json::json!({ "surfaces": { "0": { "99": "sand" } } });
+
+    assert_eq!(bare, run(with_game.to_string()));
+}
+
+// ---- поверхности для тел карты (этап 3) ----
+
+/// Карта с ящиками 32×32: `crates` — углы объектов и уровни.
+fn with_crates(map_json: String, crates: &[([f32; 2], u8)]) -> String {
+    let mut map: serde_json::Value = serde_json::from_str(&map_json).unwrap();
+
+    map["physicsDynamic"] = crates
+        .iter()
+        .map(|(position, level)| {
+            serde_json::json!({
+                "density": 1,
+                "position": position,
+                "angle": 0,
+                "width": 32,
+                "height": 32,
+                "linearDamping": 0.5,
+                "level": level
+            })
+        })
+        .collect();
+
+    map.to_string()
+}
+
+fn conveyor_game(dir: &str) -> serde_json::Value {
+    serde_json::json!({ "surfaces": { "0": { "45": { "type": "conveyor", "dir": dir } } } })
+}
+
+/// Лента на восток везде, кроме плиты-бустера на восток в колонках 10..13.
+fn crate_boost_map_json(crates: &[([f32; 2], u8)]) -> String {
+    let game = serde_json::json!({ "surfaces": { "0": {
+        "45": { "type": "conveyor", "dir": "east" },
+        "47": { "type": "boost", "dir": "east" }
+    } } });
+
+    with_crates(surface_map_json(40, |x, _| if (10..13).contains(&x) { 47 } else { 45 }, game), crates)
+}
+
+/// Центр и скорость ящика `index` без округления кадра: `[cx, cy, vx, vy]`.
+fn crate_state(core: &GameCore, index: usize) -> [f32; 4] {
+    let state = core.state();
+    let handle = state.map.as_ref().unwrap().dynamic_handle(index).unwrap();
+    let body = &state.world.bodies[handle];
+    let center = state.world.colliders[body.colliders()[0]].translation();
+    let vel = body.linvel();
+
+    [center.x, center.y, vel.x, vel.y]
+}
+
+#[test]
+fn crate_on_a_conveyor_moves_along_the_arrow() {
+    let mut core = make_core();
+
+    core.load_map(&with_crates(surface_map_json(40, |_, _| 45, conveyor_game("east")), &[([200.0, 300.0], 0)]))
+        .unwrap();
+
+    let start = crate_state(&core, 0);
+
+    steps(&mut core, 240);
+
+    let end = crate_state(&core, 0);
+
+    assert!(end[0] - start[0] > 60.0, "лента везёт ящик по стрелке: {start:?} → {end:?}");
+    assert!((end[1] - start[1]).abs() < 0.5, "поперёк стрелки ящик не едет: {start:?} → {end:?}");
+}
+
+#[test]
+fn conveyor_under_a_bridge_moves_only_the_ground_crate() {
+    let ground: Vec<Vec<i32>> = vec![vec![45; 20]; 20];
+    let slab: Vec<Vec<i32>> = (0..20)
+        .map(|y| (0..20).map(|x| if (5..16).contains(&x) && (5..16).contains(&y) { 2 } else { 0 }).collect())
+        .collect();
+    let map = serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": ground,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": { "team1": [[100, 100, 0]], "team2": [[500, 100, 180]] },
+        "levels": { "1": { "map": slab, "floor": [2], "walls": [] } },
+        "game": conveyor_game("south")
+    })
+    .to_string();
+    let mut core = make_core();
+
+    // ящик 0 — на мосту, ящик 1 — на ленте под мостом
+    core.load_map(&with_crates(map, &[([304.0, 304.0], 1), ([176.0, 176.0], 0)])).unwrap();
+
+    let bridge = crate_state(&core, 0);
+    let ground = crate_state(&core, 1);
+
+    steps(&mut core, 120);
+
+    assert!((crate_state(&core, 0)[1] - bridge[1]).abs() < 0.5, "ящик на мосту стоит: {:?}", crate_state(&core, 0));
+    assert!(crate_state(&core, 1)[1] - ground[1] > 20.0, "ящик под мостом едет: {:?}", crate_state(&core, 1));
+}
+
+#[test]
+fn boost_pushes_a_crate_once() {
+    let mut core = make_core();
+
+    core.load_map(&crate_boost_map_json(&[([200.0, 300.0], 0)])).unwrap();
+
+    let mut last = crate_state(&core, 0);
+    let mut boosts = 0;
+
+    for _ in 0..360 {
+        core.step(DT);
+
+        let now = crate_state(&core, 0);
+
+        if (now[2] - last[2]).hypot(now[3] - last[3]) > 60.0 {
+            boosts += 1;
+        }
+
+        last = now;
+    }
+
+    assert_eq!(boosts, 1, "лента довозит ящик до плиты — один импульс");
+    assert!(last[0] > 416.0, "ящик проехал плиту: {last:?}");
+}
+
+#[test]
+fn destroyed_crate_takes_no_surface_forces() {
+    let map = with_crates(surface_map_json(40, |_, _| 45, conveyor_game("east")), &[([200.0, 300.0], 0)]);
+    let mut core = make_core();
+
+    core.load_map(&map).unwrap();
+    core.pack_body().unwrap();
+    core.take_events();
+
+    // байт состояния тела пишет игра (этап 5); здесь он подменяется в дампе
+    let mut dump: serde_json::Value = serde_json::from_slice(&core.serialize_state().unwrap()).unwrap();
+
+    assert_eq!(dump["map_body_state"], serde_json::json!([0]));
+    dump["map_body_state"] = serde_json::json!([2]);
+
+    let mut destroyed = make_core();
+
+    destroyed.deserialize_state(&serde_json::to_vec(&dump).unwrap()).unwrap();
+
+    let start = crate_state(&destroyed, 0);
+
+    steps(&mut destroyed, 120);
+    steps(&mut core, 120);
+
+    assert_eq!(crate_state(&destroyed, 0), start, "разрушенный ящик лента не везёт");
+    assert!(crate_state(&core, 0)[0] - start[0] > 10.0, "целый ящик едет: {:?}", crate_state(&core, 0));
+}
+
+#[test]
+fn state_dump_restores_identical_simulation_on_surfaces() {
+    let mut core = make_core();
+
+    // ящик 0 едет по ленте, ящик 1 въедет на плиту бустера уже после дампа
+    core.load_map(&crate_boost_map_json(&[([40.0, 100.0], 0), ([260.0, 400.0], 0)])).unwrap();
+    steps(&mut core, 60);
+
+    assert!(crate_state(&core, 1)[0] < 320.0, "до дампа ящик 1 ещё не на плите");
+
+    core.pack_body().unwrap();
+    core.take_events();
+
+    let dump = core.serialize_state().unwrap();
+    let mut restored = make_core();
+
+    restored.deserialize_state(&dump).unwrap();
+
+    let mut peak = 0.0f32;
+
+    for _ in 0..240 {
+        core.step(DT);
+        restored.step(DT);
+        peak = peak.max(crate_state(&restored, 1)[2]);
+    }
+
+    assert!(peak > 150.0, "ящик 1 получил импульс бустера после дампа: {peak}");
+
+    for index in 0..2 {
+        assert_eq!(crate_state(&core, index), crate_state(&restored, index), "ящик {index}");
+    }
+}
+
+// ---- разрушаемые объекты (этап 5) ----
+
+/// Карта с телами карты 32×32: угол объекта, уровень и тип пропа (`None` —
+/// обычный неразрушаемый ящик).
+fn with_props(map_json: String, bodies: &[([f32; 2], u8, Option<&str>)]) -> String {
+    let mut map: serde_json::Value = serde_json::from_str(&map_json).unwrap();
+
+    map["physicsDynamic"] = bodies
+        .iter()
+        .map(|(position, level, prop)| {
+            let mut body = serde_json::json!({
+                "density": 100,
+                "position": position,
+                "angle": 0,
+                "width": 32,
+                "height": 32,
+                "linearDamping": 3,
+                "angularDamping": 3,
+                "level": level
+            });
+
+            if let Some(prop) = prop {
+                body["game"] = serde_json::json!({ "prop": prop });
+            }
+
+            body
+        })
+        .collect();
+
+    map.to_string()
+}
+
+/// Конфиг, у которого `c1`/`c2` объявляют роли `z`/`level`/`state`, как
+/// src/config/snapshot.js: движок пишет байт состояния в строку тела.
+fn config_json_with_body_state() -> String {
+    let mut flat = flat_config_json();
+    let fields = serde_json::json!([
+        { "name": "x", "ty": "f32", "interp": "lerp" },
+        { "name": "y", "ty": "f32", "interp": "lerp" },
+        { "name": "angle", "ty": "f32", "interp": "lerpAngle" },
+        { "name": "z", "ty": "f32", "interp": "lerp", "role": "z" },
+        { "name": "level", "ty": "u8", "role": "level" },
+        { "name": "state", "ty": "u8", "role": "state" },
+        { "name": "vx", "ty": "f32", "interp": "lerp" },
+        { "name": "vy", "ty": "f32", "interp": "lerp" },
+        { "name": "angvel", "ty": "f32", "interp": "lerp" }
+    ]);
+
+    for key in ["c1", "c2"] {
+        flat["snapshot"]["keys"][key]["optionalFrom"] = serde_json::json!(6);
+        flat["snapshot"]["keys"][key]["fields"] = fields.clone();
+    }
+
+    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+}
+
+/// Конфиг с другим уроном взрыва бочки.
+fn config_json_with_barrel_damage(damage: f64) -> String {
+    let mut flat = flat_config_json();
+
+    flat["props"]["barrel"]["blast"]["damage"] = serde_json::json!(damage);
+
+    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+}
+
+/// Байты состояния тел карты (`map_body_state` дампа).
+fn body_states(core: &GameCore) -> Vec<u8> {
+    let dump: serde_json::Value = serde_json::from_slice(&core.serialize_state().unwrap()).unwrap();
+
+    serde_json::from_value(dump["map_body_state"].clone()).unwrap()
+}
+
+fn body_enabled(core: &GameCore, index: usize) -> bool {
+    let state = core.state();
+    let handle = state.map.as_ref().unwrap().dynamic_handle(index).unwrap();
+
+    state.world.bodies[handle].is_enabled()
+}
+
+fn prop_hp(core: &GameCore, index: usize) -> f32 {
+    core.state().sim.props().get(index).unwrap().hp
+}
+
+/// Сколько строк `w2e` накопилось с прошлой сборки кадра.
+fn explosion_rows(core: &mut GameCore) -> usize {
+    core.state_mut()
+        .build_snapshot_blocks()
+        .into_iter()
+        .map(|(key, block)| match block {
+            Block::List16(rows) if key == "w2e" => rows.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Байт `state` строки тела `index` в блоке `c1` собранного кадра.
+fn frame_state(core: &mut GameCore, index: u8) -> u8 {
+    let blocks = core.state_mut().build_snapshot_blocks();
+    let rows = blocks
+        .into_iter()
+        .find_map(|(key, block)| match block {
+            Block::IndexedNoNull8(rows) if key == "c1" => Some(rows),
+            _ => None,
+        })
+        .expect("блок c1 в кадре");
+    let (_, fields) = rows.into_iter().find(|(id, _)| *id == index).expect("строка тела");
+
+    match fields[5] {
+        FieldValue::U8(state) => state,
+        _ => panic!("поле state строки тела должно быть u8"),
+    }
+}
+
+fn deaths(all: &[CoreEvent]) -> Vec<(u32, u32)> {
+    all.iter()
+        .filter_map(|event| match event {
+            CoreEvent::Death { victim, killer } => Some((*victim, *killer)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn shots_break_a_fence_and_take_a_crate_through_the_damaged_stage() {
+    let mut core = GameCore::new(&config_json_with_body_state()).unwrap();
+
+    core.load_map(&with_props(map_json(), &[([200.0, 84.0], 0, Some("fence"))])).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+
+    fire(&mut core, 1, 3);
+
+    assert_eq!(body_states(&core), vec![2], "пуля 40 ломает забор (30 HP)");
+    assert!(!body_enabled(&core, 0), "разрушенное тело отключено");
+    assert_eq!(frame_state(&mut core, 0), 2);
+
+    let mut core = GameCore::new(&config_json_with_body_state()).unwrap();
+
+    core.load_map(&with_props(map_json(), &[([200.0, 84.0], 0, Some("crate"))])).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+
+    let mut states = Vec::new();
+
+    for seq in 1..=6 {
+        fire(&mut core, seq, 3);
+        states.push(body_states(&core)[0]);
+
+        if seq == 4 {
+            assert_eq!(frame_state(&mut core, 0), 1, "стадия «повреждён» в кадре");
+        }
+    }
+
+    // пуля по ящику — 40 × 0.5 = 20 HP; стадия — ниже 60 из 120
+    assert_eq!(states, vec![0, 0, 0, 1, 1, 2]);
+    assert!(!body_enabled(&core, 0));
+    assert_eq!(frame_state(&mut core, 0), 2);
+}
+
+#[test]
+fn ramming_at_full_speed_breaks_a_fence_slow_push_does_not() {
+    let mut fast = make_core();
+
+    fast.load_map(&with_props(map_json(), &[([400.0, 84.0], 0, Some("fence"))])).unwrap();
+    fast.spawn_actor(1, "m1", 1, 60.0, 100.0, 0.0).unwrap();
+    fast.apply_input(1, 1, "down", "forward");
+
+    let mut broke_at = None;
+
+    for step in 0..360 {
+        fast.step(DT);
+
+        if broke_at.is_none() && body_states(&fast)[0] == 2 {
+            broke_at = Some(step);
+        }
+    }
+
+    assert!(broke_at.is_some(), "таран на скорости ломает забор, HP {}", prop_hp(&fast, 0));
+
+    let mut slow = make_core();
+
+    // танк 8×6 стоит вплотную к забору и толкает его с места
+    slow.load_map(&with_props(map_json(), &[([104.5, 84.0], 0, Some("fence"))])).unwrap();
+    slow.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    slow.apply_input(1, 1, "down", "forward");
+    steps(&mut slow, 240);
+
+    assert_eq!(body_states(&slow), vec![0]);
+    assert_eq!(prop_hp(&slow, 0), 30.0, "медленное толкание урона не наносит");
+    assert!(dynamic_box_x(&slow) > 130.0, "забор уехал перед танком: {}", dynamic_box_x(&slow));
+}
+
+#[test]
+fn shot_barrel_explodes_and_its_kill_is_a_suicide() {
+    let mut core = GameCore::new(&config_json_with_barrel_damage(500.0)).unwrap();
+
+    core.load_map(&with_props(map_json(), &[([200.0, 84.0], 0, Some("barrel"))])).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 216.0, 140.0, 0.0).unwrap();
+    core.step(DT);
+    core.take_events();
+    explosion_rows(&mut core);
+
+    fire(&mut core, 1, 3);
+
+    let all = events(&mut core);
+
+    assert_eq!(body_states(&core), vec![2]);
+    assert_eq!(explosion_rows(&mut core), 1, "взрыв бочки — строка w2e");
+    assert_eq!(deaths(&all), vec![(2, 2)], "смерть от бочки — самоубийство: {all:?}");
+    assert!(
+        all.iter().any(|event| matches!(event, CoreEvent::Shake { id: 2, .. })),
+        "тряска из blast.cameraShake: {all:?}"
+    );
+    assert_eq!(health_of(&all, 1), None, "стрелок вне радиуса: {all:?}");
+}
+
+#[test]
+fn barrel_hurts_a_nearby_tank_without_killing_it() {
+    let mut core = make_core();
+
+    core.load_map(&with_props(map_json(), &[([200.0, 84.0], 0, Some("barrel"))])).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    // своя команда стрелка: у бочки дружественного огня нет
+    core.spawn_actor(2, "m1", 1, 216.0, 140.0, 0.0).unwrap();
+    core.step(DT);
+    core.take_events();
+
+    fire(&mut core, 1, 3);
+
+    let all = events(&mut core);
+
+    assert!(health_of(&all, 2).is_some_and(|h| h > 0.0 && h < 100.0), "события: {all:?}");
+    assert!(deaths(&all).is_empty());
+}
+
+/// Бочки 0 и 1 почти вплотную: центры в 33 единицах, взрыв первой (80 с
+/// линейным спадом на радиусе 70) снимает второй все 40 HP.
+fn chained_barrels_map_json() -> String {
+    with_props(map_json(), &[([200.0, 84.0], 0, Some("barrel")), ([233.0, 84.0], 0, Some("barrel"))])
+}
+
+/// Стреляет в бочку 0 и шагает до её взрыва; номер шага от выстрела.
+fn shoot_first_barrel(core: &mut GameCore) -> usize {
+    core.apply_input(1, 1, "down", "fire");
+
+    for step in 0..10 {
+        core.step(DT);
+
+        if body_states(core)[0] == 2 {
+            return step;
+        }
+    }
+
+    panic!("бочка 0 не взорвалась от выстрела");
+}
+
+#[test]
+fn chained_barrel_explodes_after_the_chain_delay() {
+    let mut core = make_core();
+
+    core.load_map(&chained_barrels_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+    explosion_rows(&mut core);
+
+    shoot_first_barrel(&mut core);
+
+    assert_eq!(body_states(&core), vec![2, 0], "вторая бочка до взрыва цела");
+    assert!(body_enabled(&core, 1), "и её тело включено");
+    assert_eq!(prop_hp(&core, 1), 0.0);
+    assert_eq!(explosion_rows(&mut core), 1, "в шаге выстрела — один взрыв");
+
+    let mut delay = 0;
+
+    while body_states(&core)[1] != 2 {
+        core.step(DT);
+        delay += 1;
+
+        assert!(delay < 60, "вторая бочка так и не взорвалась");
+    }
+
+    // chainDelay 0.15 с при шаге 1/120 — 18 шагов
+    assert_eq!(delay, 18);
+    assert!(!body_enabled(&core, 1));
+    assert_eq!(explosion_rows(&mut core), 1);
+}
+
+#[test]
+fn barrel_on_level_one_does_not_hurt_the_ground_tank() {
+    let mut core = make_core();
+
+    core.load_map(&with_props(layered_map_json(), &[([368.0, 256.0], 1, Some("barrel"))])).unwrap();
+    // стрелок на плите, бочка на плите по лучу; цели — в одной точке
+    // рядом с бочкой: одна на мосту, вторая под ним
+    core.spawn_actor(1, "m1", 1, 336.0, 272.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 384.0, 320.0, 0.0).unwrap();
+    core.spawn_actor(3, "m1", 2, 384.0, 320.0, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    core.set_actor_level(3, 0);
+    steps(&mut core, 2);
+
+    assert_eq!((level_of(&core, 2), level_of(&core, 3)), (1, 0));
+    core.take_events();
+
+    fire(&mut core, 1, 4);
+
+    let all = events(&mut core);
+
+    assert_eq!(body_states(&core), vec![2]);
+    assert!(health_of(&all, 2).is_some_and(|h| h < 100.0), "танк на мосту задет: {all:?}");
+    assert_eq!(health_of(&all, 3), None, "плита экранирует взрыв бочки: {all:?}");
+}
+
+#[test]
+fn destroyed_fence_lets_rays_tanks_and_blasts_through() {
+    use rapier2d::prelude::{QueryFilter, Ray, Vector};
+
+    let mut core = make_core();
+
+    core.load_map(&with_props(map_json(), &[([200.0, 84.0], 0, Some("fence"))])).unwrap();
+    core.spawn_actor(1, "m1", 1, 180.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+
+    fire(&mut core, 1, 3);
+
+    assert_eq!(body_states(&core), vec![2]);
+
+    // луч, каким бот ищет препятствия, сквозь обломки проходит
+    let ray = Ray::new(Vector::new(190.0, 100.0), Vector::new(1.0, 0.0));
+    let hit = core.state().world.cast_ray(&ray, 60.0, true, QueryFilter::new().exclude_sensors());
+
+    assert!(hit.is_none(), "разрушенное тело не видно лучам");
+
+    // бомба рядом с обломками их не толкает
+    let before = dynamic_box_x(&core);
+
+    core.apply_input(1, 2, "down", "nextWeapon");
+    core.step(DT);
+    core.apply_input(1, 3, "down", "fire");
+    steps(&mut core, 50);
+
+    assert_eq!(dynamic_box_x(&core), before, "бомба не толкает разрушенное тело");
+
+    // танк проезжает там, где стоял забор
+    core.apply_input(1, 4, "down", "forward");
+    steps(&mut core, 120);
+
+    assert!(tank_x(&core, 1) > 240.0, "танк проехал сквозь обломки: {}", tank_x(&core, 1));
+}
+
+#[test]
+fn map_reload_restores_destroyed_props() {
+    let map = with_props(map_json(), &[([200.0, 84.0], 0, Some("fence")), ([300.0, 300.0], 0, None)]);
+    let mut core = make_core();
+
+    core.load_map(&map).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+
+    fire(&mut core, 1, 3);
+
+    assert_eq!(body_states(&core), vec![2, 0]);
+
+    // рестарт раунда: движок перезагружает ту же карту
+    core.load_map(&map).unwrap();
+
+    assert_eq!(body_states(&core), vec![0, 0]);
+    assert!(body_enabled(&core, 0));
+    assert_eq!(prop_hp(&core, 0), 30.0);
+    assert!(core.state().sim.props().get(1).is_none(), "тело без `game.prop` — не проп");
+}
+
+#[test]
+fn unknown_prop_fails_the_map_load() {
+    let mut core = make_core();
+    // ошибка — через EngineSim: JsError вне WASM не создаётся
+    let error = core
+        .state_mut()
+        .load_map(&with_props(map_json(), &[([200.0, 84.0], 0, Some("tree"))]))
+        .unwrap_err();
+
+    assert!(error.contains("physicsDynamic[0].game.prop") && error.contains("tree"), "{error}");
+}
+
+#[test]
+fn state_dump_restores_identical_simulation_with_a_pending_detonation() {
+    let mut core = make_core();
+
+    core.load_map(&chained_barrels_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 266.0, 150.0, 0.0).unwrap();
+    core.step(DT);
+
+    shoot_first_barrel(&mut core);
+    steps(&mut core, 5);
+
+    assert_eq!(body_states(&core), vec![2, 0], "вторая бочка взведена, но цела");
+
+    core.pack_body().unwrap();
+    core.take_events();
+
+    let dump = core.serialize_state().unwrap();
+    let mut restored = make_core();
+
+    restored.deserialize_state(&dump).unwrap();
+
+    assert_eq!(restored.state().sim.props(), core.state().sim.props());
+
+    steps(&mut core, 60);
+    steps(&mut restored, 60);
+
+    assert_eq!(body_states(&restored), vec![2, 2], "детонация из дампа состоялась");
+    assert_eq!(body_states(&core), body_states(&restored));
+    assert_eq!(core.state().sim.props(), restored.state().sim.props());
+    assert_eq!(core.position_of(1), restored.position_of(1));
+    assert_eq!(core.position_of(2), restored.position_of(2));
+    assert_eq!(core.take_events(), restored.take_events());
+}
+
+/// Регрессия центра взрыва: позиция тела карты — угол объекта, и импульс,
+/// приложенный к углу, закручивал ящик. От центра коллайдера — без вращения.
+#[test]
+fn bomb_pushes_a_map_box_from_its_center() {
+    let mut core = make_core();
+
+    core.load_map(&map_with_box_json(110.0, 110.0)).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+    core.step(DT);
+
+    core.apply_input(1, 1, "down", "nextWeapon");
+    core.step(DT);
+    core.apply_input(1, 2, "down", "fire");
+    steps(&mut core, 50);
+
+    let state = core.state();
+    let handle = state.map.as_ref().unwrap().dynamic_handle(0).unwrap();
+    let body = &state.world.bodies[handle];
+
+    assert!(body.linvel().length() > 1.0, "взрыв толкает ящик: {:?}", body.linvel());
+    assert!(body.angvel().abs() < 1e-4, "импульс через центр не закручивает: {}", body.angvel());
 }

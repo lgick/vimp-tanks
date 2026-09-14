@@ -43,8 +43,38 @@ describe('HostPlugin танков: поверхность', () => {
     }
   });
 
-  it('не задаёт onCoreEvent: не использует custom-события ядра', () => {
-    expect(hostPlugin.onCoreEvent).toBeUndefined();
+  it('onCoreEvent: mapDerivedError уходит в console.warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const services = {};
+
+    hostPlugin.onCoreEvent(
+      { type: 'mapDerivedError', message: 'surfaces: invalid type' },
+      services,
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('surfaces: invalid type');
+
+    warn.mockRestore();
+  });
+
+  it('onCoreEvent: прочие custom-события игнорируются', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    hostPlugin.onCoreEvent({ type: 'other' }, {});
+
+    expect(warn).not.toHaveBeenCalled();
+
+    warn.mockRestore();
+  });
+
+  it('объявляет возможности движка для полей game и state карты', () => {
+    expect(hostPlugin.requires).toEqual([
+      'map.layers',
+      'map.levelsN',
+      'map.gameData',
+      'map.bodyState',
+    ]);
   });
 
   it('createModules возвращает scripted-модуль с контрактом движка', () => {

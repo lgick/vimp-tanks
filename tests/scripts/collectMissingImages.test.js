@@ -32,6 +32,30 @@ describe('collectRequiredImages', () => {
     expect(collectRequiredImages([map])).toEqual(['tiles.png']);
   });
 
+  it('берёт картинки состояний пропа из game', () => {
+    const map = {
+      physicsDynamic: [
+        {
+          img: 'crate.png',
+          game: {
+            prop: 'crate',
+            imgDamaged: 'crate-damaged.png',
+            imgDestroyed: 'crate-debris.png',
+          },
+        },
+        // бочка без imgDestroyed: копоть процедурная, файла не требует
+        { img: 'barrel.png', game: { prop: 'barrel' } },
+      ],
+    };
+
+    expect(collectRequiredImages([map])).toEqual([
+      'barrel.png',
+      'crate-damaged.png',
+      'crate-debris.png',
+      'crate.png',
+    ]);
+  });
+
   it('одно и то же имя из разных карт не дублируется', () => {
     const other = { spriteSheet: { img: 'tiles.png' } };
 

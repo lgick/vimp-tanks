@@ -61,6 +61,10 @@ direct import.
   contract rule `B2` has something to compare. Without layered maps in the
   engine `overpass` would load without its second level and without a single
   error, so the capability is a hard requirement rather than a hint.
+  The full list is `['map.layers', 'map.levelsN', 'map.gameData',
+  'map.bodyState']`: `map.gameData` delivers the map's `game` field (and
+  `physicsDynamic[i].game`) to the core on both sides, `map.bodyState` —
+  the `state` byte in the `c1`/`c2` row.
 
 Full contract — the engine's
 [plugin-api.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/plugin-api.md).
@@ -118,9 +122,17 @@ which `ShotEffect` anchors its debris to the box the shot hit (see
 local player is, on which level and at which height: the local `Tank` writes
 it, and everything that has to yield visibility to him reads it (see below).
 The same service owns the frame's camera centre — it is asked for the scene
-once and computes the centre itself.
+once and computes the centre itself. `surfaces` tells `Dust`, `Tracks` and
+`Tank` what the tank drives on: `kindAt(x, y, level)` gives the type name of
+the cell (`sand`, `mud`, `water`, `oil`, `conveyor`, `boost`) or `null`, and
+`dirAt(x, y, level)` the unit vector of its arrow or `null`. It reads the
+core's own table (`ClientCore.surface_at`/`surface_dir_at`) instead of a copy
+of `game.surfaces` on JS: a second copy could drift from the physics
+silently — dust rising where the track does not slow down. The type names
+(`surface_types`) are cached until the map changes (`map_generation`).
 
-The same two names are repeated in `ClientPlugin.serviceNames`. The hook
+The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`)
+are repeated in `ClientPlugin.serviceNames`. The hook
 needs a live core, so the contract checker cannot read what it returns; the
 list is what lets rule `C4` tell a game service from a typo in
 `componentDependencies` instead of downgrading itself to a warning — an
@@ -290,6 +302,110 @@ The consequences the parts implement themselves:
   that is a sibling of the `Tracks` part on the stage, so a mark left on the
   overpass stays on the overpass after the tank drives down.
 
+### Lighting (night)
+
+On a map with `game.lighting.night: true` the `lighting` service
+(`src/client/lighting/`, created in `hooks.services` next to `levelView`)
+darkens the scene. It is **atmosphere only**: enemies stay readable (every
+live tank carries a faint `tankGlow`), the radar does not change, and
+`render.js → lighting.enabled = false` switches the system off on any map.
+
+- **One light map per level.** Level `L` gets an overlay container on the
+  stage at `zIndex = levelZ(40, L)` — above every dynamic part of its level
+  (`Tank` 3, smoke 4, volume occluder 5) and below the level stride. Inside:
+  a full-screen base, the floor mask and the light sources drawn additively.
+  A pass-through filter at `lighting.resolution` renders that into a pooled
+  texture and lays it onto the scene with `blendMode: 'multiply'`.
+- **A filter, not a `RenderTexture`.** Parts drive the service from
+  `onRender`, and PixiJS calls it INSIDE a frame, after the screen target is
+  bound (`renderStart`). A nested `renderer.render({ target })` there resets
+  the render-target stack, and the rest of the frame would be drawn into the
+  light map. A filter renders through the push/pop of the same pass.
+- **White base and floor mask.** Level 0's base is `ambient`. For `L ≥ 1`
+  the base is **white** (multiplying by white changes nothing); on top the
+  floor cells of that level (`setLevelMask` — the union of the contributions
+  of the level's layers; railings are part of `floor`) are filled with
+  `ambient` in the level's projection, then its lights. Outside the floor the
+  map stays white, so level 0 is not darkened twice, a level-0 light never
+  reaches the bridge slab (it is drawn under it), and a bridge light never
+  spills outside the slab. The level-0 overlay always exists on a night map;
+  an upper one only while its mask is non-empty.
+- **The hole above the player.** An upper overlay gets the same hole as its
+  slab (`holeOverlay`, its own filter state; in `'layer'` mode — the
+  overlay's `alpha`), otherwise a dark patch would stay in the hole. While
+  the hole is attached, its filter is the last in the chain and carries the
+  `multiply` blend itself.
+- **Emissive layer.** Per level a container at `levelZ(45, L)` with additive
+  sprites drawn over the darkness: lamp heads (created by the service),
+  headlight glares (`Tank`), neon signs (`parts/map/NeonSign.js`). Their transparency is
+  `levelView.alphaFor`. Without night `addEmissive` returns `false`, and the
+  caller keeps its sprite — or, for glares, does not create one.
+- **Map state and session state.** The engine destroys every part of the old
+  map before it creates the new ones, so the service counts parts per map
+  key (`lightMath.mapKeyOf`: grid size plus a hash of `game.lighting` — the
+  only data every static part has) and runs `clear()` when the counter of
+  the CURRENT key reaches zero: overlays, lamps and mask contributions go,
+  first off the stage, then destroyed. Textures, `addLight` sources and
+  emissive entries are session state: tanks and effects outlive a map change
+  and remove their own in `destroy()`. A key switch while the old counter is
+  still live (the reverse order) frees only the old map. After a WebGL
+  context loss the engine recreates every part: the counter drops to zero,
+  the new parts acquire the key again and register fresh baked textures.
+  The parts acquire the key synchronously in their constructor, before the
+  asynchronous layer build — a tank created on the first frame must already
+  see the night.
+- **Sources.** Lamps (`game.lighting.lamps`, cell centres, owned by the
+  service), two headlight cones and a glow per live tank (updated in
+  `Tank.update`, in world coordinates, before the frame is drawn), and short
+  flashes from `ExplosionEffect` and `ShotEffect`. They share three baked
+  textures (`lightRadialTexture`, `headlightConeTexture`, `lampHeadTexture`)
+  and therefore batch, are culled against the screen and capped by
+  `lighting.maxLights`. The layout runs once per stage transform per tick.
+- **No shift shadows.** Sources light spots and cast nothing: projected
+  shadows would need the geometry of every wall per light per frame, and
+  the 2.5D volumes already read as height.
+
+### Animated map elements
+
+Water, conveyors, rooftop fans and neon signs are client-only; the host
+knows nothing about them.
+
+- **`layerRoot`.** A static layer (`parts/map/MapLayer.js`) keeps a root
+  container inside its part: the baked `mapSprite` first, then the
+  `animated` container. Parallax and the map scale are applied to
+  `layerRoot`, so live sprites move with the baked picture. The hole filter
+  and the `'layer'`-mode alpha stay on the part container itself — it also
+  holds the ramp wedge meshes, and both have to fade.
+- **Animated tiles are not baked.** `bakeTileLayer({ exclude })` skips the
+  tiles of `game.animatedTiles`; `parts/map/animatedTiles.js` draws one
+  sprite per cell of such a tile in `animated`, grouped by description (a
+  group shares its frame number, one pass per group). Textures come from
+  the layer's own parsed sheet (`parseSpriteSheet`) over the same tile
+  image, so they batch with each other. A group whose container is entirely
+  off screen is not updated that tick.
+- **Shared clock.** `src/client/animationClock.js` advances once per
+  `Ticker.shared` tick (seconds since start), however many times the canvas
+  is drawn in that tick; every map and layer is in sync.
+  `render.js → animations.maxFps` quantizes it. Tile frames, decal rotation
+  and flicker are functions of that time, not accumulated steps.
+- **Neon.** `parts/map/neonCache.js` bakes a sign's white `core` (a `Text`)
+  and its blurred `glow` once per text and size and refcounts them; at zero
+  both textures are destroyed. The engine destroys every part after a WebGL
+  context loss, so the count drops to zero and new signs bake fresh
+  textures instead of reusing dead ones. A sign (`NeonSign.js`) is built in
+  the layer's async `_build`, after the synchronous `acquireMap`: at night
+  both sprites go to the emissive layer (`addEmissive`), the sign adds a
+  light of its colour and positions itself in the level's projection every
+  draw; otherwise (`addEmissive → false`: day or `lighting.enabled = false`)
+  it stays in `animated`. The flicker (`src/client/neonFlicker.js`) is a pure
+  function of time and a cell hash — pulse plus SplitMix32-scheduled
+  dropouts — identical on every client. `destroy()` removes the light and
+  the emissive entries; the cache references are released after the part is
+  off the stage.
+- **Ownership.** Signs and decals are built only by the layer whose
+  `(level, layer)` match; the tile sheet and the sprites' textures are the
+  layer's, released in its deferred `destroy` callback.
+
 ### Texture and particle lifecycle
 
 - **Texture ownership**: baked assets (`bakedAssets` in `src/config/client.js`)
@@ -309,6 +425,19 @@ The consequences the parts implement themselves:
   the `TextureSource`, which emits `change`, which nulls the `BindGroup`
   (`BindGroup.onResourceChange`), and the next filter pass throws in
   `setResource`. The `Assets` cache survives a map change on its own.
+- **Prop state textures** (`parts/map/MapObject.js`). A prop follows the
+  `state` byte of its `c1`/`c2` row: `0 ↔ 1` swaps the sprite to
+  `game.imgDamaged`, `→ 2` to `game.imgDestroyed` or, without one, hides it
+  under a procedural scorch sprite (`scorchTexture`), drops the body to base
+  `zIndex` 1 (under the tanks), fires a one-off debris burst
+  (`parts/effects/DebrisEffect.js`, `debrisTexture`, world coordinates, a
+  sibling on the scene the part removes itself) and the `propBreak` sound;
+  `2 → 0` (a new round) restores the texture and the `zIndex`. The first
+  frame that already says `2` (joining mid-round) shows the debris with no
+  burst and no sound. State images are loaded with `Assets.load` and, like
+  `img`, never unloaded; the texture is applied only if the part is not
+  destroyed and the body is still in that state after the `await`. Alpha,
+  tint and parallax are unchanged.
 - **A layer is baked once.** The volume slices are sprites over the SAME
   baked texture as the flat layer, and only its owner (`mapSprite`) frees
   it. The ramp wedge has a second baked texture of its own (ramp tiles

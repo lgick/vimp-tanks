@@ -1,7 +1,18 @@
 import { Sprite } from 'pixi.js';
 
 export default class TrackMark extends Sprite {
-  constructor(x, y, rotation, width, length, initialAlpha, texture) {
+  // lifetimeFactor — множитель времени жизни (поверхность: масло держит след
+  // дольше)
+  constructor(
+    x,
+    y,
+    rotation,
+    width,
+    length,
+    initialAlpha,
+    texture,
+    lifetimeFactor = 1,
+  ) {
     super(texture);
 
     this.anchor.set(0.5);
@@ -18,7 +29,7 @@ export default class TrackMark extends Sprite {
 
     // время в ms, за которое сегмент следа полностью исчезнет
     // рандомность, чтобы следы исчезали не все одновременно
-    this._fadeDuration = 1800 + Math.random() * 700;
+    this._fadeDuration = (1800 + Math.random() * 700) * lifetimeFactor;
   }
 
   // обновляет состояние следа

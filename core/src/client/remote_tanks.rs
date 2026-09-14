@@ -874,6 +874,23 @@ mod tests {
         assert_eq!(body(&tanks, "m1:7").mode, Mode::Predicted);
     }
 
+    // сталкиваемость ведёт только динамика карты: чужой танк из кадра
+    // всегда твёрдый, даже обломками
+    #[test]
+    fn remote_tanks_stay_collidable() {
+        let mut tanks = remote_tanks();
+        let mut row = at(0.0, 0.0);
+
+        row[FIELD_CONDITION] = FieldValue::U8(0);
+
+        tanks.update(&game(&[("m1", 7, row.clone())]));
+        tanks.begin_reconcile(&snapshot(&[(7, Some(row))]));
+        tanks.finish_reconcile();
+        tanks.capture(&tank_obb(-15.0, 0.0), 1000.0);
+
+        assert!(body(&tanks, "m1:7").collidable);
+    }
+
     #[test]
     fn capture_respects_the_predicted_cap() {
         let mut tanks = remote_tanks();

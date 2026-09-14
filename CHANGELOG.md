@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### ⚠️ Breaking
 
+- The `c1`/`c2` dynamic map row grew by one byte: `state` (`u8`,
+  `role: 'state'`) now sits after `level`, making the row
+  `[x, y, angle, z, level, state, vx, vy, angvel]` (`optionalFrom: 6`).
+  It is always `0` for now. A host and a client on different versions of the
+  plugin no longer read the same frame.
+- Both plugin halves now require the engine capabilities `map.gameData` and
+  `map.bodyState` in addition to `map.layers` and `map.levelsN`.
 - The `m1` snapshot row grew from 13 to 16 fields (`vz`, `pitch`, `roll`).
   A host and a client on different versions of the plugin no longer read
   the same frame.
@@ -25,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Migration
 
+- Requires `vimp-engine >= 0.34.0` and `vimp-engine-core 0.20.0`. Rebuild the
+  core (`npm run core:build`) and release host and client together — the
+  `c1`/`c2` row layout changed.
 - Rebuild the core (`npm run core:build`) and republish host and client
   together — the frame layout changed.
 - To restore the previous, jump-free behaviour set
@@ -37,6 +47,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The `downtown` map: a night city on two levels and the reference for the
+  `game` map fields — sand, mud, water, oil, conveyors and boost plates,
+  destructible fences, crates and barrels, night lighting with lamps,
+  animated water, belts and boosts, neon signs and rooftop fans. Its art is
+  placeholders drawn by the new `npm run art:placeholders` (`city.png`,
+  `prop_*.png`); final art replaces the files without code changes.
+- Animated map elements, client-only: `game.animatedTiles` animates tiles
+  (water, conveyors — a conveyor's `speed` derives the frame rate so its
+  chevrons move with the belt) as live sprites left out of the layer bake;
+  `game.signs` draws neon signs with a deterministic pulse and dropouts that
+  glow over the darkness and light their surroundings on night maps;
+  `game.decals` places rotating or frame-animated sprites such as rooftop
+  fans. `src/config/render.js → animations` (`enabled`, `maxFps`) controls
+  them.
+- Night maps: `game.lighting` (`night`, `ambient`, `lamps`) darkens the
+  scene with a multiply light map per level — lamps light only their own
+  level, a bridge is not darkened twice — plus two headlight cones and a
+  faint glow on every live tank, emissive lamp heads and headlight glares,
+  and short explosion and shot flashes. Atmosphere only: enemies stay
+  readable and the radar is unchanged.
+- `src/config/render.js → lighting` (`enabled`, `resolution`, `maxLights`,
+  `headlights`, `tankGlow`, `flash`), the client service `lighting` and the
+  baked textures `lightRadialTexture`, `lampHeadTexture` and
+  `headlightConeTexture`.
+- Destructible props are visible on the client: a prop swaps to the optional
+  `physicsDynamic[i].game.imgDamaged`/`game.imgDestroyed` images as its
+  `state` byte changes; a destroyed prop without `imgDestroyed` is drawn as a
+  procedural scorch (the new `scorchTexture` baker), lies under the tanks,
+  throws a one-off burst of splinters (the new `debrisTexture` baker) and
+  plays the new `propBreak` sound; a new round restores the look. A player
+  joining mid-round sees the debris without the burst. The client's
+  prediction treats destroyed bodies as debris: they are not captured or
+  collided with, and the local tracer flies through them.
+  `npm run build:manifest` checks the state images too.
+- Surfaces are visible: sand raises light dust while driving, mud throws dark
+  clods, water sprays to the sides and splashes on entry, oil raises no dust
+  and leaves dark long-lived track marks, water leaves none, and a boost plate
+  flashes a tail when it fires. The client reads the surface from the core's
+  own table through the new `ClientCore.surface_at`/`surface_types`/
+  `surface_dir_at` and the `surfaces` service
+  (`componentDependencies.surfaces`); the look is tuned in
+  `render.js → surfaceFx`. Surfaces have no sounds yet.
+- Surfaces act on map bodies too: crates and barrels ride conveyors, slow down
+  in sand, mud and water and get the boost push, sampled at the body's centre,
+  on the host and in the client's replica of predicted bodies alike. Oil does
+  not affect them. The new `coreParams.surfaces.bodyBeltCoupling` (default
+  `4.0`, 1/s) sets how hard a belt pulls a body toward its speed; destroyed
+  bodies (`state ≥ 2`) take no surface forces.
+- Cell surfaces. A map marks tiles per level with `game.surfaces` (`sand`,
+  `mud`, `water`, `oil`, `conveyor`, `boost`; the types and their coefficients
+  live in the new optional `coreParams.surfaces`). Surfaces change a tank's
+  thrust, speed ceiling, drag, lateral grip, braking and turning, sampled per
+  track, so a track in mud pulls the tank aside; a conveyor moves the floor
+  and a boost plate pushes once along its arrow on entry. The host and the
+  client's prediction compute them with the same functions; maps without
+  `game.surfaces` move exactly as before. A map naming an unknown type, a
+  `dir` on a plain type or a surface on a wall or ramp tile is refused on load.
+- The map's `game` field and `physicsDynamic[i].game` are parsed by the core
+  on both the host and the client (`core/src/map_game.rs`); nothing reads
+  them yet.
+- `HostPlugin.onCoreEvent` logs the core's `mapDerivedError` custom event
+  (the map's `game` field failed to parse after a state restore) with
+  `console.warn`.
 - `levels.maxLaunchVz` — the ceiling of the vertical take-off speed off a
   ramp, and with it of the jump's arc.
 - `levels.fallDamageFreeHeight` — the dead zone of fall damage.
@@ -83,6 +156,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   is capped by `intensity`; a soft touchdown below `minImpact` shakes
   nothing, the same threshold at which the client gives no squash, no dust
   and no thud. Omitting the block keeps the previous, shake-free behaviour.
+- Destructible map objects. A `physicsDynamic` body with `game.prop` becomes
+  a fence, a crate or a barrel from the new `coreParams.props` section; an
+  unknown prop name fails the map load. Shots, blasts and ramming at speed
+  damage props; a crate passes a damaged stage; a destroyed body is disabled
+  (its debris blocks no tank, ray or blast) and its `state` byte in the
+  `c1`/`c2` row becomes `1`/`2`. A destroyed barrel explodes (a `w2e` row),
+  sets off neighbouring barrels after `chainDelay`, and a death from its blast
+  is a suicide. Everything is restored at the start of each round, and the
+  state survives the handoff dump.
 
 ### Changed
 
@@ -129,6 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- An explosion measured the distance to a map body, and applied its push, at
+  the body's corner instead of its centre, so crates were spun and caught or
+  missed depending on their orientation. Blasts now use the collider centre:
+  a box whose centre lies outside the radius is no longer pushed.
 - **A blank screen and a `BindGroup.setResource` crash on the second switch
   to a map with a long ramp** (`terraces`): the ramp skirt is longer than
   PixiJS's 100-vertex batching threshold, so it was drawn by the

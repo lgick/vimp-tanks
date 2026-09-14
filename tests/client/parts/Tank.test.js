@@ -10,6 +10,7 @@ import {
   landing,
 } from '../../../src/config/render.js';
 import { createLevelView } from '../../../src/client/levelView.js';
+import { createLighting } from '../../../src/client/lighting/createLighting.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
 // (регистрация/обновление/снятие) — визуал рендером не трогаем.
@@ -879,5 +880,137 @@ describe('calculateEngineSoundParams', () => {
     expect(calculateEngineSoundParams(0, 0).rate).toBeCloseTo(1, 6);
     // на полном ходу покачивание выключено множителем (1 - baseLoad)
     expect(calculateEngineSoundParams(1, peakMs).rate).toBeCloseTo(1.15, 6);
+  });
+});
+
+// Ночь: у живого танка два конуса фар и свет под корпусом (источники
+// сессии сервиса), блики фар — эмиссивные спрайты в контейнере сервиса.
+describe('Tank: фары (lighting)', () => {
+  const headAsset = () => ({ texture: sized(22, 22), contentSize: 20 });
+  const coneAsset = () => ({
+    texture: sized(136, 136),
+    length: 128,
+    halfWidth: 64,
+    margin: 4,
+  });
+
+  // m1: [x, y, angle, gun, vx, vy, load, condition, size, team, angvel, z, level]
+  const row = (condition = 100, level = 0) => [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    condition,
+    10,
+    1,
+    0,
+    level,
+    level,
+  ];
+
+  // сервис на ночной карте с зарегистрированной `head` (её передаёт Map)
+  const nightService = (night = true) => {
+    const service = createLighting();
+
+    service.registerTextures({ head: headAsset() });
+    service.acquireMap('k', { night, lamps: [] }, 32, 1);
+
+    return service;
+  };
+
+  const makeLitTank = (service, condition = 100, level = 0) =>
+    new Tank(
+      row(condition, level),
+      { ...assets, headlightConeTexture: coneAsset() },
+      { soundManager: makeSoundManager(), lighting: service },
+    );
+
+  it('живой танк заводит 2 конуса, свет под корпусом и 2 блика', () => {
+    const service = nightService();
+    const addLight = vi.spyOn(service, 'addLight');
+    const addEmissive = vi.spyOn(service, 'addEmissive');
+    const tank = makeLitTank(service);
+
+    expect(addLight.mock.calls.map(([light]) => light.kind)).toEqual([
+      'cone',
+      'cone',
+      'radial',
+    ]);
+    expect(addEmissive).toHaveBeenCalledTimes(2);
+    expect(tank._glares).toHaveLength(2);
+    expect(service.texture('cone')).not.toBeNull();
+  });
+
+  it('конусы стоят на передней кромке корпуса по его курсу', () => {
+    const service = nightService();
+    const tank = makeLitTank(service);
+    const [left, right] = tank._headlights.cones;
+
+    // size 10: полкорпуса вдоль курса — 20, фары разнесены поперёк
+    expect(left.x).toBeCloseTo(20);
+    expect(right.x).toBeCloseTo(20);
+    expect(left.y).toBeLessThan(0);
+    expect(right.y).toBeGreaterThan(0);
+    expect(left.rotation).toBe(0);
+  });
+
+  it('без ночи блики не создаются, источники остаются', () => {
+    const service = nightService(false);
+    const tank = makeLitTank(service);
+
+    expect(tank._glares).toHaveLength(0);
+    expect(tank._headlights).not.toBeNull();
+  });
+
+  it('у обломка фар нет: переход в condition 0 снимает всё', () => {
+    const service = nightService();
+    const removeLight = vi.spyOn(service, 'removeLight');
+    const removeEmissive = vi.spyOn(service, 'removeEmissive');
+    const tank = makeLitTank(service);
+
+    tank.update(row(0));
+
+    expect(removeLight).toHaveBeenCalledTimes(3);
+    expect(removeEmissive).toHaveBeenCalledTimes(2);
+    expect(tank._headlights).toBeNull();
+    expect(tank._glares).toHaveLength(0);
+
+    const wreck = makeLitTank(service, 0);
+
+    expect(wreck._headlights).toBeNull();
+  });
+
+  it('destroy снимает источники и блики', () => {
+    const service = nightService();
+    const removeLight = vi.spyOn(service, 'removeLight');
+    const tank = makeLitTank(service);
+    const glares = [...tank._glares];
+
+    tank.destroy();
+
+    expect(removeLight).toHaveBeenCalledTimes(3);
+    expect(glares.every(glare => glare.destroyed)).toBe(true);
+  });
+
+  it('смена уровня переносит блик в эмиссив нового уровня', () => {
+    const service = nightService();
+    const tank = makeLitTank(service);
+    const addEmissive = vi.spyOn(service, 'addEmissive');
+    const removeEmissive = vi.spyOn(service, 'removeEmissive');
+
+    tank.update(row(100, 1));
+
+    expect(removeEmissive).toHaveBeenCalledTimes(2);
+    expect(addEmissive.mock.calls.map(([, level]) => level)).toEqual([1, 1]);
+    expect(tank._headlights.cones[0].level).toBe(1);
+  });
+
+  it('колбэк onRender по-прежнему зарегистрирован', () => {
+    const tank = makeLitTank(nightService());
+
+    expect(typeof tank._onRender).toBe('function');
   });
 });

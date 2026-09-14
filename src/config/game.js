@@ -104,6 +104,71 @@ export default {
         fullImpact: 6, // уровней/с, дающие полную интенсивность
       },
     },
+    // поверхности клеток: карта размечает тайлы полем `game.surfaces`, смысл
+    // типов задаётся здесь. Значения стартовые. Множители: accel — тяга,
+    // maxSpeed — потолок скорости, grip — боковое сцепление, brake —
+    // торможение без газа, turn — поворот (нейтрально 1). Добавки: drag —
+    // линейное сопротивление, angularDrag — угловое, 1/с (нейтрально 0;
+    // отрицательное ослабляет демпфирование, не ниже −damping.angular модели)
+    surfaces: {
+      trackYawGain: 0.004, // Δω на единицу разницы тяги гусениц (1/ед. длины)
+      trackSampleX: 0.6, // точки вдоль корпуса, доля полудлины
+      trackSampleY: 0.75, // линия гусеницы, доля полуширины
+      bodyBeltCoupling: 4.0, // связь ящика/бочки с лентой конвейера, 1/с
+      types: {
+        sand: { accel: 0.6, maxSpeed: 0.55, drag: 1.2, grip: 1.0, brake: 1.0, turn: 0.8 },
+        mud: { accel: 0.45, maxSpeed: 0.4, drag: 2.0, grip: 0.9, brake: 1.0, turn: 0.7 },
+        water: { accel: 0.7, maxSpeed: 0.6, drag: 1.5, grip: 0.8, brake: 0.8, turn: 0.85 },
+        oil: {
+          accel: 0.35,
+          maxSpeed: 1.0,
+          drag: 0.0,
+          grip: 0.08,
+          brake: 0.1,
+          turn: 1.6,
+          angularDrag: -0.5,
+        },
+        conveyor: { belt: 60 }, // ед./с по стрелке
+        // разовый импульс по стрелке при въезде; оба поля при boostDv обязательны
+        boost: { boostDv: 160, boostMaxSpeed: 340, minEntrySpeed: 20 },
+      },
+    },
+    // разрушаемые тела карты: карта назначает тип полем
+    // `physicsDynamic[i].game.prop`. Значения стартовые, мир — в единицах
+    // после mapScale (максимальная скорость танка 260). damagedAt — доля HP,
+    // ниже которой тело «повреждено» (0 — стадии нет); bulletFactor/
+    // blastFactor — множители урона выстрела и взрыва; ramThreshold —
+    // скорость удара вдоль нормали, ниже которой таран урона не наносит;
+    // ramDamagePerSpeed — урон за единицу превышения; chainDelay — задержка
+    // детонации от чужого взрыва, с (обязательна при blast)
+    props: {
+      fence: {
+        hp: 30,
+        damagedAt: 0,
+        bulletFactor: 1.0,
+        blastFactor: 1.0,
+        ramThreshold: 60,
+        ramDamagePerSpeed: 0.5,
+      },
+      crate: {
+        hp: 120,
+        damagedAt: 0.5,
+        bulletFactor: 0.5,
+        blastFactor: 1.5,
+        ramThreshold: 140,
+        ramDamagePerSpeed: 0.6,
+      },
+      barrel: {
+        hp: 40,
+        damagedAt: 0,
+        bulletFactor: 1.0,
+        blastFactor: 1.0,
+        ramThreshold: 150,
+        ramDamagePerSpeed: 1.0,
+        chainDelay: 0.15,
+        blast: { radius: 70, damage: 80, impulse: 2500000, cameraShake: { intensity: 30, duration: 400 } },
+      },
+    },
   },
 
   // рамки настроек комнаты в лобби (GameManifest.roomDefaults)

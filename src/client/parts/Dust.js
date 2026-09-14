@@ -7,6 +7,7 @@ import { applyParallax } from '../parallax.js';
 import {
   parallax as parallaxConfig,
   landing as landingConfig,
+  surfaceFx,
 } from '../../config/render.js';
 import { landingImpact } from '../landing.js';
 import {
@@ -74,6 +75,26 @@ const DUST_CONFIG = {
   landingSizeFactor: 1.6,
 };
 
+// вид обычной пыли (буксование, приземление); поверхности задают свой
+const DUST_STYLE = {
+  color: DUST_CONFIG.color,
+  alpha: DUST_CONFIG.startAlpha,
+  lifetime: DUST_CONFIG.lifetime,
+};
+
+// поверхности с непрерывной эмиссией на ходу (параметры — render.js)
+const SURFACE_EMITTERS = ['sand', 'mud', 'water'];
+
+// разброс хвоста бустера вокруг направления против стрелки, рад
+const BOOST_TAIL_SPREAD = 0.35;
+
+// та же плита бустера: клетка прошлого кадра — бустер с той же стрелкой
+const isSameBoost = (cell, dir) =>
+  cell.kind === 'boost' &&
+  cell.dir !== null &&
+  cell.dir[0] === dir[0] &&
+  cell.dir[1] === dir[1];
+
 export default class Dust extends Container {
   constructor(data, assets, dependencies = {}) {
     super();
@@ -118,6 +139,14 @@ export default class Dust extends Container {
     this._levelView = dependencies.levelView || null;
     this._renderer = dependencies.renderer || null;
     this._soundManager = dependencies.soundManager || null;
+
+    // поверхность под танком из ядра (сервис `surfaces`); без сервиса —
+    // прежняя пыль. `_surfaceCell` — клетка прошлого кадра: null, пока часть
+    // не видела ни одного кадра, по которому клетки можно сравнить
+    this._surfaces = dependencies.surfaces || null;
+    this._surfaceKind = null;
+    this._surfaceCell = null;
+    this._timeSinceSurfaceSpawn = 0;
 
     const landingSound = this._soundManager?.getSoundConfig('tankLanding');
 
@@ -172,6 +201,9 @@ export default class Dust extends Container {
   }
 
   update(data) {
+    const prevX = this._x;
+    const prevY = this._y;
+    const wasAlive = this._condition > 0;
     const level = data[M1_LEVEL] || 0;
 
     if (level !== this._level) {
@@ -203,6 +235,148 @@ export default class Dust extends Container {
     }
 
     this._prevVz = this._vz;
+
+    this._updateSurface(prevX, prevY, wasAlive);
+  }
+
+  // поверхность под центром корпуса: тип для непрерывной эмиссии и разовые
+  // события въезда (всплеск воды, вспышка бустера). Правило въезда — то же,
+  // что у импульса в ядре (`surface::boost_dv`). Сравнивать клетки можно
+  // только с кадром, который часть уже видела у этого танка: первое
+  // появление, респаун (condition 0 → жив) и скачок позиции (телепорт) лишь
+  // запоминают текущую клетку
+  _updateSurface(prevX, prevY, wasAlive) {
+    if (!this._surfaces) {
+      return;
+    }
+
+    const kind = this._surfaces.kindAt(this._x, this._y, this._level);
+    const dir =
+      kind === 'boost'
+        ? this._surfaces.dirAt(this._x, this._y, this._level)
+        : null;
+    const prev = this._surfaceCell;
+    const jumped =
+      Math.hypot(this._x - prevX, this._y - prevY) >
+      surfaceFx.boost.resetDistance;
+    const respawned = !wasAlive && this._condition > 0;
+
+    this._surfaceKind = kind;
+    this._surfaceCell = { kind, dir };
+
+    // в полёте поверхности нет — как в ядре
+    if (
+      prev === null ||
+      respawned ||
+      jumped ||
+      this._condition <= 0 ||
+      this._vz !== 0
+    ) {
+      return;
+    }
+
+    if (kind === 'water' && prev.kind !== 'water') {
+      this._triggerWaterEntry();
+    }
+
+    if (dir && !isSameBoost(prev, dir)) {
+      const along = this._vx * dir[0] + this._vy * dir[1];
+
+      if (along >= surfaceFx.boost.boostMinSpeed) {
+        this._triggerBoostFlash(dir);
+      }
+    }
+  }
+
+  // разовый всплеск при въезде в воду со скоростью
+  _triggerWaterEntry() {
+    const config = surfaceFx.water;
+
+    if (Math.hypot(this._vx, this._vy) < config.entryMinSpeed) {
+      return;
+    }
+
+    for (let side = -1; side <= 1; side += 2) {
+      const point = this._contactPoint(side);
+
+      for (let i = 0; i < config.entryBurst; i += 1) {
+        const [vx, vy] = this._sideSprayVelocity(side, config);
+
+        this._spawnParticle(
+          point.x,
+          point.y,
+          vx,
+          vy,
+          config.sizeFactor * 1.5,
+          config,
+        );
+      }
+    }
+  }
+
+  // вспышка-хвост бустера: из центра корпуса против стрелки плиты
+  _triggerBoostFlash(dir) {
+    const config = surfaceFx.boost;
+    const backAngle = Math.atan2(-dir[1], -dir[0]);
+
+    for (let i = 0; i < config.burst; i += 1) {
+      const angle =
+        backAngle + randomRange(-BOOST_TAIL_SPREAD, BOOST_TAIL_SPREAD);
+      const speed = randomRange(config.tailSpeed.min, config.tailSpeed.max);
+
+      this._spawnParticle(
+        this._x,
+        this._y,
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed,
+        config.sizeFactor,
+        config,
+      );
+    }
+  }
+
+  // брызги в сторону гусеницы `side` с небольшим сносом назад
+  _sideSprayVelocity(side, config) {
+    const sideAngle = this._rotation + Math.PI / 2;
+    const backAngle = this._rotation + Math.PI;
+    const lateral =
+      randomRange(config.sideSpeed.min, config.sideSpeed.max) * side;
+    const back = randomRange(0, config.sideSpeed.min);
+
+    return [
+      Math.cos(sideAngle) * lateral + Math.cos(backAngle) * back,
+      Math.sin(sideAngle) * lateral + Math.sin(backAngle) * back,
+    ];
+  }
+
+  // непрерывная эмиссия поверхности на ходу: по частице из-под каждой
+  // гусеницы — пыль и комья назад, брызги в стороны
+  _spawnSurfaceDust(kind, config) {
+    for (let side = -1; side <= 1; side += 2) {
+      const point = this._contactPoint(side);
+      let vx;
+      let vy;
+
+      if (kind === 'water') {
+        [vx, vy] = this._sideSprayVelocity(side, config);
+      } else {
+        const backAngle = this._rotation + Math.PI;
+        const sideAngle = this._rotation + Math.PI / 2;
+        const back = randomRange(
+          DUST_CONFIG.spinVelocity.back.min,
+          DUST_CONFIG.spinVelocity.back.max,
+        );
+        const lateral = randomRange(
+          DUST_CONFIG.spinVelocity.side.min,
+          DUST_CONFIG.spinVelocity.side.max,
+        );
+
+        vx = Math.cos(backAngle) * back + Math.cos(sideAngle) * lateral;
+        vy = Math.sin(backAngle) * back + Math.sin(sideAngle) * lateral;
+      }
+
+      this._spawnParticle(point.x, point.y, vx, vy, config.sizeFactor, config);
+    }
   }
 
   _playLandingSound(impact) {
@@ -290,7 +464,8 @@ export default class Dust extends Container {
     }
   }
 
-  _spawnParticle(x, y, vx, vy, sizeMultiplier) {
+  // style — цвет, начальная альфа и время жизни частицы
+  _spawnParticle(x, y, vx, vy, sizeMultiplier, style = DUST_STYLE) {
     const startSizeFactor = DUST_CONFIG.startSizeFactor * sizeMultiplier;
     const endSizeFactor = DUST_CONFIG.endSizeFactor * sizeMultiplier;
 
@@ -298,10 +473,10 @@ export default class Dust extends Container {
     const startScale =
       startSizeFactor * this._particleScaleMultiplier * this._textureScale;
 
-    view.tint = DUST_CONFIG.color;
+    view.tint = style.color;
     view.x = x;
     view.y = y;
-    view.alpha = DUST_CONFIG.startAlpha;
+    view.alpha = style.alpha;
     view.scaleX = startScale;
     view.scaleY = startScale;
     view.rotation = randomRange(0, Math.PI * 2);
@@ -313,7 +488,8 @@ export default class Dust extends Container {
       vx,
       vy,
       age: 0,
-      lifetime: randomRange(DUST_CONFIG.lifetime.min, DUST_CONFIG.lifetime.max),
+      lifetime: randomRange(style.lifetime.min, style.lifetime.max),
+      startAlpha: style.alpha,
       startSizeFactor,
       endSizeFactor,
       rotSpeed: randomRange(-1, 1),
@@ -336,8 +512,12 @@ export default class Dust extends Container {
     // поднимает высоту тона двигателя
     const strain = Math.max(0, this._engineLoad - 1);
     const speed = Math.hypot(this._vx, this._vy);
+    // масло не пылит вовсе: ни на ходу, ни при буксовании
     const spinning =
-      this._condition > 0 && strain > 0 && speed < DUST_CONFIG.maxSpinSpeed;
+      this._condition > 0 &&
+      strain > 0 &&
+      speed < DUST_CONFIG.maxSpinSpeed &&
+      this._surfaceKind !== 'oil';
     const rate = spinning ? DUST_CONFIG.spawnRate * Math.min(strain, 1) : 0;
 
     if (rate > 0) {
@@ -350,6 +530,8 @@ export default class Dust extends Container {
     } else {
       this._timeSinceSpawn = 0;
     }
+
+    this._emitSurface(deltaMs, speed);
 
     const frictionFactor = Math.pow(DUST_CONFIG.airResistance, deltaMs / 16.0);
 
@@ -388,9 +570,37 @@ export default class Dust extends Container {
       view.scaleX = currentScale;
       view.scaleY = currentScale;
       view.alpha =
-        DUST_CONFIG.startAlpha +
-        (DUST_CONFIG.endAlpha - DUST_CONFIG.startAlpha) * lifeProgress;
+        particle.startAlpha +
+        (DUST_CONFIG.endAlpha - particle.startAlpha) * lifeProgress;
       view.rotation += particle.rotSpeed * deltaTime;
+    }
+  }
+
+  // эмиссия поверхности: частота пропорциональна скорости, в полёте и у
+  // мёртвого танка — ничего
+  _emitSurface(deltaMs, speed) {
+    const kind = this._surfaceKind;
+    const config = SURFACE_EMITTERS.includes(kind) ? surfaceFx[kind] : null;
+
+    if (
+      !config ||
+      this._condition <= 0 ||
+      this._vz !== 0 ||
+      speed < config.minSpeed
+    ) {
+      this._timeSinceSurfaceSpawn = 0;
+
+      return;
+    }
+
+    const interval =
+      1000.0 / (config.rate * Math.min(speed / config.fullSpeed, 1));
+
+    this._timeSinceSurfaceSpawn += deltaMs;
+
+    while (this._timeSinceSurfaceSpawn >= interval) {
+      this._spawnSurfaceDust(kind, config);
+      this._timeSinceSurfaceSpawn -= interval;
     }
   }
 

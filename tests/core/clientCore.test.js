@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
+import tanksGameConfig from '../../src/config/game.js';
 import { readFileSync } from 'node:fs';
 import {
   M1_Z,
@@ -7,6 +8,7 @@ import {
   M1_VZ,
   M1_PITCH,
   M1_ROLL,
+  C_STATE,
 } from '../../src/client/snapshotFields.js';
 import {
   coreAvailable,
@@ -388,6 +390,177 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(frames[0].game.w1).toEqual([]); // свой дубль вычищен
     });
 
+  });
+
+  describe('поверхности (surface_at / surface_types / surface_dir_at)', () => {
+    // слоёная фикстура + разметка: на земле тайл 5 (строка 3, колонка 2) —
+    // песок, тайл 6 (строка 3, колонка 5) — конвейер на север; вся плита
+    // моста уровня 1 (тайл 2) — бустер на восток. step 32, scale 1
+    const surfacedMap = () => {
+      const map = JSON.parse(layeredMap);
+
+      map.map[3][2] = 5;
+      map.map[3][5] = 6;
+      map.game = {
+        surfaces: {
+          0: { 5: 'sand', 6: { type: 'conveyor', dir: 'north' } },
+          1: { 2: { type: 'boost', dir: 'east' } },
+        },
+      };
+
+      return JSON.stringify(map);
+    };
+
+    const nameAt = (client, x, y, level) => {
+      const index = client.surface_at(x, y, level);
+
+      return index < 0 ? null : JSON.parse(client.surface_types())[index];
+    };
+
+    it('без карты — -1', () => {
+      const client = makeClientCore();
+
+      expect(client.surface_at(80, 112, 0)).toBe(-1);
+      expect(client.surface_dir_at(80, 112, 0)).toBe(-1);
+    });
+
+    it('типы в порядке индексов из coreParams.surfaces', () => {
+      const client = makeClientCore();
+
+      expect(JSON.parse(client.surface_types())).toEqual(
+        Object.keys(tanksGameConfig.coreParams.surfaces.types).sort(),
+      );
+    });
+
+    it('surface_at отдаёт тип клетки по уровням', () => {
+      const client = makeClientCore();
+
+      client.set_map(surfacedMap());
+
+      expect(nameAt(client, 80, 112, 0)).toBe('sand');
+      expect(nameAt(client, 176, 112, 0)).toBe('conveyor');
+      expect(nameAt(client, 368, 272, 1)).toBe('boost');
+      // под плитой на земле и соседняя клетка — нейтрально
+      expect(client.surface_at(368, 272, 0)).toBe(-1);
+      expect(client.surface_at(112, 112, 0)).toBe(-1);
+    });
+
+    it('surface_dir_at: стрелка у конвейера и бустера, -1 у ненаправленных', () => {
+      const client = makeClientCore();
+
+      client.set_map(surfacedMap());
+
+      expect(client.surface_dir_at(176, 112, 0)).toBe(0); // north
+      expect(client.surface_dir_at(368, 272, 1)).toBe(3); // east
+      expect(client.surface_dir_at(80, 112, 0)).toBe(-1);
+      expect(client.surface_dir_at(112, 112, 0)).toBe(-1);
+    });
+
+    it('карта без game.surfaces — -1', () => {
+      const client = makeClientCore();
+
+      client.set_map(layeredMap);
+
+      expect(client.surface_at(80, 112, 0)).toBe(-1);
+    });
+  });
+
+  describe('разрушаемые пропы (байт state строки c1)', () => {
+    // слоёная фикстура + забор на земле по курсу танка: угол объекта
+    // (200, 84), 32×32 → центр (216, 100)
+    const fenceMap = () => {
+      const map = JSON.parse(layeredMap);
+
+      map.physicsDynamic = [
+        {
+          position: [200, 84],
+          angle: 0,
+          width: 32,
+          height: 32,
+          density: 100,
+          linearDamping: 3,
+          angularDamping: 3,
+          game: { prop: 'fence' },
+        },
+      ];
+
+      return JSON.stringify(map);
+    };
+
+    // ядро с забором и танком (gameId 1), стреляющим по нему, пока забор
+    // не сломается
+    const breakFence = () => {
+      const core = makeCore();
+
+      core.load_map(fenceMap());
+      core.spawn_actor(1, 'm1', 1, 100, 100, 0);
+      stepTicks(core, 1);
+
+      const before = packFrame(core, 1000, 1);
+
+      for (let seq = 1; seq <= 20; seq += 1) {
+        core.apply_input(1, seq, 'down', 'fire');
+        stepTicks(core, 30);
+      }
+
+      return { core, before };
+    };
+
+    // строки динамики карты из hot-буфера: [flags, camX, camY, число
+    // танков, (keyId, gameId, поля m1)…, число тел, (keyId, index, поля)…].
+    // Камера пишется всегда — без флага HAS_CAMERA нулями
+    const hotBodies = (hot, bodyWidth) => {
+      let offset = 3;
+
+      const tanks = hot[offset];
+
+      offset += 1 + tanks * (2 + tanksGameConfig.snapshot.m1.fields.length);
+
+      const count = hot[offset];
+      const rows = [];
+
+      offset += 1;
+
+      for (let i = 0; i < count; i += 1) {
+        rows.push(hot.slice(offset, offset + 2 + bodyWidth));
+        offset += 2 + bodyWidth;
+      }
+
+      return rows;
+    };
+
+    it('кадр с разрушенным телом декодируется со state = 2', () => {
+      const { core, before } = breakFence();
+      const client = makeClientCore();
+
+      // строки динамики карты декодер ключует `d{index}`
+      expect(decodeFrame(client, before).snapshot.c1.d0[C_STATE]).toBe(0);
+
+      const after = packFrame(core, 2000, 2);
+
+      expect(decodeFrame(client, after).snapshot.c1.d0[C_STATE]).toBe(2);
+    });
+
+    it('строки тел в hot-буфере несут state', () => {
+      const { core } = breakFence();
+      const client = makeClientCore();
+
+      push(client, packFrame(core, 1000, 1), 1000);
+      stepTicks(core, 12);
+      push(client, packFrame(core, 1100, 2), 1100);
+      client.sample(1150);
+
+      const bodyWidth = tanksGameConfig.snapshot.c1.fields.length;
+      const rows = hotBodies(client.hot_values(), bodyWidth);
+
+      expect(rows).toHaveLength(1);
+      // [keyId, index, ...поля]: поле state — на своей позиции схемы
+      expect(rows[0][1]).toBe(0);
+      expect(rows[0][2 + C_STATE]).toBe(2);
+    });
+  });
+
+  describe('слоёная карта', () => {
     // 2.5D: клиент предсказывает уровень своего танка по той же слоёной
     // карте, что и хост, и режет луч теми же сегментами
     it('на слоёной карте трассер с моста падает за кромкой плиты', () => {

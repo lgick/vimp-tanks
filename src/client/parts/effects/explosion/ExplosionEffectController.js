@@ -5,7 +5,10 @@ import { REFERENCE_BLAST_RADIUS } from './SmokeEffect.js';
 import { levelZ } from '../../../levelZ.js';
 import { cameraCenter } from '../../../camera.js';
 import { offsetPoint } from '../../../parallax.js';
-import { parallax as parallaxConfig } from '../../../../config/render.js';
+import {
+  parallax as parallaxConfig,
+  lighting as lightingConfig,
+} from '../../../../config/render.js';
 import {
   W2E_X,
   W2E_Y,
@@ -34,6 +37,8 @@ export default class ExplosionEffectController extends Container {
     this._soundManager = dependencies.soundManager;
     this._levelView = dependencies.levelView || null;
     this._renderer = dependencies.renderer || null;
+    // ночь: вспышка кратко подсвечивает окрестность (no-op днём)
+    this._lighting = dependencies.lighting || null;
 
     // вспышка и воронка живут СИБЛИНГАМИ на сцене (у них свои zIndex),
     // поэтому прозрачность ставится им, а не контроллеру.
@@ -117,6 +122,15 @@ export default class ExplosionEffectController extends Container {
       this.destroy();
       return;
     }
+
+    // свет вспышки — на уровне взрыва: плита моста его экранирует
+    this._lighting?.flash({
+      ...lightingConfig.flash.explosion,
+      level: this._level,
+      x: this.originX,
+      y: this.originY,
+      z: this._level,
+    });
 
     this.explosion = new ExplosionEffect(
       this.originX,

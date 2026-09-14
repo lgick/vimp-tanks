@@ -10,6 +10,7 @@ import {
   shadow as shadowConfig,
   tilt as tiltConfig,
   landing as landingConfig,
+  lighting as lightingConfig,
 } from '../../config/render.js';
 import {
   M1_X,
@@ -206,6 +207,22 @@ export default class Tank extends Container {
     this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
     this._levelView = dependencies.levelView || null;
 
+    // Ночь (сервис игры, src/client/lighting/): два конуса фар и слабый
+    // свет под корпусом — источники сессии, переживают смену карты; блики
+    // фар — эмиссивные спрайты в контейнере сервиса. Без ночи
+    // (`addEmissive → false`) блики не создаются вовсе
+    this._lighting = dependencies.lighting?.enabled
+      ? dependencies.lighting
+      : null;
+    // { cones: [левая, правая], glow }; null — фары выключены
+    this._headlights = null;
+    this._glares = [];
+    this._glareLevel = null;
+
+    if (this._lighting && assets.headlightConeTexture) {
+      this._lighting.registerTextures({ cone: assets.headlightConeTexture });
+    }
+
     // видимость уровня и признаки высоты считаются каждый кадр, а не по
     // приходу строки: и камера, и локальный игрок двигаются между кадрами.
     //
@@ -290,6 +307,9 @@ export default class Tank extends Container {
 
       // при уничтожении отключение звука
       this.destroySounds();
+
+      // у обломка фар нет
+      this._removeLights();
     } else {
       // если танк "ожил" или создан впервые
       this.wreck.visible = false;
@@ -309,6 +329,7 @@ export default class Tank extends Container {
       this.gun.visible = true;
 
       this._initSounds();
+      this._addLights();
     }
 
     // текстура задаёт габариты квада: без пересчёта углов меш остался бы с
@@ -393,6 +414,167 @@ export default class Tank extends Container {
     if (needsVisualChange) {
       this.create();
     }
+
+    // источники света живут в МИРОВЫХ координатах и обновляются по кадру
+    // данных, до отрисовки: карта освещённости не отстаёт от корпуса
+    this._updateLights();
+  }
+
+  // Две фары на передней кромке корпуса (4 × size вдоль курса, 3 × size в
+  // ширину — пропорция `tankTexture`), смещённые на ±offset полуширины
+  _headlightPoints() {
+    const cos = Math.cos(this.rotation);
+    const sin = Math.sin(this.rotation);
+    const front = this._size * 2;
+    const side = this._size * 1.5 * lightingConfig.headlights.offset;
+    const frontX = this._worldX + cos * front;
+    const frontY = this._worldY + sin * front;
+
+    return [
+      { x: frontX + sin * side, y: frontY - cos * side },
+      { x: frontX - sin * side, y: frontY + cos * side },
+    ];
+  }
+
+  _addLights() {
+    if (!this._lighting || this._headlights) {
+      return;
+    }
+
+    const { headlights, tankGlow } = lightingConfig;
+    const cone = () =>
+      this._lighting.addLight({
+        kind: 'cone',
+        radius: headlights.length,
+        spread: headlights.spread,
+        color: headlights.color,
+        intensity: headlights.intensity,
+      });
+
+    this._headlights = {
+      cones: [cone(), cone()],
+      glow: this._lighting.addLight({
+        kind: 'radial',
+        radius: tankGlow.radius,
+        color: tankGlow.color,
+        intensity: tankGlow.intensity,
+      }),
+    };
+
+    this._createGlares();
+    this._updateLights();
+  }
+
+  // блики фар: только на ночной карте и только с текстурой `head`
+  _createGlares() {
+    const head = this._lighting.texture('head');
+
+    if (!head || this._glares.length > 0) {
+      return;
+    }
+
+    const { headlights } = lightingConfig;
+
+    this._glareScale = (headlights.glareSize * 2) / head.contentSize;
+
+    for (let i = 0; i < 2; i += 1) {
+      const glare = new Sprite(head.texture);
+
+      glare.anchor.set(0.5);
+      glare.blendMode = 'add';
+      glare.tint = headlights.color;
+
+      if (!this._lighting.addEmissive(glare, this._level)) {
+        glare.destroy({ texture: false, textureSource: false });
+        this._destroyGlares();
+
+        return;
+      }
+
+      this._glares.push(glare);
+    }
+
+    this._glareLevel = this._level;
+  }
+
+  _destroyGlares() {
+    for (const glare of this._glares) {
+      this._lighting?.removeEmissive(glare);
+      glare.destroy({ texture: false, textureSource: false });
+    }
+
+    this._glares = [];
+    this._glareLevel = null;
+  }
+
+  _updateLights() {
+    if (!this._headlights) {
+      return;
+    }
+
+    const level = this._level;
+    const z = this._z;
+    const points = this._headlightPoints();
+
+    for (let i = 0; i < 2; i += 1) {
+      this._lighting.updateLight(this._headlights.cones[i], {
+        x: points[i].x,
+        y: points[i].y,
+        z,
+        level,
+        rotation: this.rotation,
+      });
+    }
+
+    this._lighting.updateLight(this._headlights.glow, {
+      x: this._worldX,
+      y: this._worldY,
+      z,
+      level,
+    });
+
+    // смена отрисовочного уровня: блик переезжает в эмиссив нового уровня
+    if (this._glares.length > 0 && this._glareLevel !== level) {
+      for (const glare of this._glares) {
+        this._lighting.removeEmissive(glare);
+
+        if (!this._lighting.addEmissive(glare, level)) {
+          this._destroyGlares();
+
+          return;
+        }
+      }
+
+      this._glareLevel = level;
+    }
+  }
+
+  // блики рисуются в нарисованных координатах: та же проекция, что корпус
+  _updateGlares(camera) {
+    if (this._glares.length === 0) {
+      return;
+    }
+
+    const k = this._z * parallaxConfig.shear;
+    const points = this._headlightPoints();
+
+    for (let i = 0; i < this._glares.length; i += 1) {
+      const view = offsetPoint(points[i].x, points[i].y, camera, k);
+
+      this._glares[i].position.set(view.x, view.y);
+      this._glares[i].scale.set(this._glareScale * (1 + k));
+    }
+  }
+
+  _removeLights() {
+    if (this._headlights) {
+      this._lighting.removeLight(this._headlights.cones[0]);
+      this._lighting.removeLight(this._headlights.cones[1]);
+      this._lighting.removeLight(this._headlights.glow);
+      this._headlights = null;
+    }
+
+    this._destroyGlares();
   }
 
   // углы квада одного меша: масштаб высоты, просадка приземления и наклон
@@ -468,6 +650,13 @@ export default class Tank extends Container {
     const camera = this._levelView
       ? this._levelView.camera()
       : cameraCenter(this.parent, this._renderer);
+
+    // карты освещённости: реальная работа — раз на трансформ сцены
+    if (this._lighting) {
+      this._lighting.attachStage(this.parent, this._renderer);
+      this._lighting.render();
+      this._updateGlares(camera);
+    }
 
     // тинт УРОВНЯ — база светотени наклона: она множитель поверх него, и
     // считать её от `this.tint` нельзя — без сервиса уровней тот не
@@ -613,6 +802,9 @@ export default class Tank extends Container {
 
   destroy(options) {
     this.destroySounds();
+
+    // источники и блики — состояние сессии сервиса: снимает их владелец
+    this._removeLights();
 
     // тень движок не создавал и не уберёт: она сиблинг на сцене
     if (this._shadow) {

@@ -12,8 +12,13 @@ use crate::bomb::{Bomb, BombRow, BombSpawn};
 use crate::bots::controller::BotBrain;
 use vimp_engine_core::nav::navigation::NavigationSystem;
 use vimp_engine_core::nav::spatial::{SpatialEntity, SpatialGrid};
-use crate::config::{LevelRules, ModelConfig, PanelValue, WeaponConfig, WeaponKind, TanksConfig};
+use crate::config::{
+    CameraShake, LevelRules, ModelConfig, PanelValue, PropRules, SurfaceRules, TanksConfig, WeaponConfig, WeaponKind,
+};
 use crate::level::{self, LevelEvent};
+use crate::map_game::MapGame;
+use crate::props::{DamageCause, PropTransition, Props};
+use crate::surface::{self, SurfaceMap};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
 use vimp_engine_core::map::{level_group, level_interaction, MapLevels};
@@ -66,6 +71,25 @@ impl ExplosionRow {
             FieldValue::U8(self.level),
         ]
     }
+}
+
+/// Взрыв в точке: бомба собирает его из своего оружия, бочка — из
+/// `coreParams.props.<тип>.blast`. Урон и импульс спадают линейно к краю
+/// радиуса.
+struct Blast {
+    x: f32,
+    y: f32,
+    level: u8,
+    radius: f32,
+    damage: f64,
+    impulse: f32,
+    /// Владелец взрыва: `(game_id, team, weapon)`. `None` — бочка: урон без
+    /// проверки дружественного огня, смерть — самоубийство.
+    owner: Option<(u32, u8, usize)>,
+    /// Тряска камеры задетого танка без владельца (у бомбы — из оружия).
+    shake: Option<CameraShake>,
+    /// Тело-источник, которое взрыв не задевает (тело бомбы).
+    source: Option<RigidBodyHandle>,
 }
 
 /// FNV-1a по гридам всех уровней карты. Отпечаток из `setId` и размерности
@@ -202,6 +226,36 @@ pub struct TanksSim {
     /// Танки, заспавненные до того, как слои доехали, — им уровень
     /// назначается первым же `update_levels`.
     levels_dirty: bool,
+    /// Разобранное поле `game` текущей карты. Пересобирается только
+    /// `rebuild_map_derived`.
+    map_game: MapGame,
+    /// Правила поверхностей (coreParams.surfaces).
+    surface_rules: SurfaceRules,
+    /// Таблица поверхностей текущей карты; `None` — карта их не объявила
+    /// (или пересборка упала) и движение идёт нейтральным путём.
+    /// Пересобирается только `rebuild_map_derived`.
+    surfaces: Option<SurfaceMap>,
+    /// Производные данные карты нужно пересобрать на ближайшем шаге: хук
+    /// `on_map_loaded` после `deserialize` не зовётся. Ставит `deserialize`,
+    /// снимает `rebuild_map_derived`. К отпечатку слоёв не привязан: тот на
+    /// плоской карте всегда `None`.
+    map_derived_dirty: bool,
+    /// Сколько раз вызваны `rebuild_map_derived` и `reset_round_state` (для
+    /// тестов порядка вызовов).
+    map_derived_rebuilds: u32,
+    round_state_resets: u32,
+    /// Правила разрушаемых тел карты (coreParams.props).
+    prop_rules: PropRules,
+    /// Шагов до детонации от чужого взрыва по индексу типа пропа.
+    prop_chain_steps: Vec<u32>,
+    /// Пропы текущей карты: строятся в `reset_round_state`, едут в дамп.
+    props: Props,
+    /// Скорости танков и пропов до шага мира — для тарана в `on_contacts`.
+    /// Живёт внутри одного фиксированного шага, в дамп не едет.
+    pre_step_vel: IndexMap<RigidBodyHandle, Vector>,
+    /// Ключ снапшота строки взрыва (`w2e`) для взрывов пропов — берётся у
+    /// первого взрывного оружия.
+    blast_outcome_id: Option<String>,
 }
 
 impl GameSim<TanksGame> for TanksSim {
@@ -240,6 +294,21 @@ impl GameSim<TanksGame> for TanksSim {
             levels: None,
             levels_fingerprint: None,
             levels_dirty: false,
+            map_game: MapGame::default(),
+            surface_rules: cfg.surfaces.clone(),
+            surfaces: None,
+            map_derived_dirty: false,
+            map_derived_rebuilds: 0,
+            round_state_resets: 0,
+            prop_rules: cfg.props.clone(),
+            prop_chain_steps: cfg.props.chain_steps(engine_cfg.time_step),
+            props: Props::default(),
+            pre_step_vel: IndexMap::new(),
+            blast_outcome_id: cfg
+                .weapons
+                .values()
+                .filter(|w| w.kind == WeaponKind::Explosive)
+                .find_map(|w| w.shot_outcome_id.clone()),
         }
     }
 
@@ -441,12 +510,27 @@ impl GameSim<TanksGame> for TanksSim {
         Value::Object(by_model).to_string()
     }
 
+    fn on_map_loaded(&mut self, ctx: &mut SimCtx) -> Result<(), String> {
+        self.rebuild_map_derived(ctx)?;
+        self.reset_round_state(ctx)?;
+
+        Ok(())
+    }
+
     fn on_fixed_step(&mut self, ctx: &mut SimCtx, dt: f32) {
+        // после `deserialize` хук карты не звали: производные данные
+        // пересобираются здесь, один раз
+        if self.map_derived_dirty {
+            self.rebuild_map_derived_on_step(ctx);
+        }
+
         // слои карты приезжают вместе с картой, а `spawn_actor` карты не
         // видит: держим копию геометрии и пересчитываем уровни всех танков,
         // когда она сменилась
         self.sync_levels(ctx);
         self.update_levels(ctx, dt);
+        // импульсы поверхностей телам карты — до `world.step`, как у танков
+        self.apply_body_surfaces(ctx, dt);
 
         let ids: Vec<u32> = self.tanks.keys().copied().collect();
 
@@ -471,6 +555,8 @@ impl GameSim<TanksGame> for TanksSim {
                     &self.weapons,
                     &self.key_bits,
                     &self.level_rules,
+                    self.surfaces.as_ref(),
+                    &self.surface_rules,
                     ctx.rng,
                     ctx.events,
                 );
@@ -499,9 +585,19 @@ impl GameSim<TanksGame> for TanksSim {
         }
 
         self.process_shots_expired_by_time(ctx);
+
+        // отложенные детонации — по возрастанию индекса (детерминизм)
+        for index in self.props.tick_detonations() {
+            self.destroy_prop(ctx, index);
+        }
+
+        // последним: все импульсы шага применены, контакт ещё не решён
+        self.record_pre_step_vel(ctx);
     }
 
     fn on_contacts(&mut self, ctx: &mut SimCtx, pairs: &[(ColliderHandle, ColliderHandle)]) {
+        self.process_rams(ctx, pairs);
+
         for &(h1, h2) in pairs {
             let tag_of = |handle: ColliderHandle| {
                 ctx.world
@@ -744,6 +840,13 @@ impl GameSim<TanksGame> for TanksSim {
         self.levels = None;
         self.levels_fingerprint = None;
         self.levels_dirty = false;
+
+        self.map_game = MapGame::default();
+        self.surfaces = None;
+        self.map_derived_dirty = false;
+
+        self.props = Props::default();
+        self.pre_step_vel.clear();
     }
 
     fn serialize(&self) -> serde_json::Value {
@@ -754,6 +857,7 @@ impl GameSim<TanksGame> for TanksSim {
             shots_at_time: &self.shots_at_time,
             current_shot_id: self.current_shot_id,
             current_step_tick: self.current_step_tick,
+            props: &self.props,
         };
 
         serde_json::to_value(dump).unwrap_or(serde_json::Value::Null)
@@ -768,6 +872,10 @@ impl GameSim<TanksGame> for TanksSim {
         self.shots_at_time = dump.shots_at_time;
         self.current_shot_id = dump.current_shot_id;
         self.current_step_tick = dump.current_step_tick;
+        // пропы — из дампа: `rebuild_map_derived` их не пересобирает, иначе
+        // разрушенное на прошлом хосте восстановилось бы
+        self.props = dump.props;
+        self.pre_step_vel.clear();
 
         self.new_tracers.clear();
         self.new_bombs.clear();
@@ -778,6 +886,9 @@ impl GameSim<TanksGame> for TanksSim {
         // слои в дамп не едут (карта восстанавливается своим путём):
         // уровни танков пересчитает первый же `update_levels`
         self.levels_dirty = true;
+        // хук `on_map_loaded` при восстановлении не зовётся: данные из поля
+        // `game` карты пересоберёт первый же шаг
+        self.map_derived_dirty = true;
 
         Ok(())
     }
@@ -805,6 +916,325 @@ impl GameSim<TanksGame> for TanksSim {
 }
 
 impl TanksSim {
+    /// Пересобирает данные, выводимые из карты и конфига (`map_game`,
+    /// `surfaces`).
+    /// Единственное место разбора `game`: зовётся из `on_map_loaded` и из
+    /// `on_fixed_step` по флагу `map_derived_dirty`. При ошибке производные
+    /// данные остаются пустыми — нейтральный путь.
+    fn rebuild_map_derived(&mut self, ctx: &SimCtx) -> Result<(), String> {
+        self.map_derived_dirty = false;
+        self.map_derived_rebuilds = self.map_derived_rebuilds.wrapping_add(1);
+        self.map_game = MapGame::default();
+        self.surfaces = None;
+
+        if let Some(map) = ctx.map.as_ref() {
+            self.map_game = MapGame::from_value(map.game_data())?;
+            // сетка уровня 0 — поле `GameMap::grid`, надземные — слои карты:
+            // `self.levels` на плоской карте `None`. `step` на хосте уже
+            // умножен на `scale`
+            self.surfaces = surface::build_map(
+                &self.map_game,
+                &self.surface_rules,
+                map.levels(),
+                &map.grid,
+                map.step,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Пересборка по флагу из шага: вернуть `Err` из `on_fixed_step` некуда,
+    /// поэтому ошибка уходит событием `custom` (`mapDerivedError`) в
+    /// `HostPlugin.onCoreEvent`. Шаг продолжается без производных данных.
+    fn rebuild_map_derived_on_step(&mut self, ctx: &mut SimCtx) {
+        if let Err(message) = self.rebuild_map_derived(ctx) {
+            ctx.events.push(CoreEvent::Custom {
+                data: serde_json::json!({ "type": "mapDerivedError", "message": message }),
+            });
+        }
+    }
+
+    /// Сбрасывает состояние, живущее внутри раунда. Зовётся только из
+    /// `on_map_loaded`: при рестарте раунда карта та же, а сброс нужен; после
+    /// `deserialize` это состояние восстановлено из дампа. Пропы строятся
+    /// заново — это и есть восстановление разрушенного в начале раунда
+    /// (тела карты движок уже пересоздал, `map_body_state` обнулил).
+    fn reset_round_state(&mut self, ctx: &mut SimCtx) -> Result<(), String> {
+        self.round_state_resets = self.round_state_resets.wrapping_add(1);
+        self.props = Props::default();
+        self.pre_step_vel.clear();
+
+        if let Some(map) = ctx.map.as_ref() {
+            self.props = Props::build(map, &self.prop_rules)?;
+        }
+
+        Ok(())
+    }
+
+    /// Пропы текущей карты (для тестов).
+    pub fn props(&self) -> &Props {
+        &self.props
+    }
+
+    /// Урон пропу `index` (сырой, без множителя) и реакция на переход:
+    /// `Damaged` → состояние `1`, `Destroyed` → `destroy_prop`, `Primed` —
+    /// ничего (бочка видна целой до самой детонации).
+    fn damage_prop(&mut self, ctx: &mut SimCtx, index: usize, amount: f32, cause: DamageCause) {
+        match self.props.damage(index, amount, cause, &self.prop_rules, &self.prop_chain_steps) {
+            PropTransition::Damaged => {
+                if let Some(state) = ctx.map_body_state.get_mut(index) {
+                    *state = 1;
+                }
+            }
+            PropTransition::Destroyed => self.destroy_prop(ctx, index),
+            PropTransition::Primed | PropTransition::None => {}
+        }
+    }
+
+    /// Разрушение пропа: состояние `2`, тело останавливается и отключается
+    /// (из мира не удаляется — тела карты удаляет только движок). Тип с
+    /// `blast` взрывается в этом же вызове.
+    fn destroy_prop(&mut self, ctx: &mut SimCtx, index: usize) {
+        let Some(kind) = self.props.get(index).map(|prop| prop.kind) else {
+            return;
+        };
+
+        if let Some(state) = ctx.map_body_state.get_mut(index) {
+            *state = 2;
+        }
+
+        let map: &Option<vimp_engine_core::map::GameMap> = ctx.map;
+        let Some(map) = map.as_ref() else {
+            return;
+        };
+        let Some(handle) = map.dynamic_handle(index) else {
+            return;
+        };
+        let level = map.dynamic_level(index);
+        // позиция тела — угол объекта: центр берём у коллайдера
+        let center = ctx.world.bodies.get(handle).and_then(|body| {
+            body.colliders()
+                .first()
+                .and_then(|collider| ctx.world.colliders.get(*collider))
+                .map(|collider| collider.translation())
+        });
+
+        if let Some(body) = ctx.world.bodies.get_mut(handle) {
+            body.set_linvel(Vector::ZERO, false);
+            body.set_angvel(0.0, false);
+            body.set_enabled(false);
+        }
+
+        let Some(spec) = self.prop_rules.types.values().nth(kind).and_then(|prop| prop.blast.clone()) else {
+            return;
+        };
+        let Some(center) = center else {
+            return;
+        };
+        let row = self.explode(
+            ctx,
+            &Blast {
+                x: center.x,
+                y: center.y,
+                level,
+                radius: spec.radius,
+                damage: spec.damage,
+                impulse: spec.impulse,
+                owner: None,
+                shake: spec.camera_shake,
+                source: Some(handle),
+            },
+        );
+
+        if let Some(outcome_id) = self.blast_outcome_id.clone() {
+            self.weapon_effects.entry(outcome_id).or_default().push(row);
+        }
+    }
+
+    /// Скорости танков и целых пропов перед шагом мира. На карте без пропов
+    /// таблица пуста — таран не считается вовсе.
+    fn record_pre_step_vel(&mut self, ctx: &SimCtx) {
+        self.pre_step_vel.clear();
+
+        if self.props.is_empty() {
+            return;
+        }
+
+        let Some(map) = ctx.map.as_ref() else {
+            return;
+        };
+
+        for tank in self.tanks.values() {
+            if let Some(body) = ctx.world.bodies.get(tank.body) {
+                self.pre_step_vel.insert(tank.body, body.linvel());
+            }
+        }
+
+        for (index, entry) in self.props.entries.iter().enumerate() {
+            if entry.as_ref().is_none_or(|prop| prop.is_destroyed()) {
+                continue;
+            }
+
+            let Some(handle) = map.dynamic_handle(index) else {
+                continue;
+            };
+
+            if let Some(body) = ctx.world.bodies.get(handle).filter(|body| body.is_enabled()) {
+                self.pre_step_vel.insert(handle, body.linvel());
+            }
+        }
+    }
+
+    /// Таран: начавшийся контакт «танк ↔ проп». Скорость удара —
+    /// `max(0, (v_tank − v_prop) · n)` по скоростям до шага, `n` — от танка к
+    /// пропу (нормаль первого манифолда, без него — между центрами). Выше
+    /// `ramThreshold` проп получает `(impact − ramThreshold) · ramDamagePerSpeed`;
+    /// танк урона не получает. Длительное толкание урона не наносит:
+    /// `Started` приходит один раз на контакт.
+    fn process_rams(&mut self, ctx: &mut SimCtx, pairs: &[(ColliderHandle, ColliderHandle)]) {
+        if self.pre_step_vel.is_empty() {
+            return;
+        }
+
+        let map: &Option<vimp_engine_core::map::GameMap> = ctx.map;
+        let Some(map) = map.as_ref() else {
+            return;
+        };
+        let mut hits: Vec<(usize, f32)> = Vec::new();
+
+        {
+            let world = &*ctx.world;
+            let parent = |collider: ColliderHandle| world.colliders.get(collider).and_then(|c| c.parent());
+            let is_tank = |body: RigidBodyHandle| {
+                world
+                    .bodies
+                    .get(body)
+                    .is_some_and(|body| matches!(BodyTag::decode(body.user_data), Some(BodyTag::Player { .. })))
+            };
+
+            for &(h1, h2) in pairs {
+                let (Some(b1), Some(b2)) = (parent(h1), parent(h2)) else {
+                    continue;
+                };
+                let (tank_collider, tank_body, prop_collider, prop_body) = match (is_tank(b1), is_tank(b2)) {
+                    (true, false) => (h1, b1, h2, b2),
+                    (false, true) => (h2, b2, h1, b1),
+                    _ => continue,
+                };
+                let Some(index) = map.dynamic_index_of(world, prop_body) else {
+                    continue;
+                };
+                let Some(prop) = self.props.get(index) else {
+                    continue;
+                };
+                let Some(rule) = self.prop_rules.types.values().nth(prop.kind) else {
+                    continue;
+                };
+                let (Some(v_tank), Some(v_prop)) =
+                    (self.pre_step_vel.get(&tank_body), self.pre_step_vel.get(&prop_body))
+                else {
+                    continue;
+                };
+                let centers = world.colliders.get(tank_collider).zip(world.colliders.get(prop_collider));
+                let normal = world
+                    .narrow_phase
+                    .contact_pair(h1, h2)
+                    .and_then(|pair| {
+                        let manifold = pair.manifolds.first()?;
+                        // нормаль манифолда направлена от collider1 к collider2
+                        let sign = if pair.collider1 == tank_collider { 1.0 } else { -1.0 };
+
+                        Some(manifold.data.normal * sign)
+                    })
+                    .filter(|normal| normal.length_squared() > 0.0)
+                    .or_else(|| {
+                        centers.map(|(tank, prop)| (prop.translation() - tank.translation()).normalize_or_zero())
+                    });
+                let Some(normal) = normal else {
+                    continue;
+                };
+                let impact = (*v_tank - *v_prop).dot(normal).max(0.0);
+
+                if impact > rule.ram_threshold {
+                    hits.push((index, (impact - rule.ram_threshold) * rule.ram_damage_per_speed));
+                }
+            }
+        }
+
+        for (index, amount) in hits {
+            self.damage_prop(ctx, index, amount, DamageCause::Ram);
+        }
+    }
+
+    /// Разобранное поле `game` текущей карты.
+    pub fn map_game(&self) -> &MapGame {
+        &self.map_game
+    }
+
+    /// Таблица поверхностей текущей карты.
+    pub fn surface_map(&self) -> Option<&SurfaceMap> {
+        self.surfaces.as_ref()
+    }
+
+    /// Сколько раз пересобирались производные данные карты (для тестов).
+    pub fn map_derived_rebuilds(&self) -> u32 {
+        self.map_derived_rebuilds
+    }
+
+    /// Сколько раз сбрасывалось состояние раунда (для тестов).
+    pub fn round_state_resets(&self) -> u32 {
+        self.round_state_resets
+    }
+
+    /// Поверхности для тел карты (ящики, бочки): лента, сопротивление и
+    /// бустер по клетке ЦЕНТРА тела. Состояния на тело нет — дамп не
+    /// меняется. Уровень и полёт тела движок уже посчитал на этом шаге
+    /// (`step_dynamic_levels` идёт до `on_fixed_step`). Разрушенное тело
+    /// (`map_body_state >= 2`) и отключённое тело сил не получают.
+    fn apply_body_surfaces(&mut self, ctx: &mut SimCtx, dt: f32) {
+        let (Some(surfaces), Some(map)) = (self.surfaces.as_ref(), ctx.map.as_ref()) else {
+            return;
+        };
+        let world = &mut *ctx.world;
+
+        for index in 0..map.dynamic_body_count() {
+            if ctx.map_body_state.get(index).is_some_and(|state| *state >= 2) {
+                continue;
+            }
+
+            let Some(body) = map
+                .dynamic_handle(index)
+                .and_then(|handle| world.bodies.get_mut(handle))
+                .filter(|body| body.is_enabled())
+            else {
+                continue;
+            };
+            // позиция тела — угол объекта: клетку спрашиваем по центру
+            // коллайдера, как движок в `step_dynamic_levels`
+            let Some(center) = body
+                .colliders()
+                .first()
+                .and_then(|collider| world.colliders.get(*collider))
+                .map(|collider| collider.translation())
+            else {
+                continue;
+            };
+            let state = map.dynamic_level_state(index);
+            let falling = state.falling.is_some();
+            let vel = body.linvel();
+            let (mix, kind) = surface::body_mix(surfaces, state.level, falling, center.x, center.y);
+            let (drag_x, drag_y) = surface::body_dv(mix, kind, &self.surface_rules, vel.x, vel.y, dt);
+            let (boost_x, boost_y) =
+                surface::boost_dv(surfaces, state.level, falling, center.x, center.y, vel.x, vel.y, dt);
+            let dv = Vector::new(drag_x + boost_x, drag_y + boost_y);
+
+            if dv.x != 0.0 || dv.y != 0.0 {
+                body.apply_impulse(dv * body.mass(), true);
+            }
+        }
+    }
+
     /// Синхронизирует копию слоёв с картой из `SimCtx`. Отпечаток —
     /// `setId` + размерность грида уровня 0: карта сменилась, значит
     /// геометрию уровней надо пересобрать, а танкам переназначить уровень.
@@ -1069,6 +1499,11 @@ impl TanksSim {
 
             if let Some(handle) = hit_body_handle {
                 let mut hit_player: Option<u32> = None;
+                let hit_prop = ctx
+                    .map
+                    .as_ref()
+                    .and_then(|map| map.dynamic_index_of(ctx.world, handle))
+                    .filter(|index| self.props.get(*index).is_some());
 
                 if let Some(body) = ctx.world.bodies.get_mut(handle) {
                     // если тело динамическое, то применение физического импульса
@@ -1084,6 +1519,11 @@ impl TanksSim {
 
                 if let Some(target) = hit_player {
                     self.apply_damage(ctx, target, shooter_id, weapon_index, None);
+                }
+
+                // множитель `bulletFactor` применяет сама `Props::damage`
+                if let Some(index) = hit_prop {
+                    self.damage_prop(ctx, index, weapon.damage as f32, DamageCause::Bullet);
                 }
             }
         }
@@ -1168,7 +1608,21 @@ impl TanksSim {
             let weapon = self.weapons[weapon_index].clone();
 
             if let Some(outcome_id) = weapon.shot_outcome_id.clone() {
-                let explosion = self.detonate(ctx, &bomb, weapon_index);
+                let position = ctx.world.bodies[bomb.body].translation();
+                let explosion = self.explode(
+                    ctx,
+                    &Blast {
+                        x: position.x,
+                        y: position.y,
+                        level: bomb.level,
+                        radius: weapon.radius,
+                        damage: weapon.damage,
+                        impulse: weapon.impulse_magnitude,
+                        owner: Some((bomb.owner_id, bomb.team_id, weapon_index)),
+                        shake: None,
+                        source: Some(bomb.body),
+                    },
+                );
 
                 self.weapon_effects.entry(outcome_id).or_default().push(explosion);
             }
@@ -1181,27 +1635,31 @@ impl TanksSim {
         self.current_step_tick = (self.current_step_tick + 1) % self.max_shot_time_in_steps;
     }
 
-    /// Детонация бомбы (порт Bomb.detonate): урон/импульс по целям в
-    /// радиусе, данные взрыва для клиента.
-    fn detonate(&mut self, ctx: &mut SimCtx, bomb: &Bomb, weapon_index: usize) -> ExplosionRow {
-        let weapon = &self.weapons[weapon_index];
-        let radius = weapon.radius;
-        let damage = weapon.damage;
-        let impulse_magnitude = weapon.impulse_magnitude;
+    /// Взрыв (порт Bomb.detonate): урон/импульс по целям в радиусе, данные
+    /// взрыва для клиента. Источник — бомба или разрушенная бочка (`Blast`).
+    fn explode(&mut self, ctx: &mut SimCtx, blast: &Blast) -> ExplosionRow {
+        let radius = blast.radius;
+        let damage = blast.damage;
+        let impulse_magnitude = blast.impulse;
         let friendly_fire = self.friendly_fire;
-        // маска уровня бомбы: читается ДО цикла — внутри занят ctx.world
+        // маска уровня взрыва: читается ДО цикла — внутри занят ctx.world
         let bomb_bit = self
             .levels
             .as_ref()
             .filter(|levels| levels.is_layered())
-            .map(|_| level_group(bomb.level));
+            .map(|_| level_group(blast.level));
 
-        let bomb_position = ctx.world.bodies[bomb.body].translation();
+        let bomb_position = Vector::new(blast.x, blast.y);
+        let map: &Option<vimp_engine_core::map::GameMap> = ctx.map;
 
         struct Target {
             handle: RigidBodyHandle,
-            // None — динамика карты: импульс без урона
+            // None — динамика карты: импульс без урона (проп — урон пропу)
             tag: Option<BodyTag>,
+            // индекс пропа среди тел карты
+            prop: Option<usize>,
+            // точка отсчёта: центр коллайдера у тел карты, тело — у танка
+            center: Vector,
             distance: f32,
         }
 
@@ -1215,7 +1673,7 @@ impl TanksSim {
                     continue;
                 };
 
-                if parent == bomb.body {
+                if Some(parent) == blast.source {
                     continue;
                 }
 
@@ -1231,21 +1689,33 @@ impl TanksSim {
                     continue;
                 };
 
-                if !body.is_dynamic() {
+                // отключённое тело (разрушенный проп) не цель: в этом же шаге
+                // его коллайдер ещё лежит в дереве запросов
+                if !body.is_dynamic() || !body.is_enabled() {
                     continue;
                 }
 
                 let tag = BodyTag::decode(body.user_data);
+                let map_object = is_map_object(body.user_data);
 
                 // тело без метки вовсе целью не считается (JS: !userData?.type)
-                if tag.is_none() && !is_map_object(body.user_data) {
+                if tag.is_none() && !map_object {
                     continue;
                 }
 
-                let distance = (body.translation() - bomb_position).length();
+                // позиция тела карты — угол объекта: расстояние и точка
+                // импульса считаются от центра коллайдера
+                let center = if map_object { collider.translation() } else { body.translation() };
+                let distance = (center - bomb_position).length();
 
                 if distance < radius && !targets.iter().any(|t| t.handle == parent) {
-                    targets.push(Target { handle: parent, tag, distance });
+                    let prop = map
+                        .as_ref()
+                        .filter(|_| map_object)
+                        .and_then(|map| map.dynamic_index_of(ctx.world, parent))
+                        .filter(|index| self.props.get(*index).is_some());
+
+                    targets.push(Target { handle: parent, tag, prop, center, distance });
                 }
             }
         }
@@ -1256,18 +1726,30 @@ impl TanksSim {
             let actual_impulse = impulse_magnitude * falloff;
 
             if let Some(BodyTag::Player { game_id, team_id }) = target.tag {
-                if friendly_fire || bomb.team_id != team_id {
-                    self.apply_damage(ctx, game_id, bomb.owner_id, weapon_index, Some(actual_damage));
+                match blast.owner {
+                    Some((owner_id, owner_team, weapon_index)) => {
+                        if friendly_fire || owner_team != team_id {
+                            self.apply_damage(ctx, game_id, owner_id, weapon_index, Some(actual_damage));
+                        }
+                    }
+                    // бочка: дружественного огня нет, смерть — самоубийство
+                    None => self.apply_damage_raw(ctx, game_id, game_id, actual_damage, blast.shake.as_ref()),
                 }
             }
 
-            if actual_impulse > 0.0 && target.distance > 0.0 {
-                if let Some(body) = ctx.world.bodies.get_mut(target.handle) {
-                    let direction = (body.translation() - bomb_position).normalize_or_zero();
-                    let impulse_vector = direction * actual_impulse;
-                    let point = body.translation();
+            // множитель `blastFactor` применяет сама `Props::damage`; бочка
+            // вернёт `Primed`, забор и ящик — `Destroyed`/`Damaged`
+            if let Some(index) = target.prop {
+                self.damage_prop(ctx, index, actual_damage as f32, DamageCause::Blast);
+            }
 
-                    body.apply_impulse_at_point(impulse_vector, point, true);
+            if actual_impulse > 0.0 && target.distance > 0.0 {
+                // только что разрушенное этим взрывом тело уже отключено
+                if let Some(body) = ctx.world.bodies.get_mut(target.handle).filter(|body| body.is_enabled()) {
+                    let direction = (target.center - bomb_position).normalize_or_zero();
+                    let impulse_vector = direction * actual_impulse;
+
+                    body.apply_impulse_at_point(impulse_vector, target.center, true);
                 }
             }
         }
@@ -1276,12 +1758,12 @@ impl TanksSim {
             x: round1(bomb_position.x),
             y: round1(bomb_position.y),
             radius,
-            level: bomb.level,
+            level: blast.level,
         }
     }
 
-    /// Урон игроку (Game.applyDamage): дружественный огонь, тряска
-    /// камеры, kill-событие.
+    /// Урон игроку от оружия (Game.applyDamage): дружественный огонь, тряска
+    /// камеры оружия, kill-событие.
     fn apply_damage(&mut self, ctx: &mut SimCtx, target_id: u32, shooter_id: u32, weapon_index: usize, damage_override: Option<f64>) {
         if !self.is_alive(target_id) {
             return;
@@ -1295,28 +1777,37 @@ impl TanksSim {
         }
 
         let weapon = &self.weapons[weapon_index];
+        let shake = weapon.camera_shake.clone();
+        let damage = damage_override.unwrap_or(weapon.damage);
 
-        if let Some(shake) = &weapon.camera_shake {
+        self.apply_damage_raw(ctx, target_id, shooter_id, damage, shake.as_ref());
+    }
+
+    /// Урон игроку без правил оружия: тряска камеры, урон, kill-событие.
+    fn apply_damage_raw(&mut self, ctx: &mut SimCtx, victim: u32, killer: u32, amount: f64, shake: Option<&CameraShake>) {
+        if !self.is_alive(victim) {
+            return;
+        }
+
+        if let Some(shake) = shake {
             ctx.events.push(CoreEvent::Shake {
-                id: target_id,
+                id: victim,
                 intensity: shake.intensity,
                 duration: shake.duration,
             });
         }
 
-        let damage = damage_override.unwrap_or(weapon.damage);
-
         let destroyed = {
-            let tank = self.tanks.get_mut(&target_id).unwrap();
+            let tank = self.tanks.get_mut(&victim).unwrap();
             let Some(body) = ctx.world.bodies.get_mut(tank.body) else {
                 return;
             };
 
-            tank.take_damage(damage, body, ctx.events)
+            tank.take_damage(amount, body, ctx.events)
         };
 
         if destroyed {
-            ctx.events.push(CoreEvent::Death { victim: target_id, killer: shooter_id });
+            ctx.events.push(CoreEvent::Death { victim, killer });
         }
     }
 
@@ -1356,6 +1847,7 @@ struct TanksDump<'a> {
     shots_at_time: &'a Vec<Vec<u32>>,
     current_shot_id: u32,
     current_step_tick: usize,
+    props: &'a Props,
 }
 
 #[derive(Deserialize)]
@@ -1366,4 +1858,6 @@ struct TanksDumpOwned {
     shots_at_time: Vec<Vec<u32>>,
     current_shot_id: u32,
     current_step_tick: usize,
+    #[serde(default)]
+    props: Props,
 }

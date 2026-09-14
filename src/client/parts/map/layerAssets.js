@@ -21,9 +21,13 @@ import {
 // молча ломало бы соседний файл.
 //
 // `spec` — это:
-//   container        контейнер парта: в него кладутся слой и клин
+//   container        контейнер парта: в него кладётся клин рампы
+//   layerRoot        корневой контейнер слоя (`MapLayer`): в него первым
+//                    ребёнком кладётся запечённый спрайт; параллакс слою
+//                    даёт сам `layerRoot`
 //   baseTexture      промис тайл-листа, `spriteSheetData` его разметка
 //   map, tiles, step грид слоя, имена его тайлов и размер тайла
+//   exclude          тайлы вне запекания (анимированные, `game.animatedTiles`)
 //   renderer         рендерер полотна (нужен запеканию)
 //   level, layer     уровень слоя и его базовый zIndex
 //   volume           высота слоя в уровнях (0 — плоский)
@@ -102,6 +106,7 @@ export async function buildLayerAssets(spec) {
       tiles: spec.tiles,
       step: spec.step,
       renderer: spec.renderer,
+      exclude: spec.exclude,
     });
 
     // повторно: запекание — второй await, и текстура уже создана, поэтому
@@ -112,11 +117,12 @@ export async function buildLayerAssets(spec) {
       return NOTHING;
     }
 
-    // один большой спрайт из "запеченной" текстуры
+    // один большой спрайт из "запеченной" текстуры. Трансформ у него
+    // единичный: масштаб и параллакс несёт `layerRoot`, и анимированные
+    // спрайты слоя (контейнер `animated` над ним) едут вместе с картинкой
     const mapSprite = new Sprite(bakedTexture);
 
-    applyParallax(mapSprite, null, spec.parallaxK, spec.baseScale);
-    spec.container.addChild(mapSprite);
+    spec.layerRoot.addChildAt(mapSprite, 0);
 
     if (!spec.extruding) {
       return { ...NOTHING, mapSprite };

@@ -4,7 +4,10 @@ import { normalizeAngle } from 'vimp-engine/lib/math.js';
 import { levelZ } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
-import { parallax as parallaxConfig } from '../../../config/render.js';
+import {
+  parallax as parallaxConfig,
+  surfaceFx,
+} from '../../../config/render.js';
 import {
   M1_X,
   M1_Y,
@@ -27,6 +30,9 @@ export default class Tracks extends Container {
     // это уже делают; следы оставались единственным непрозрачным пятном
     this._levelView = dependencies.levelView || null;
     this._renderer = dependencies.renderer || null;
+    // поверхность под танком из ядра: масло держит тёмный след дольше, грязь
+    // темнит его, вода не оставляет вовсе. Без сервиса — прежние следы
+    this._surfaces = dependencies.surfaces || null;
 
     // 2.5D: след принадлежит тому уровню, на котором он оставлен, и остаётся
     // на нём, даже когда танк уже уехал по рампе. Поэтому отметки живут не в
@@ -251,6 +257,15 @@ export default class Tracks extends Container {
   }
 
   createTrackMarksAtPreviousPosition() {
+    const kind = this._surfaces
+      ? this._surfaces.kindAt(this._prevX, this._prevY, this._level)
+      : null;
+
+    if (kind && surfaceFx.tracks.noMarks.includes(kind)) {
+      return;
+    }
+
+    const style = (kind && surfaceFx.tracks[kind]) || null;
     const layer = this._markLayer(this._level);
 
     for (let i = -1; i <= 1; i += 2) {
@@ -273,9 +288,14 @@ export default class Tracks extends Container {
         this._prevRotation,
         this._trackWidth,
         this._trackLength,
-        this._trackInitialAlpha,
+        Math.min(1, this._trackInitialAlpha * (style ? style.alpha : 1)),
         this._assets.trackMarkTexture,
+        style ? style.lifetime : 1,
       );
+
+      if (style) {
+        mark.tint = style.tint;
+      }
 
       layer.addChild(mark);
     }

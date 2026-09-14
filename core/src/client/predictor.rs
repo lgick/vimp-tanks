@@ -16,9 +16,10 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 use rapier2d::prelude::Group;
 
-use crate::config::{KeyConfig, LevelRules, ModelConfig};
+use crate::config::{KeyConfig, LevelRules, ModelConfig, SurfaceRules};
 use crate::level::{self, Footprint, LevelState, Transit, LEVEL_EPSILON};
 use crate::motion::{self, TurretInput};
+use crate::surface::{self, SurfaceMap, SurfaceMix};
 use vimp_engine_core::client::collision::{
     BlockContact, Contact, Manifold, collect_block_contacts_into, obb_manifold,
 };
@@ -33,7 +34,7 @@ use vimp_engine_core::physics::normalize_angle;
 
 use super::map_dynamics::MapDynamics;
 use super::remote_tanks::RemoteTanks;
-use super::predicted_set::PredictedBodies;
+use super::predicted_set::{PreStepCtx, PredictedBodies};
 
 // максимальный возраст записей истории ввода (мс)
 const HISTORY_MAX_AGE: f64 = 2000.0;
@@ -184,6 +185,11 @@ pub struct Predictor {
     /// слоями
     level_state: LevelState,
     level_rules: LevelRules,
+    /// Таблица поверхностей текущей карты (`None` — карта их не объявила)
+    /// и их правила: реплика смешивает коэффициенты теми же функциями
+    /// `crate::surface`, что хост. Имя `surfaces` занято буфером контактов.
+    surface_map: Option<Rc<SurfaceMap>>,
+    surface_rules: SurfaceRules,
     /// Авторитетные `(z, level, vz)` своего танка из последнего сырого
     /// кадра: уровень и фаза полёта принадлежат хосту, реплика их только
     /// доигрывает (см. `correct_level`). Вертикальная скорость приезжает
@@ -256,6 +262,7 @@ impl Predictor {
         player_keys: &IndexMap<String, KeyConfig>,
         models: &IndexMap<String, ModelConfig>,
         level_rules: LevelRules,
+        surface_rules: SurfaceRules,
     ) -> Self {
         let mut keys = IndexMap::new();
 
@@ -288,6 +295,8 @@ impl Predictor {
             block_hits: Vec::new(),
             level_state: LevelState::default(),
             level_rules,
+            surface_map: None,
+            surface_rules,
             authoritative_level: None,
             level_disagreement: 0,
             local_now: 0.0,
@@ -394,7 +403,12 @@ impl Predictor {
     /// и правил уровня. Структуру строит `TanksClient::set_map` и отдаёт её
     /// же предсказанию выстрела: разбирать JSON здесь второй раз нельзя,
     /// иначе луч и контакт могут разъехаться.
-    pub(crate) fn set_map(&mut self, cfg: &super::ClientMapConfig, levels: Rc<MapLevels>) {
+    pub(crate) fn set_map(
+        &mut self,
+        cfg: &super::ClientMapConfig,
+        levels: Rc<MapLevels>,
+        surface_map: Option<SurfaceMap>,
+    ) {
         // геометрия динамики — целиком из этой карты (см. map_dynamics.rs:
         // сброса по CLEAR у неё намеренно нет)
         let fall = level::fall_model(&self.level_rules);
@@ -406,6 +420,7 @@ impl Predictor {
 
         self.guards = ramp_guards(&levels);
         self.levels = Some(levels);
+        self.surface_map = surface_map.map(Rc::new);
 
         // геометрия сменилась: клетка входа, вердикт гейта и вся история
         // уровня относятся к СТАРОЙ карте. Оставить их — значит судить вход
@@ -423,6 +438,18 @@ impl Predictor {
     /// подсистемы получили одну и ту же карту.
     pub(crate) fn levels(&self) -> Option<&Rc<MapLevels>> {
         self.levels.as_ref()
+    }
+
+    /// Правила поверхностей: по ним `TanksClient::set_map` строит таблицу
+    /// карты.
+    pub(crate) fn surface_rules(&self) -> &SurfaceRules {
+        &self.surface_rules
+    }
+
+    /// Таблица поверхностей карты предикта: тесты паритета с хостом и
+    /// эффекты частей (`ClientCore::surface_at`).
+    pub(crate) fn surface_map(&self) -> Option<&Rc<SurfaceMap>> {
+        self.surface_map.as_ref()
     }
 
     /// Авторитетные высота и уровень своего танка из сырого кадра.
@@ -977,6 +1004,7 @@ impl Predictor {
 
         if self.level_state.input_locked() {
             self.engine_load = 0.0;
+            self.pre_step_sets(dt);
             self.resolve_world(dt);
             self.integrate(damping.0, damping.1, dt);
 
@@ -991,12 +1019,32 @@ impl Predictor {
         self.state.throttle =
             motion::step_throttle(self.state.throttle, forward || back, model, dt);
 
-        let forward_speed = self.state.vx * cos + self.state.vy * sin;
-        let lateral_vel = -self.state.vx * sin + self.state.vy * cos;
+        // поверхность под гусеницами и скорости НАЧАЛА шага — ровно те, что
+        // хост снимает до всех импульсов (`Tank::update`)
+        let mix = match (&self.surface_map, &self.shape) {
+            (Some(map), Some(shape)) => surface::tank_mix(
+                map,
+                &self.surface_rules,
+                &self.level_state,
+                self.state.x,
+                self.state.y,
+                self.state.angle,
+                shape.half_w,
+                shape.half_h,
+            ),
+            _ => SurfaceMix::NEUTRAL,
+        };
+        let (start_vx, start_vy, start_angvel) = (self.state.vx, self.state.vy, self.state.angvel);
 
-        let lateral_dv = motion::lateral_dv(lateral_vel, model, dt);
+        // скорость относительно «грунта» (ленты конвейера)
+        let rel_vx = start_vx - mix.belt_x;
+        let rel_vy = start_vy - mix.belt_y;
+        let forward_speed = rel_vx * cos + rel_vy * sin;
+        let lateral_vel = -rel_vx * sin + rel_vy * cos;
+
+        let lateral_dv = motion::lateral_dv_on(lateral_vel, model, mix.grip, dt);
         let grade = self.level_state.grade(cos, sin);
-        let accel = motion::drive_accel(
+        let accel = motion::drive_accel_on(
             self.state.throttle,
             forward,
             back,
@@ -1004,15 +1052,58 @@ impl Predictor {
             grade,
             model,
             &self.level_rules,
+            &mix,
         );
         let forward_dv = accel * dt;
 
         self.state.vx += cos * forward_dv - sin * lateral_dv;
         self.state.vy += sin * forward_dv + cos * lateral_dv;
 
+        // сопротивление поверхности и импульс бустера — в том же порядке,
+        // что импульсы хоста
+        if mix != SurfaceMix::NEUTRAL {
+            let (drag_x, drag_y) = motion::surface_drag_dv((rel_vx, rel_vy), mix.drag, dt);
+
+            self.state.vx += drag_x;
+            self.state.vy += drag_y;
+        }
+
+        if let Some(map) = &self.surface_map {
+            let (boost_x, boost_y) = surface::boost_dv(
+                map,
+                self.level_state.level,
+                self.level_state.airborne(),
+                self.state.x,
+                self.state.y,
+                start_vx,
+                start_vy,
+                dt,
+            );
+
+            if boost_x != 0.0 || boost_y != 0.0 {
+                self.state.vx += boost_x;
+                self.state.vy += boost_y;
+            }
+        }
+
         self.engine_load = motion::engine_load(self.state.throttle, forward_speed, model);
 
-        self.state.angvel += motion::turn_delta(left, right, forward_speed, model, dt);
+        let mut delta_omega =
+            motion::turn_delta(left, right, forward_speed, model, dt) * mix.turn;
+
+        if mix != SurfaceMix::NEUTRAL {
+            delta_omega += motion::track_yaw_dv(
+                self.state.throttle,
+                forward,
+                back,
+                &mix,
+                model,
+                &self.surface_rules,
+                dt,
+            ) + motion::angular_drag_dw(start_angvel, mix.angular_drag, dt);
+        }
+
+        self.state.angvel += delta_omega;
 
         // контакты решаются ДО интеграции позиции — тот же порядок, что у
         // Rapier: контакт строится на позе НАЧАЛА шага с запасом
@@ -1021,9 +1112,24 @@ impl Predictor {
         // целый шаг (до 1.24 юнита на полном ходу): плечо единственной
         // точки контакта получалось другим, чем у хоста, и предсказание
         // молча расходилось с сервером на касательных ударах
+        self.pre_step_sets(dt);
         self.resolve_world(dt);
 
         self.integrate(damping.0, damping.1, dt);
+    }
+
+    // силы шага предсказанных подсистем до контактов (поверхности под телами
+    // карты) — тот же порядок, что у хоста: `apply_body_surfaces` идёт до
+    // `world.step`
+    fn pre_step_sets(&mut self, dt: f32) {
+        let ctx = PreStepCtx {
+            surfaces: self.surface_map.as_deref(),
+            rules: &self.surface_rules,
+        };
+
+        for set in &mut self.sets {
+            set.pre_step(&ctx, dt);
+        }
     }
 
     // наклон корпуса: те же функции `motion` и в том же порядке, что у
@@ -1558,6 +1664,19 @@ mod tests {
                 "health": { "value": 100 },
                 "w1": { "value": 200 }
             },
+            "surfaces": {
+                "trackYawGain": 0.004,
+                "trackSampleX": 0.6,
+                "trackSampleY": 0.75,
+                "types": {
+                    "sand": { "accel": 0.6, "maxSpeed": 0.55, "drag": 1.2, "grip": 1.0, "brake": 1.0, "turn": 0.8 },
+                    "mud": { "accel": 0.45, "maxSpeed": 0.4, "drag": 2.0, "grip": 0.9, "brake": 1.0, "turn": 0.7 },
+                    "water": { "accel": 0.7, "maxSpeed": 0.6, "drag": 1.5, "grip": 0.8, "brake": 0.8, "turn": 0.85 },
+                    "oil": { "accel": 0.35, "maxSpeed": 1.0, "drag": 0.0, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5 },
+                    "conveyor": { "belt": 60 },
+                    "boost": { "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20 }
+                }
+            },
             "snapshot": {
                 "version": 3,
                 "port": 5,
@@ -1577,7 +1696,7 @@ mod tests {
 
     fn make_predictor() -> Predictor {
         let cfg = core_config();
-        let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels);
+        let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
 
         p.set_model("m1");
         p.set_active(true);
@@ -1693,7 +1812,7 @@ mod tests {
         // шаг 10 мс: точен в f64 — число шагов детерминировано
         let make = || {
             let cfg = core_config();
-            let mut p = Predictor::new(10.0, &cfg.player_keys, &cfg.models, cfg.levels);
+            let mut p = Predictor::new(10.0, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
 
             p.set_model("m1");
             p.set_active(true);
@@ -1881,8 +2000,9 @@ mod tests {
     pub fn apply_map(p: &mut Predictor, json: &str) {
         let mut cfg: super::super::ClientMapConfig = serde_json::from_str(json).unwrap();
         let levels = Rc::new(cfg.take_levels());
+        let surface_map = cfg.surface_map(&levels, p.surface_rules()).unwrap();
 
-        p.set_map(&cfg, levels);
+        p.set_map(&cfg, levels, surface_map);
     }
 
     // минимальный двойник подсистемы с одним предсказанным ящиком
@@ -3485,7 +3605,7 @@ mod parity {
 
         game.spawn_actor(1, "m1", 1, 0.0, 0.0, 0.0).unwrap();
 
-        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels);
+        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
 
         predictor.set_model("m1");
         predictor.set_active(true);
@@ -3611,7 +3731,7 @@ mod parity {
             state
         };
 
-        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels);
+        let mut predictor = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
 
         predictor.set_model("m1");
         predictor.set_active(true);
@@ -3781,5 +3901,607 @@ mod parity {
         let (core, replica) = simulate(60, &[]);
 
         expect_close(core, replica, 0.001);
+    }
+
+    // ---- поверхности (этап 2) ----
+
+    fn surface_types() -> serde_json::Value {
+        serde_json::json!({
+            "41": "sand",
+            "42": "mud",
+            "43": "water",
+            "44": "oil",
+            "45": { "type": "conveyor", "dir": "south" },
+            "47": { "type": "boost", "dir": "east" },
+            "48": { "type": "boost", "dir": "south" },
+            "49": { "type": "boost", "dir": "west" }
+        })
+    }
+
+    /// Плоская карта 40×20 клеток без стен (шаг 32, масштаб 1):
+    /// `fill(колонка, строка)` — тайл клетки, поверхности — `surface_types`.
+    fn surface_map(fill: impl Fn(usize, usize) -> i32) -> String {
+        let grid: Vec<Vec<i32>> = (0..20).map(|y| (0..40).map(|x| fill(x, y)).collect()).collect();
+
+        serde_json::json!({
+            "setId": "c1",
+            "step": 32,
+            "scale": 1,
+            "map": grid,
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "respawns": { "team1": [[100.0, 100.0, 0.0]], "team2": [[200.0, 100.0, 0.0]] },
+            "game": { "surfaces": { "0": surface_types() } }
+        })
+        .to_string()
+    }
+
+    fn pose(x: f32, y: f32, angle: f32, vx: f32, vy: f32) -> Pose {
+        Pose { x, y, angle, vx, vy, angvel: 0.0 }
+    }
+
+    struct Traced {
+        core: [f32; PLAYER_STATE_LEN],
+        replica: TankState,
+        // скорости по шагам, [0] — стартовая поза
+        core_v: Vec<(f32, f32)>,
+        replica_v: Vec<(f32, f32)>,
+    }
+
+    // `simulate_on_map` со скоростями обеих сторон на каждом шаге; `level` —
+    // уровень стартовой позы на слоёной карте (реплике его задаёт кадр)
+    fn simulate_traced(
+        map_json: &str,
+        pose: Pose,
+        level: u8,
+        steps: usize,
+        schedule: &[(usize, u32)],
+    ) -> Traced {
+        let cfg = core_config();
+        let mut game = GameState::new(engine_config(), &cfg);
+
+        game.load_map(map_json).unwrap();
+        game.spawn_actor(1, "m1", 1, pose.x, pose.y, 0.0).unwrap();
+
+        {
+            let handle = game.sim.tanks[&1].body;
+            let body = &mut game.world.bodies[handle];
+
+            body.set_rotation(Rotation::new(pose.angle), true);
+            body.set_linvel(Vector::new(pose.vx, pose.vy), true);
+            body.set_angvel(pose.angvel, true);
+        }
+
+        let core_state = |game: &GameState| {
+            let tank = &game.sim.tanks[&1];
+
+            tank.prediction_state(&game.world.bodies[tank.body]).0
+        };
+        let seed = core_state(&game);
+        let mut predictor = Predictor::new(
+            STEP_MS,
+            &cfg.player_keys,
+            &cfg.models,
+            cfg.levels,
+            cfg.surfaces.clone(),
+        );
+
+        predictor.set_model("m1");
+        predictor.set_active(true);
+        apply_map(&mut predictor, map_json);
+
+        if level > 0 {
+            predictor.adopt_level(level as f32, level, 0.0);
+        }
+
+        predictor.on_server_state(seed, false, 0.0, 0.0, 0.0);
+
+        let mut current_mask = 0u32;
+        let mut core_v = vec![(seed[3], seed[4])];
+        let mut replica_v = vec![(predictor.state.vx, predictor.state.vy)];
+
+        let mut seq = 0u32;
+
+        for i in 0..steps {
+            if let Some((_, new_mask)) = schedule.iter().find(|(step, _)| *step == i) {
+                // диф масок → down/up хосту, как в `simulate`
+                for (name, key) in &cfg.player_keys {
+                    let was = current_mask & key.key != 0;
+                    let now = new_mask & key.key != 0;
+
+                    if was != now {
+                        seq += 1;
+                        game.apply_input(1, seq, if now { "down" } else { "up" }, name);
+                    }
+                }
+
+                current_mask = *new_mask;
+            }
+
+            game.step(DT);
+            predictor.step(current_mask);
+
+            let core = core_state(&game);
+
+            core_v.push((core[3], core[4]));
+            replica_v.push((predictor.state.vx, predictor.state.vy));
+        }
+
+        Traced {
+            core: core_state(&game),
+            replica: predictor.state,
+            core_v,
+            replica_v,
+        }
+    }
+
+    // импульсы бустера: скачки скорости за шаг по осям (x, y). Обычная тяга
+    // за шаг — не больше 1000/120 ≈ 8.3, импульс плиты — до 160
+    fn boost_jumps(trace: &[(f32, f32)]) -> (usize, usize) {
+        let jumps = |axis: fn(&(f32, f32)) -> f32| {
+            trace
+                .windows(2)
+                .filter(|pair| (axis(&pair[1]) - axis(&pair[0])).abs() > 60.0)
+                .count()
+        };
+
+        (jumps(|v| v.0), jumps(|v| v.1))
+    }
+
+    fn expect_traced(traced: &Traced) {
+        expect_scenario_thresholds(traced.core, traced.replica);
+    }
+
+    #[test]
+    fn sand_straight_run() {
+        let cfg = core_config();
+        let traced = simulate_traced(&surface_map(|_, _| 41), pose(100.0, 320.0, 0.0, 0.0, 0.0), 0, 240, &[
+            (0, key_bit(&cfg, "forward")),
+        ]);
+
+        expect_traced(&traced);
+        assert!(traced.core[3] < 0.55 * 260.0, "песок держит потолок: {}", traced.core[3]);
+    }
+
+    #[test]
+    fn mud_under_left_track_yaws() {
+        let cfg = core_config();
+        // строки 0..10 — грязь: при курсе на восток на границе y = 320 она
+        // только под левой (северной) гусеницей
+        let map = surface_map(|_, y| if y < 10 { 42 } else { 0 });
+        let traced = simulate_traced(&map, pose(100.0, 320.0, 0.0, 0.0, 0.0), 0, 240, &[
+            (0, key_bit(&cfg, "forward")),
+        ]);
+
+        expect_traced(&traced);
+        assert!(traced.core[2] < 0.0, "хост уводит в сторону грязи: {}", traced.core[2]);
+        assert!(traced.replica.angle < 0.0, "реплика тоже: {}", traced.replica.angle);
+    }
+
+    #[test]
+    fn oil_hard_turn_slides() {
+        let cfg = core_config();
+        let map = surface_map(|x, _| if x >= 10 { 44 } else { 0 });
+        let mask = key_bit(&cfg, "forward") | key_bit(&cfg, "right");
+        let traced = simulate_traced(&map, pose(250.0, 320.0, 0.0, 200.0, 0.0), 0, 120, &[(0, mask)]);
+
+        expect_traced(&traced);
+    }
+
+    #[test]
+    fn water_brake_release() {
+        let cfg = core_config();
+        let traced = simulate_traced(&surface_map(|_, _| 43), pose(100.0, 320.0, 0.0, 0.0, 0.0), 0, 150, &[
+            (0, key_bit(&cfg, "forward")),
+            (60, 0),
+        ]);
+
+        expect_traced(&traced);
+    }
+
+    #[test]
+    fn conveyor_idle_drift() {
+        let traced = simulate_traced(&surface_map(|_, _| 45), pose(320.0, 160.0, 0.0, 0.0, 0.0), 0, 240, &[]);
+
+        expect_traced(&traced);
+        assert!(traced.core[4] > 20.0, "лента на юг везёт хост: {}", traced.core[4]);
+        assert!(traced.replica.vy > 20.0, "и реплику: {}", traced.replica.vy);
+    }
+
+    #[test]
+    fn conveyor_on_ground_ignored_on_bridge() {
+        // лента на юг по всей земле, плита уровня 1 в колонках 5..16 строк 5..16
+        let ground: Vec<Vec<i32>> = vec![vec![45; 20]; 20];
+        let slab: Vec<Vec<i32>> = (0..20)
+            .map(|y| (0..20).map(|x| if (5..16).contains(&x) && (5..16).contains(&y) { 2 } else { 0 }).collect())
+            .collect();
+        let map = serde_json::json!({
+            "setId": "c1",
+            "step": 32,
+            "scale": 1,
+            "map": ground,
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "respawns": { "team1": [[100.0, 100.0, 0.0]], "team2": [[200.0, 100.0, 0.0]] },
+            "levels": { "1": { "map": slab, "floor": [2], "walls": [] } },
+            "game": { "surfaces": { "0": { "45": { "type": "conveyor", "dir": "south" } } } }
+        })
+        .to_string();
+        let traced = simulate_traced(&map, pose(320.0, 320.0, 0.0, 0.0, 0.0), 1, 240, &[]);
+
+        expect_traced(&traced);
+        assert!(traced.core[4].abs() < 0.5, "лента земли не везёт танк на мосту: {}", traced.core[4]);
+        assert!(traced.replica.vy.abs() < 0.5, "и реплику: {}", traced.replica.vy);
+    }
+
+    // полоса бустера `tile` в колонке 10 (x 320..352) по всей высоте
+    fn boost_column(tile: i32) -> String {
+        surface_map(move |x, _| if x == 10 { tile } else { 0 })
+    }
+
+    #[test]
+    fn boost_pad_fires_once() {
+        // проезд накатом через плиту
+        let pass = simulate_traced(&boost_column(47), pose(300.0, 336.0, 0.0, 150.0, 0.0), 0, 120, &[]);
+
+        expect_traced(&pass);
+        assert_eq!(boost_jumps(&pass.core_v), (1, 0), "хост: один импульс на въезд");
+        assert_eq!(boost_jumps(&pass.replica_v), (1, 0), "реплика: один импульс на въезд");
+
+        // стоянка на плите: въезда нет
+        let stand = simulate_traced(&boost_column(47), pose(336.0, 336.0, 0.0, 0.0, 0.0), 0, 60, &[]);
+
+        expect_traced(&stand);
+        assert_eq!(boost_jumps(&stand.core_v), (0, 0));
+        assert_eq!(boost_jumps(&stand.replica_v), (0, 0));
+    }
+
+    #[test]
+    fn boost_plate_2x3_lengthwise() {
+        let cfg = core_config();
+        // плита 2×3: строки 9..11, колонки 10..13, стрелка на восток
+        let map = surface_map(|x, y| if (10..13).contains(&x) && (9..11).contains(&y) { 47 } else { 0 });
+        let traced = simulate_traced(&map, pose(260.0, 320.0, 0.0, 60.0, 0.0), 0, 150, &[
+            (0, key_bit(&cfg, "forward")),
+        ]);
+
+        expect_traced(&traced);
+        assert_eq!(boost_jumps(&traced.core_v), (1, 0), "хост: плита 2×3 — один импульс");
+        assert_eq!(boost_jumps(&traced.replica_v), (1, 0), "реплика: плита 2×3 — один импульс");
+    }
+
+    #[test]
+    fn boost_adjacent_plates_different_dir() {
+        // колонка 10 — «восток», колонка 11 — «юг»; танк идёт по диагонали
+        let map = surface_map(|x, _| match x {
+            10 => 47,
+            11 => 48,
+            _ => 0,
+        });
+        let cfg = core_config();
+        let angle = std::f32::consts::FRAC_PI_4;
+        let traced = simulate_traced(&map, pose(250.0, 100.0, angle, 120.0, 120.0), 0, 120, &[
+            (0, key_bit(&cfg, "forward")),
+        ]);
+
+        expect_traced(&traced);
+        assert_eq!(boost_jumps(&traced.core_v), (1, 1), "хост: по импульсу на каждую плиту");
+        assert_eq!(boost_jumps(&traced.replica_v), (1, 1), "реплика: по импульсу на каждую плиту");
+    }
+
+    #[test]
+    fn boost_against_arrow_does_nothing() {
+        let traced = simulate_traced(&boost_column(49), pose(300.0, 336.0, 0.0, 150.0, 0.0), 0, 120, &[]);
+
+        expect_traced(&traced);
+        assert_eq!(boost_jumps(&traced.core_v), (0, 0));
+        assert_eq!(boost_jumps(&traced.replica_v), (0, 0));
+    }
+
+    #[test]
+    fn surface_tile_size_matches_the_host() {
+        let cfg = core_config();
+        let map = serde_json::json!({
+            "setId": "c1",
+            "step": 32,
+            "scale": 0.4,
+            "map": vec![vec![41; 10]; 10],
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "respawns": { "team1": [[100.0, 100.0, 0.0]], "team2": [[200.0, 100.0, 0.0]] },
+            "game": { "surfaces": { "0": { "41": "sand" } } }
+        })
+        .to_string();
+        let mut game = GameState::new(engine_config(), &cfg);
+        let mut predictor = Predictor::new(
+            STEP_MS,
+            &cfg.player_keys,
+            &cfg.models,
+            cfg.levels,
+            cfg.surfaces.clone(),
+        );
+
+        game.load_map(&map).unwrap();
+        apply_map(&mut predictor, &map);
+
+        let host = game.sim.surface_map().unwrap().tile_size();
+        let replica = predictor.surface_map().unwrap().tile_size();
+
+        assert_eq!(host, replica);
+        assert!((host - 12.8).abs() < 1e-4, "размер клетки step·scale: {host}");
+    }
+
+    // Реконсиляция посреди плиты и за шаг до въезда — с историей уровня и
+    // без неё (после `reset`): у бустера нет состояния, поэтому реплей
+    // обязан дать ровно столько импульсов, сколько хост, — иначе конечная
+    // скорость разойдётся на целый импульс (160 при пороге 25)
+    #[test]
+    fn boost_reconcile_replays_one_impulse_per_entry() {
+        const TOTAL: usize = 90;
+
+        let cfg = core_config();
+        let map = boost_column(47);
+        let start = pose(300.0, 336.0, 0.0, 150.0, 0.0);
+        let mut game = GameState::new(engine_config(), &cfg);
+
+        game.load_map(&map).unwrap();
+        game.spawn_actor(1, "m1", 1, start.x, start.y, 0.0).unwrap();
+        game.world.bodies[game.sim.tanks[&1].body].set_linvel(Vector::new(start.vx, start.vy), true);
+
+        let mut host = Vec::new();
+
+        for i in 0..=TOTAL {
+            if i > 0 {
+                game.step(DT);
+            }
+
+            let tank = &game.sim.tanks[&1];
+
+            host.push(tank.prediction_state(&game.world.bodies[tank.body]).0);
+        }
+
+        let entry = (1..=TOTAL)
+            .find(|&i| host[i][3] - host[i - 1][3] > 60.0)
+            .expect("хост обязан въехать на плиту");
+
+        assert!(entry > 2 && entry + 3 < TOTAL, "въезд в середине прогона: {entry}");
+
+        let local_now = TOTAL as f64 * STEP_MS + STEP_MS * 0.5;
+        let replica = || {
+            let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
+
+            p.set_model("m1");
+            p.set_active(true);
+            apply_map(&mut p, &map);
+            // вся дорога реплики своим ходом: история уровня заполнена
+            p.on_server_state(host[0], false, 0.0, 0.0, local_now);
+            p
+        };
+
+        for frame in [entry - 1, entry + 2] {
+            let frame_time = frame as f64 * STEP_MS;
+
+            let mut with_history = replica();
+
+            with_history.on_server_state(host[frame], false, frame_time, 0.0, local_now);
+            expect_scenario_thresholds(host[TOTAL], with_history.state);
+
+            let mut after_reset = replica();
+
+            after_reset.reset();
+            after_reset.on_server_state(host[frame], false, frame_time, 0.0, local_now);
+            expect_scenario_thresholds(host[TOTAL], after_reset.state);
+        }
+    }
+
+    // ---- поверхности для тел карты (этап 3) ----
+
+    /// Карта 40×20 клеток без стен (шаг 32, масштаб 1) с одним ящиком 32×32:
+    /// `fill` — тайл клетки, `game` — поле `game`, `crate_at` — угол объекта.
+    fn crate_map(fill: impl Fn(usize, usize) -> i32, game: serde_json::Value, crate_at: [f32; 2]) -> String {
+        let grid: Vec<Vec<i32>> = (0..20).map(|y| (0..40).map(|x| fill(x, y)).collect()).collect();
+
+        serde_json::json!({
+            "setId": "c1",
+            "step": 32,
+            "scale": 1,
+            "map": grid,
+            "physicsStatic": [1],
+            "physicsDynamic": [{
+                "density": 1,
+                "position": crate_at,
+                "angle": 0,
+                "width": 32,
+                "height": 32,
+                "linearDamping": 0.5,
+                "angularDamping": 0.01
+            }],
+            "respawns": { "team1": [[100.0, 100.0, 0.0]], "team2": [[200.0, 100.0, 0.0]] },
+            "game": game
+        })
+        .to_string()
+    }
+
+    /// Плита-бустер на восток в колонках 10..13, остальное — асфальт.
+    fn crate_boost_map(crate_at: [f32; 2]) -> String {
+        crate_map(
+            |x, _| if (10..13).contains(&x) { 47 } else { 0 },
+            serde_json::json!({ "surfaces": { "0": { "47": { "type": "boost", "dir": "east" } } } }),
+            crate_at,
+        )
+    }
+
+    /// Ящик по шагам: `[cx, cy, vx, vy]` (центр), индекс 0 — старт.
+    type CrateTrace = Vec<[f32; 4]>;
+
+    // хост: ящик со стартовой скоростью, `steps` шагов мира
+    fn host_crate_trace(map_json: &str, velocity: [f32; 2], steps: usize) -> CrateTrace {
+        let cfg = core_config();
+        let mut game = GameState::new(engine_config(), &cfg);
+
+        game.load_map(map_json).unwrap();
+
+        let handle = game.map.as_ref().unwrap().dynamic_handle(0).unwrap();
+
+        game.world.bodies[handle].set_linvel(Vector::new(velocity[0], velocity[1]), true);
+
+        let read = |game: &GameState| {
+            let body = &game.world.bodies[handle];
+            let center = game.world.colliders[body.colliders()[0]].translation();
+            let vel = body.linvel();
+
+            [center.x, center.y, vel.x, vel.y]
+        };
+        let mut trace = vec![read(&game)];
+
+        for _ in 0..steps {
+            game.step(DT);
+            trace.push(read(&game));
+        }
+
+        trace
+    }
+
+    // реплика: ящик принудительно захвачен в предсказание из состояния
+    // `start`; свой танк стоит в дальнем углу на асфальте и ящика не касается
+    fn replica_crate_trace(map_json: &str, start: [f32; 4], steps: usize) -> CrateTrace {
+        let cfg = core_config();
+        let mut predictor =
+            Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
+        let mut seed = [0.0; PLAYER_STATE_LEN];
+
+        seed[0] = 1200.0;
+        seed[1] = 600.0;
+
+        predictor.add_predicted_set(Box::new(MapDynamics::new(&engine_config().snapshot)));
+        predictor.set_model("m1");
+        predictor.set_active(true);
+        apply_map(&mut predictor, map_json);
+        predictor.on_server_state(seed, false, 0.0, 0.0, 0.0);
+
+        {
+            let body = predictor
+                .map_dynamics_mut()
+                .unwrap()
+                .set_mut()
+                .bodies_mut()
+                .get_mut("d0")
+                .unwrap();
+
+            body.promote(0.0);
+            body.body.x = start[0];
+            body.body.y = start[1];
+            body.body.angle = 0.0;
+            body.body.vx = start[2];
+            body.body.vy = start[3];
+            body.body.angvel = 0.0;
+        }
+
+        let read = |predictor: &Predictor| {
+            let body = &predictor.map_dynamics().unwrap().set().bodies()["d0"];
+
+            assert!(body.is_predicted(), "ящик обязан оставаться в предсказании");
+
+            [body.body.x, body.body.y, body.body.vx, body.body.vy]
+        };
+        let mut trace = vec![read(&predictor)];
+
+        for _ in 0..steps {
+            predictor.step(0);
+            trace.push(read(&predictor));
+        }
+
+        trace
+    }
+
+    // покомпонентная разница ящика хоста и реплики
+    fn expect_crate_close(host: [f32; 4], replica: [f32; 4]) {
+        let names = ["x", "y", "vx", "vy"];
+        let thresholds = [0.5, 0.5, 1.0, 1.0];
+
+        for (index, threshold) in thresholds.iter().enumerate() {
+            let delta = (host[index] - replica[index]).abs();
+
+            assert!(
+                delta <= *threshold,
+                "{}: Δ{delta} > {threshold} (host {host:?}, replica {replica:?})",
+                names[index]
+            );
+        }
+    }
+
+    // шаги со скачком скорости больше 60: импульс бустера — 160, лента и
+    // сопротивление за шаг дают доли единицы
+    fn velocity_jumps(trace: &CrateTrace) -> Vec<usize> {
+        (1..trace.len())
+            .filter(|&i| (trace[i][2] - trace[i - 1][2]).hypot(trace[i][3] - trace[i - 1][3]) > 60.0)
+            .collect()
+    }
+
+    #[test]
+    fn crate_on_conveyor() {
+        let game = serde_json::json!({ "surfaces": { "0": { "45": { "type": "conveyor", "dir": "east" } } } });
+        let map = crate_map(|_, _| 45, game, [200.0, 300.0]);
+        let host = host_crate_trace(&map, [0.0, 0.0], 240);
+        let replica = replica_crate_trace(&map, host[0], 240);
+
+        assert!(host[240][2] > 30.0, "лента разгоняет ящик по стрелке: {:?}", host[240]);
+        assert!(host[240][3].abs() < 0.5, "поперёк стрелки ящик не едет: {:?}", host[240]);
+        expect_crate_close(host[240], replica[240]);
+    }
+
+    #[test]
+    fn crate_hits_boost_once() {
+        let map = crate_boost_map([240.0, 300.0]);
+        let host = host_crate_trace(&map, [150.0, 0.0], 150);
+        let replica = replica_crate_trace(&map, host[0], 150);
+
+        assert_eq!(velocity_jumps(&host).len(), 1, "хост: один импульс за проезд плиты");
+        assert_eq!(velocity_jumps(&replica), velocity_jumps(&host));
+        expect_crate_close(host[150], replica[150]);
+    }
+
+    #[test]
+    fn crate_in_sand_slows() {
+        let sand = serde_json::json!({ "surfaces": { "0": { "41": "sand" } } });
+        let map = crate_map(|_, _| 41, sand, [200.0, 300.0]);
+        let host = host_crate_trace(&map, [150.0, 0.0], 90);
+        let replica = replica_crate_trace(&map, host[0], 90);
+        let asphalt_map = crate_map(|_, _| 41, serde_json::Value::Null, [200.0, 300.0]);
+        let asphalt = host_crate_trace(&asphalt_map, [150.0, 0.0], 90);
+
+        assert!(
+            host[90][2] < asphalt[90][2] * 0.7,
+            "песок тормозит ящик: {} vs {}",
+            host[90][2],
+            asphalt[90][2]
+        );
+        expect_crate_close(host[90], replica[90]);
+    }
+
+    // Реконсиляция посреди плиты и за шаг до въезда: у тела нет ни истории,
+    // ни состояния бустера, и прогон с кадра (округлённого до 0.01, как
+    // строка `c1`/`c2`) обязан дать ровно столько импульсов, сколько хост
+    #[test]
+    fn crate_boost_reconcile_replays_one_impulse() {
+        const TOTAL: usize = 150;
+
+        let map = crate_boost_map([240.0, 300.0]);
+        let host = host_crate_trace(&map, [150.0, 0.0], TOTAL);
+        let entry = velocity_jumps(&host)[0];
+        let round2 = |value: f32| (value * 100.0).round() / 100.0;
+
+        assert!(entry > 2 && entry + 3 < TOTAL, "въезд в середине прогона: {entry}");
+
+        for frame in [entry - 1, entry + 2] {
+            let replica = replica_crate_trace(&map, host[frame].map(round2), TOTAL - frame);
+
+            assert_eq!(
+                velocity_jumps(&replica).len(),
+                usize::from(frame < entry),
+                "кадр {frame}, въезд {entry}"
+            );
+            expect_crate_close(host[TOTAL], replica[TOTAL - frame]);
+        }
     }
 }

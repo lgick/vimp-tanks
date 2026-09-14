@@ -3,7 +3,11 @@ import { Assets, Container, Texture } from 'pixi.js';
 import Map from '../../../../src/client/parts/Map.js';
 import { createLevelView } from '../../../../src/client/levelView.js';
 import { seeThrough } from '../../../../src/config/render.js';
-import { C_Z, C_LEVEL } from '../../../../src/client/snapshotFields.js';
+import {
+  C_Z,
+  C_LEVEL,
+  C_STATE,
+} from '../../../../src/client/snapshotFields.js';
 
 // Стратегия динамического тела карты (ящик): своя строка кадра, свой
 // уровень и своя прозрачность. Парт `Map` здесь — диспетчер: он создаёт
@@ -61,7 +65,7 @@ describe('MapObject: динамическое тело карты', () => {
     // высота по умолчанию равна уровню — так хост и держит стоящее тело
     // (`map::step_body_level`); дробная `z` бывает только в падении
     const boxRow = (x, y, level, z = level) => {
-      const row = [x, y, 0, 0, 0, 0, 0, 0];
+      const row = [x, y, 0, 0, 0, 0, 0, 0, 0];
 
       row[C_Z] = z;
       row[C_LEVEL] = level;
@@ -235,5 +239,231 @@ describe('MapObject: динамическое тело карты', () => {
 
     expect(mode.sprite).toBe(null);
     expect(addChild).not.toHaveBeenCalled();
+  });
+
+  describe('состояния пропа (байт state)', () => {
+    const propData = {
+      ...dynamicData,
+      game: {
+        prop: 'crate',
+        imgDamaged: 'crate-damaged.png',
+        imgDestroyed: 'crate-debris.png',
+      },
+    };
+
+    const stateRow = state => {
+      const row = [0, 0, 0, 0, 0, state, 0, 0, 0];
+
+      row[C_STATE] = state;
+
+      return row;
+    };
+
+    // запечённые ассеты парта Map (bakedAssets с component: 'Map')
+    const bakedAssets = () => ({
+      scorchTexture: { textures: [Texture.WHITE], contentSize: 40 },
+      debrisTexture: { textures: [Texture.WHITE], contentSize: 8 },
+    });
+
+    // текстуры по URL: каждая картинка состояния — свой объект
+    const textures = {
+      '/build/img/b1.png': Texture.WHITE,
+      '/build/img/crate-damaged.png': new Texture({
+        source: Texture.WHITE.source,
+      }),
+      '/build/img/crate-debris.png': new Texture({
+        source: Texture.WHITE.source,
+      }),
+    };
+
+    const flush = async () => {
+      for (let i = 0; i < 5; i += 1) {
+        await Promise.resolve();
+      }
+    };
+
+    let soundManager;
+
+    beforeEach(() => {
+      load.mockImplementation(url => Promise.resolve(textures[url]));
+      soundManager = { registerSound: vi.fn() };
+    });
+
+    const makeProp = async (data = propData, assets = bakedAssets()) => {
+      const part = new Map(data, assets, {
+        renderer,
+        assetsBase: '/build/',
+        soundManager,
+      });
+      const stage = new Container();
+
+      stage.addChild(part);
+      await flush();
+
+      return { part, stage, mode: part._mode };
+    };
+
+    it('0 → 1 → 0: текстура повреждения и обратно', async () => {
+      const { part, mode } = await makeProp();
+
+      part.update(stateRow(0));
+      await flush();
+      expect(mode.sprite.texture).toBe(textures['/build/img/b1.png']);
+
+      part.update(stateRow(1));
+      await flush();
+      expect(mode.sprite.texture).toBe(
+        textures['/build/img/crate-damaged.png'],
+      );
+      expect(load).toHaveBeenCalledWith('/build/img/crate-damaged.png');
+
+      part.update(stateRow(0));
+      await flush();
+      expect(mode.sprite.texture).toBe(textures['/build/img/b1.png']);
+    });
+
+    it('→ 2: картинка обломков, zIndex под танками, разлёт и звук', async () => {
+      const { part, stage, mode } = await makeProp();
+
+      part.update(stateRow(0));
+      await flush();
+
+      const children = stage.children.length;
+
+      part.update(stateRow(2));
+      await flush();
+
+      expect(mode.sprite.texture).toBe(textures['/build/img/crate-debris.png']);
+      expect(part.zIndex).toBe(1);
+      // разлёт щепок — сосед парта на сцене
+      expect(stage.children.length).toBe(children + 1);
+      expect(soundManager.registerSound).toHaveBeenCalledWith(
+        'propBreak',
+        expect.objectContaining({ position: expect.any(Object) }),
+      );
+    });
+
+    it('zIndex обломков на уровне едет за уровнем тела', async () => {
+      const { part } = await makeProp();
+
+      part.update(stateRow(0));
+
+      const row = stateRow(2);
+
+      row[C_LEVEL] = 1;
+      row[C_Z] = 1;
+      part.update(row);
+
+      expect(part.zIndex).toBe(101);
+    });
+
+    it('2 → 0 (новый раунд): исходная текстура и zIndex', async () => {
+      const { part, mode } = await makeProp();
+
+      part.update(stateRow(0));
+      part.update(stateRow(2));
+      await flush();
+      part.update(stateRow(0));
+      await flush();
+
+      expect(mode.sprite.texture).toBe(textures['/build/img/b1.png']);
+      expect(mode.sprite.visible).toBe(true);
+      expect(part.zIndex).toBe(2);
+    });
+
+    it('без imgDestroyed разрушенный рисуется копотью', async () => {
+      const barrel = { ...dynamicData, game: { prop: 'barrel' } };
+      const { part, mode } = await makeProp(barrel);
+
+      part.update(stateRow(0));
+      part.update(stateRow(2));
+      await flush();
+
+      expect(mode.sprite.visible).toBe(false);
+      expect(mode._scorch.visible).toBe(true);
+      expect(part.children).toContain(mode._scorch);
+
+      part.update(stateRow(0));
+      await flush();
+
+      expect(mode.sprite.visible).toBe(true);
+      expect(mode._scorch.visible).toBe(false);
+    });
+
+    it('первый кадр со state = 2 — сразу обломки, без разлёта и звука', async () => {
+      const { part, stage, mode } = await makeProp();
+      const children = stage.children.length;
+
+      part.update(stateRow(2));
+      await flush();
+
+      expect(mode.sprite.texture).toBe(textures['/build/img/crate-debris.png']);
+      expect(part.zIndex).toBe(1);
+      expect(stage.children.length).toBe(children);
+      expect(soundManager.registerSound).not.toHaveBeenCalled();
+    });
+
+    it('состояние из кадра до загрузки базовой текстуры применяется после', async () => {
+      let resolveBase;
+
+      load.mockImplementation(url =>
+        url === '/build/img/b1.png'
+          ? new Promise(resolve => {
+              resolveBase = resolve;
+            })
+          : Promise.resolve(textures[url]),
+      );
+
+      const part = new Map(propData, bakedAssets(), {
+        renderer,
+        assetsBase: '/build/',
+        soundManager,
+      });
+
+      part.update(stateRow(1));
+      resolveBase(Texture.WHITE);
+      await flush();
+
+      expect(part._mode.sprite.texture).toBe(
+        textures['/build/img/crate-damaged.png'],
+      );
+    });
+
+    it('поздняя загрузка текстуры состояния не трогает уничтоженный парт', async () => {
+      let resolveDamaged;
+      const { part, mode } = await makeProp();
+
+      load.mockImplementation(
+        () =>
+          new Promise(resolve => {
+            resolveDamaged = resolve;
+          }),
+      );
+
+      const sprite = mode.sprite;
+
+      part.update(stateRow(1));
+      part.destroy();
+      resolveDamaged(textures['/build/img/crate-damaged.png']);
+      await flush();
+
+      // спрайт снят вместе с партом (Pixi обнулил текстуру) — поздняя
+      // загрузка на него ничего не поставила
+      expect(sprite.texture).not.toBe(textures['/build/img/crate-damaged.png']);
+    });
+
+    it('destroy снимает со сцены незавершённый разлёт', async () => {
+      const { part, stage } = await makeProp();
+
+      part.update(stateRow(0));
+      part.update(stateRow(2));
+
+      const children = stage.children.length;
+
+      part.destroy();
+
+      // ушёл и сам парт, и его разлёт
+      expect(stage.children.length).toBe(children - 2);
+    });
   });
 });

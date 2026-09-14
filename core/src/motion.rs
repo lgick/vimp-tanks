@@ -5,7 +5,8 @@
 //! Все функции mass-free: возвращают Δv/Δω/ускорение на единицу массы —
 //! авторитетный путь домножает результат на массу/инерцию тела.
 
-use crate::config::{LevelRules, ModelConfig};
+use crate::config::{LevelRules, ModelConfig, SurfaceRules};
+use crate::surface::SurfaceMix;
 use vimp_engine_core::physics::{clamp, lerp};
 
 /// Габариты корпуса модели: ширина и высота коллайдера.
@@ -124,6 +125,89 @@ pub fn drive_accel(
     // скатывание: на крутом подъёме при нулевом газе результат отрицателен,
     // и танк сползает вниз — ровно то, чего ждёт игрок от горки
     accel - grade * rules.climb_gravity
+}
+
+/// `lateral_dv` на поверхности: боковое сцепление × `grip`. `lateral_rel` —
+/// боковая скорость относительно «грунта» (`v − belt`). На нейтральном
+/// `mix` (`grip` = 1) — бит-в-бит `lateral_dv`.
+pub fn lateral_dv_on(lateral_rel: f32, model: &ModelConfig, grip: f32, dt: f32) -> f32 {
+    lateral_dv(lateral_rel, model, dt) * grip
+}
+
+/// `drive_accel` на поверхности: потолок скорости × `max_speed`, тяга ×
+/// среднее тяги гусениц, торможение без газа × `brake`.
+/// `forward_speed_rel` — продольная скорость относительно «грунта».
+/// Множители стоят последними, поэтому на нейтральном `mix` результат
+/// бит-в-бит равен `drive_accel` (умножение на 1.0 — точное тождество).
+#[allow(clippy::too_many_arguments)]
+pub fn drive_accel_on(
+    throttle: f32,
+    forward: bool,
+    back: bool,
+    forward_speed_rel: f32,
+    grade: f32,
+    model: &ModelConfig,
+    rules: &LevelRules,
+    mix: &SurfaceMix,
+) -> f32 {
+    let limit = model.max_forward_speed
+        * (1.0 - rules.climb_max_speed_factor * grade.max(0.0)).max(0.25)
+        * mix.max_speed;
+    let traction = (mix.accel_l + mix.accel_r) * 0.5;
+    let mut accel = 0.0;
+
+    if throttle > 0.0 {
+        if forward && forward_speed_rel < limit {
+            accel = throttle * model.acceleration_factor * traction;
+        } else if back && forward_speed_rel > model.max_reverse_speed {
+            accel = -throttle * model.acceleration_factor * traction;
+        }
+    }
+
+    if accel == 0.0 && !forward && !back {
+        accel = -forward_speed_rel * model.braking_factor * mix.brake;
+    }
+
+    accel - grade * rules.climb_gravity
+}
+
+/// Δω от разницы тяги гусениц: гусеница на вязкой поверхности тянет слабее,
+/// и танк уводит в её сторону. Знак хода: вперёд `+1`, назад `−1`, без
+/// клавиш хода `0`.
+pub fn track_yaw_dv(
+    throttle: f32,
+    forward: bool,
+    back: bool,
+    mix: &SurfaceMix,
+    model: &ModelConfig,
+    rules: &SurfaceRules,
+    dt: f32,
+) -> f32 {
+    let direction = if forward {
+        1.0
+    } else if back {
+        -1.0
+    } else {
+        0.0
+    };
+
+    (mix.accel_l - mix.accel_r)
+        * throttle
+        * model.acceleration_factor
+        * rules.track_yaw_gain
+        * dt
+        * direction
+}
+
+/// Δv доп. линейного сопротивления поверхности по обеим осям: тормозит
+/// скорость относительно «грунта».
+pub fn surface_drag_dv(v_rel: (f32, f32), drag: f32, dt: f32) -> (f32, f32) {
+    (-v_rel.0 * drag * dt, -v_rel.1 * drag * dt)
+}
+
+/// Δω доп. углового сопротивления поверхности.
+pub fn angular_drag_dw(angvel: f32, angular_drag: f32, dt: f32) -> f32 {
+    -angvel * angular_drag * dt
 }
 
 /// Целевой наклон корпуса: продольный (`pitch`, нос вверх положителен) и
@@ -436,5 +520,171 @@ mod tests {
         }
 
         assert!((tilt - 0.4).abs() < 1e-3, "наклон обязан сойтись: {tilt}");
+    }
+
+    const DT: f32 = 1.0 / 120.0;
+
+    fn sand() -> SurfaceMix {
+        SurfaceMix {
+            accel_l: 0.6,
+            accel_r: 0.6,
+            max_speed: 0.55,
+            drag: 1.2,
+            turn: 0.8,
+            ..SurfaceMix::NEUTRAL
+        }
+    }
+
+    #[test]
+    fn neutral_mix_is_bit_for_bit_the_old_formulas() {
+        let model = model();
+        let rules = rules();
+        let mix = SurfaceMix::NEUTRAL;
+
+        for (throttle, forward, back, speed, grade) in [
+            (1.0, true, false, 0.0, 0.0),
+            (0.7, true, false, 120.5, 0.33),
+            (1.0, true, false, 260.0, 0.0),
+            (0.4, false, true, -50.0, -0.2),
+            (0.0, false, false, 87.3, 0.0),
+            (0.3, false, false, -12.0, 0.5),
+            (1.0, false, true, -130.0, 0.0),
+        ] {
+            assert_eq!(
+                drive_accel_on(throttle, forward, back, speed, grade, &model, &rules, &mix).to_bits(),
+                drive_accel(throttle, forward, back, speed, grade, &model, &rules).to_bits()
+            );
+        }
+
+        for lateral in [0.0, -0.0, 13.7, -250.0] {
+            assert_eq!(
+                lateral_dv_on(lateral, &model, mix.grip, DT).to_bits(),
+                lateral_dv(lateral, &model, DT).to_bits()
+            );
+        }
+
+        for (left, right, speed) in [(true, false, 100.0), (false, true, 5.0), (false, true, -40.0)] {
+            assert_eq!(
+                (turn_delta(left, right, speed, &model, DT) * mix.turn).to_bits(),
+                turn_delta(left, right, speed, &model, DT).to_bits()
+            );
+        }
+
+        assert_eq!(track_yaw_dv(1.0, true, false, &mix, &model, &SurfaceRules::default(), DT), 0.0);
+        assert_eq!(surface_drag_dv((120.0, -3.0), mix.drag, DT), (0.0, 0.0));
+        assert_eq!(angular_drag_dw(2.0, mix.angular_drag, DT), 0.0);
+    }
+
+    // продольная скорость на полном газе вперёд — порядок реплики: Δv шага,
+    // затем затухание Rapier
+    fn run_forward(mix: &SurfaceMix, seconds: f32) -> f32 {
+        let model = model();
+        let rules = rules();
+        let mut speed = 0.0f32;
+        let mut throttle = 0.0f32;
+
+        for _ in 0..(seconds / DT) as usize {
+            throttle = step_throttle(throttle, true, &model, DT);
+
+            let accel = drive_accel_on(throttle, true, false, speed, 0.0, &model, &rules, mix);
+
+            speed += accel * DT + surface_drag_dv((speed, 0.0), mix.drag, DT).0;
+            speed *= 1.0 / (1.0 + DT * model.damping.linear);
+        }
+
+        speed
+    }
+
+    #[test]
+    fn sand_caps_and_slows_the_steady_speed() {
+        let model = model();
+        let sand = run_forward(&sand(), 5.0);
+        let asphalt = run_forward(&SurfaceMix::NEUTRAL, 5.0);
+
+        // не «≈ потолку»: потолок лишь отсекает тягу, а равновесие тяги,
+        // демпфирования и `drag` может лечь ниже него
+        assert!(sand <= 0.55 * model.max_forward_speed, "песок выше потолка: {sand}");
+        assert!(sand < asphalt * 0.7, "песок обязан быть заметно медленнее: {sand} vs {asphalt}");
+    }
+
+    #[test]
+    fn oil_barely_damps_sideways_speed() {
+        let model = model();
+        let asphalt = lateral_dv(100.0, &model, DT);
+        let oil = lateral_dv_on(100.0, &model, 0.08, DT);
+
+        assert!(oil.abs() < asphalt.abs() * 0.1, "масло гасит бок: {oil} vs {asphalt}");
+    }
+
+    #[test]
+    fn weaker_left_track_yaws_towards_it() {
+        let model = model();
+        let rules = SurfaceRules::default();
+        let mud_left = SurfaceMix {
+            accel_l: 0.45,
+            ..SurfaceMix::NEUTRAL
+        };
+
+        // влево — отрицательная Δω, как у `turn_delta` с клавишей `left`
+        assert!(turn_delta(true, false, 100.0, &model, DT) < 0.0);
+        assert!(track_yaw_dv(1.0, true, false, &mud_left, &model, &rules, DT) < 0.0);
+        // задним ходом сильная правая гусеница разворачивает корпус обратно
+        assert!(track_yaw_dv(1.0, false, true, &mud_left, &model, &rules, DT) > 0.0);
+        assert_eq!(track_yaw_dv(1.0, false, false, &mud_left, &model, &rules, DT), 0.0);
+    }
+
+    // стоящий танк курсом на восток на ленте 60 ед./с: скорость по стрелке
+    // ленты на каждом шаге за `seconds`
+    fn run_on_belt(belt: (f32, f32), seconds: f32) -> Vec<f32> {
+        let model = model();
+        let rules = rules();
+        let mix = SurfaceMix {
+            belt_x: belt.0,
+            belt_y: belt.1,
+            ..SurfaceMix::NEUTRAL
+        };
+        let len = (belt.0 * belt.0 + belt.1 * belt.1).sqrt();
+        let (mut vx, mut vy) = (0.0f32, 0.0f32);
+        let mut out = Vec::new();
+
+        for _ in 0..(seconds / DT) as usize {
+            // курс на восток: forward = (1, 0), right = (0, 1)
+            let forward_rel = vx - mix.belt_x;
+            let lateral_rel = vy - mix.belt_y;
+            let accel = drive_accel_on(0.0, false, false, forward_rel, 0.0, &model, &rules, &mix);
+
+            vx += accel * DT;
+            vy += lateral_dv_on(lateral_rel, &model, mix.grip, DT);
+            vx *= 1.0 / (1.0 + DT * model.damping.linear);
+            vy *= 1.0 / (1.0 + DT * model.damping.linear);
+
+            out.push((vx * belt.0 + vy * belt.1) / len);
+        }
+
+        out
+    }
+
+    // Равенства `belt` ждать нельзя: линейное демпфирование Rapier на хосте
+    // (и `integrate` в реплике) тянет к нулю АБСОЛЮТНУЮ скорость, а не
+    // скорость относительно ленты, поэтому равновесие ложится ниже `belt`.
+    // Поперёк корпуса ленту передаёт боковое сцепление (`lateralGrip` 20
+    // против демпфирования 3 — равновесие ≈ 0.87·belt), вдоль — только
+    // торможение без газа (`brakingFactor` 0.3 — равновесие ≈ 0.09·belt)
+    #[test]
+    fn conveyor_carries_a_standing_tank_towards_the_belt() {
+        for (belt, min_share) in [((0.0, 60.0), 0.6), ((60.0, 0.0), 0.05)] {
+            let speeds = run_on_belt(belt, 3.0);
+
+            assert!(
+                speeds.windows(2).all(|pair| pair[1] >= pair[0]),
+                "скорость обязана расти монотонно: {belt:?}"
+            );
+            assert!(speeds.iter().all(|speed| *speed <= 60.0), "не быстрее ленты: {belt:?}");
+            assert!(
+                *speeds.last().unwrap() >= min_share * 60.0,
+                "лента {belt:?} за 3 с разогнала лишь до {}",
+                speeds.last().unwrap()
+            );
+        }
     }
 }

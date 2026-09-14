@@ -131,8 +131,14 @@ A JSON array; the buffer clears on read. The standard engine dictionary
 not tied to a specific weapon), `death` → RoundManager.reportKill,
 `shake` → per-user camera shake in frame meta. `custom` is the only type
 outside the dictionary, carrying game-specific meaning: the adapter drains
-it as-is into `HostPlugin.onCoreEvent(data, services)` (this game doesn't
-use it — `onCoreEvent` is left unset):
+it as-is into `HostPlugin.onCoreEvent(data, services)`. This game emits a
+single custom event, `mapDerivedError`: on the first step after
+`deserialize` the core rebuilds the data derived from the map's `game` field
+(`on_map_loaded` isn't called on restore), and if that parse fails the step
+goes on with empty derived data (the neutral path) and pushes
+`{ "type": "custom", "data": { "type": "mapDerivedError", "message": … } }`.
+`onCoreEvent` receives only `data` and logs it with `console.warn`; other
+custom events are ignored:
 
 ```json
 [
@@ -212,6 +218,7 @@ exists. Its config is assembled by the engine's
 | `decode_frame(bytes)` | a plain v5 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
 | `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
 | `ramp_runs()` | the current map's ramp runs as a JSON array `{axis, sign, from, to, min, max, crossMin, crossMax, block, railMin, railMax}` in WORLD units (`railMin`/`railMax` — the side rails' bounds from `map::ramp_rail_span`, `null` when the run gets none) — the very `MapLevels::runs` the physics puts its ramp guards on; `[]` when there is no map or it is single-level. The renderer draws the wedge by it (the `rampRuns` service), so the picture and the physics cannot drift apart |
+| `surface_at(x, y, level)` / `surface_types()` / `surface_dir_at(x, y, level)` | the surface under a world point of a level, from the same `SurfaceMap` the predictor moves by: the type index (`-1` — no map, no `game.surfaces` or a neutral cell) / the type names as a JSON array in index order (the `coreParams.surfaces.types` keys, sorted) / the cell's arrow `0..3` — north/south/west/east as for ramps (`-1` — a neutral cell or an undirected type). Behind the `surfaces` service |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
 immediately under a local id (`L1`, `L2`, …) while the request travels to
@@ -384,6 +391,22 @@ and a consumer must take its own:
 The sim box of a `Follow` body comes from the last authoritative frame, not
 from the interpolated transform: the latter lags by `interpolation.delay`,
 and a ray would miss a moving box.
+
+**Destroyed bodies.** A prop whose `state` byte is `2` stays in the set as
+debris but stops being solid: `PredictedBody::collidable` (always `true` for
+remote tanks) is set by `MapDynamics` alone — in `update` from the
+interpolated row, and only for a body in `Follow` (a predicted body belongs
+to the simulation, and the lagging sample would revive a body the raw frame
+has already destroyed); in `begin_reconcile` from the raw frame, before
+`PredictedSet::begin_reconcile`, so the replayed steps see it from the first
+step. A non-collidable body is not captured (neither directly nor as a
+neighbour), a predicted one is demoted to `Follow` at once in `demote_idle`,
+`collision_mask` returns an empty group (one place for the rule —
+`resolve_world` has no check of its own), and `sim_boxes` leaves it out, so
+the local tracer flies through the debris. The render row keeps carrying
+`state`. A deliberate limitation: until a frame with `state = 2` arrives
+(about `interpolation.delay` for a body in `Follow`), the replica still
+collides with a fence the host has already broken.
 
 **Remote tanks (`remote_tanks.rs`).** The framework's second subsystem. The
 local tank is drawn "now", the remote ones with the interpolation delay, and
@@ -897,6 +920,62 @@ exactly it.
 The levels reach the client as `startLevel`/`endLevel` (`w1`) and `level`
 (`w2`, `w2e`).
 
+### Destructible props (`core/src/props.rs`)
+
+A prop is a dynamic map body whose `game.prop` names a type from
+`coreParams.props` ([gameplay.md](gameplay.md#destructible-objects)).
+
+- `Props` is a table parallel to `physicsDynamic` (HP and a pending
+  detonation per body). `reset_round_state` builds it with `Props::build`, so
+  only `on_map_loaded` does — that is the restoration at the start of a round
+  (the engine has already recreated the bodies and zeroed `map_body_state`).
+  The table travels in the handoff dump (`TanksDump.props`) and is not rebuilt
+  after `deserialize`.
+- `Props::damage(index, amount, cause, rules, chain_steps)` takes raw damage
+  and applies the multiplier itself: `Bullet` → `bulletFactor`, `Blast` →
+  `blastFactor`, `Ram` → `1` (the ram scale is already in
+  `ramDamagePerSpeed`). It returns `None | Damaged | Destroyed | Primed`. A
+  destroyed or primed prop takes no damage. A type with `blast` whose HP
+  reaches zero from `Blast` is primed for `chain_steps` steps
+  (`max(1, ceil(chainDelay / timeStep))`, computed in `TanksSim::new`) and
+  returns `Primed`; from `Bullet`/`Ram` it returns `Destroyed`.
+- The caller reacts only to the transition (`TanksSim::damage_prop`):
+  `Damaged` → `map_body_state = 1`; `Destroyed` → `destroy_prop`: state `2`,
+  the body is stopped and disabled (`RigidBody::set_enabled(false)`; map bodies
+  belong to the engine and are never removed), and a type with `blast`
+  explodes in the same call; `Primed` → nothing: the barrel stays intact and
+  enabled until it goes off.
+- `tick_detonations()` runs at the end of `on_fixed_step`, after bomb expiry,
+  and returns indices in ascending order. A counter already at zero fires,
+  otherwise it decrements, so a barrel never goes off in the step it was
+  primed: primed by a bomb (before the tick) it fires after `chain_steps`
+  steps, primed by a neighbouring barrel (during the tick) one step later.
+- `explode(ctx, &Blast)` serves bombs and barrels alike.
+  `Blast { x, y, level, radius, damage, impulse, owner, shake, source }`: a
+  bomb passes `owner = (game_id, team, weapon)` and tanks are damaged through
+  the weapon rules (`apply_damage`: friendly fire, the weapon's shake); a
+  barrel passes `owner = None` and `apply_damage_raw(victim, killer = victim)`
+  is used — no friendly-fire check, a death is a suicide, the shake comes from
+  `blast.cameraShake`. A barrel's row goes to the first explosive weapon's
+  `shotOutcomeId` (`w2e`); its level is `dynamic_level` of the barrel. For a
+  map body the distance and the impulse point are measured from the collider
+  centre (the body's translation is the object's corner); disabled bodies are
+  skipped — in the same step their colliders are still in the query tree.
+- Shots: `process_hitscan` adds `Props::damage(…, Bullet)` to the impulse.
+- Ramming: the last thing `on_fixed_step` does — after `tank.update`, the
+  detonations and body surfaces, before the world step — is
+  `record_pre_step_vel` (linear velocities of tanks and intact props, only on a
+  map with props). `on_contacts` takes `CollisionEvent::Started` pairs tank ↔
+  prop: the normal is the first manifold's of `narrow_phase.contact_pair`,
+  oriented from the tank to the prop, or the vector between the collider
+  centres without one; `impact = max(0, (v_tank − v_prop) · n)`, and above
+  `ramThreshold` the prop takes `(impact − ramThreshold) · ramDamagePerSpeed`.
+  The tank takes nothing; a long push deals nothing — `Started` comes once
+  per contact.
+- A disabled body is invisible to shot rays, bot obstacle rays and target
+  search, and to explosions; `step_dynamic_levels` and the body surfaces skip
+  it. The bots' nav graph is static: a broken fence opens no route.
+
 ### Bots on the levels (`core/src/bots/controller.rs`)
 
 `BotView` — the bot's view of the world — carries the map's layered
@@ -933,6 +1012,142 @@ and an old one no longer restores.
 
 [engine-map]: https://github.com/lgick/vimp-engine/blob/main/docs/en/core.md
 
+## Surfaces (`core/src/surface.rs`)
+
+A map marks grid tiles of a level with a surface through `game.surfaces`
+(see [configuration.md](configuration.md#surfaces-gamesurfaces)); what each
+type does lives in `coreParams.surfaces`. Everything surfaces change in a
+tank's motion lives in `surface.rs` (the table, sampling, the boost) and
+`motion.rs` (the formulas), and both the host (`Tank::update`) and the replica
+(`Predictor::step_inner`) call exactly those functions.
+
+**The table.** `SurfaceMap` is dense and per level: `0` is neutral, `k` is the
+type index + 1, plus a direction code per cell. Each type's kind
+(`Plain`/`Conveyor`/`Boost`, derived from which of `belt`/`boostDv` is set) is
+resolved once, when the table is built. There is one entry point on both
+sides, `surface::build_map`: the host calls it in
+`TanksSim::rebuild_map_derived` with `GameMap::grid` for level 0 and
+`map.levels().grid(n)` for the upper levels (not `TanksSim.levels`, which is
+`None` on a flat map) and the already scaled `step`; the client calls it in
+`TanksClient::set_map` with `step · scale` and hands the result to `Predictor`
+as `Rc<SurfaceMap>`. `surface_tile_size_matches_the_host` pins the equal cell
+size. A map without `game.surfaces` gets no table (`None`) — the neutral path,
+with no sampling at all. Before the build both sides run
+`MapGame::validate_surfaces`: the level exists, the type is declared, `dir` is
+set exactly for directed types, and the tile is neither a wall
+(`physicsStatic`/`walls`) nor a ramp tile of its level. A failure fails
+`load_map` on the host and `set_map` on the client.
+
+**Sampling per track.** `surface::tank_mix` takes 2 points per track, at
+hull-local `(±trackSampleX·half_w, ∓trackSampleY·half_h)`: `half_w` is half the
+length along the heading, `half_h` half the width (the same half sizes as
+`Footprint` and the predictor's `Shape`); the left track is the hull's `−y`.
+`accel_l`/`accel_r` average the points of their own track, every other
+coefficient averages all four, the belt averages the belt vectors
+(`dir · belt`). The level sampled is `LevelState::level`, so a conveyor on the
+ground does not touch a tank on the bridge above it. In flight the mix is
+neutral, and so is a cell off the grid.
+
+**Formulas** (`motion.rs`, mass-free Δv/Δω per step):
+
+- velocity relative to the ground `v_rel = v − belt`; the forward and lateral
+  speeds are projections of `v_rel`;
+- `lateral_dv_on = lateral_dv(lateral_rel) · grip`;
+- `drive_accel_on`: speed ceiling `limit · maxSpeed`, thrust
+  `· (accel_l + accel_r)/2`, braking without gas `· brake` (the reverse
+  ceiling is not scaled);
+- `track_yaw_dv = (accel_l − accel_r) · throttle · accelerationFactor ·
+  trackYawGain · dt · sign(drive)` — the tank yaws toward the weaker track;
+- turning `turn_delta · turn`, `surface_drag_dv = −v_rel · drag · dt`,
+  `angular_drag_dw = −ω · angularDrag · dt`.
+
+The neutral mix gives the old result bit for bit: multipliers come last
+(multiplying by 1.0 is an exact IEEE identity), a zero belt is subtracted
+exactly, and the additive terms (drag, track yaw, angular drag) run only when
+`mix != SurfaceMix::NEUTRAL`. `neutral_mix_is_bit_for_bit_the_old_formulas`
+and `map_without_surfaces_moves_exactly_as_before` lock this in.
+
+A conveyor never brings a tank up to the belt speed: Rapier's linear damping
+(and the replica's `integrate`) pulls the ABSOLUTE velocity toward zero, not
+the velocity relative to the belt. Across the hull the belt is transmitted by
+`lateralGrip` (equilibrium ≈ 0.87·belt with the shipped model), along the hull
+only by the idle braking (`brakingFactor` 0.3 against damping 3 —
+≈ 0.09·belt).
+
+**The boost has no state.** Entering a plate is a pure function of the body's
+current position and velocity. The impulse
+`dir · min(boostDv, max(0, boostMaxSpeed − v·dir))` fires if the body is not
+airborne, the centre cell is a boost with direction `dir`, the cell
+`p − v·dt` on the same level is NOT a boost with the same `dir` (off the grid
+counts as "not a boost"), and `v·dir ≥ minEntrySpeed`. The rule is "not a boost
+with the same dir", not "another cell": crossing the cells of one plate (a 2×3
+plate) gives one impulse, while neighbouring plates with different `dir` are
+different boosts. A latch was rejected: a frame carries the position after
+integration, and nothing in it tells whether the host has already judged the
+entry at that step; map bodies have no history at all, and the own tank's
+history does not cover the frame after `reset` or an RTT jump. A function of
+one state gives the same answer on both sides — no field in `LevelState`, no
+dump change, no reset trap on a flat map (`step_level` resets `LevelState`
+there). The known price: a bounce at a plate's edge (a contact reversed the
+velocity) may rarely skip or repeat an impulse.
+
+**Order in `Tank::update`** (after the early return on locked input):
+`tank_mix` (the angle from the body) and a snapshot of the step-start velocity
+`(vx0, vy0)` and `ω0` — Rapier changes `linvel` right inside `apply_impulse`,
+so any read after the lateral impulse or the thrust is already different;
+`step_throttle`; `v_rel`; the lateral impulse `lateral_dv_on`;
+`drive_accel_on`; the drag impulse, then the boost impulse (`boost_dv` gets
+`(vx0, vy0)` and the step's `dt`, both for `minEntrySpeed` and for `prev`);
+`engine_load` from the relative forward speed (with no gas on a belt the load
+stays `0`, the engine does not howl); the turn
+`turn_delta · turn + track_yaw_dv + angular_drag_dw(ω0)` times the inertia.
+**`Predictor::step_inner`** mirrors it: `tank_mix` after the flight branch,
+the replica's `vx/vy` at the start of the step as `(vx0, vy0)`, the same Δv
+added to `vx/vy` in the same order, Δω to `angvel`, then `resolve_world` and
+`integrate` unchanged. With no boost state there is nothing to roll back on
+reconciliation (`boost_reconcile_replays_one_impulse_per_entry`: a frame
+mid-plate and one step before the entry, with the level history and after
+`reset`).
+
+**Deliberately not accounted for:** other players' tanks extrapolated in
+contact (`remote_tanks.rs`) ignore surfaces, and so do bots. Wrecks
+(`condition 0`) do go through `Tank::update` — the step loop skips no tank —
+so the belt, the drag and the boost act on them on the host; the client sees
+that through frames.
+
+**Map bodies** (crates, barrels) feel surfaces too, sampled at the body's
+**centre** (the Rapier position of a map body is the object's corner, so the
+host asks the collider, as `step_dynamic_levels` does; the replica stores
+boxes by their centre already). `surface::body_mix` returns the centre cell's
+coefficients and kind (`(NEUTRAL, Plain)` in a fall or on a bare cell);
+`surface::body_dv` branches on the **kind**, not on the belt value (a belt
+with `belt: 0` is still a belt): `Plain` and `Boost` give only
+`−v · drag · dt`; `Conveyor` gives only
+`(belt − v) · (bodyBeltCoupling + drag) · dt` — a body has no track grip, and
+adding the drag relative to the belt on top would silently double the
+coupling. The boost is the same stateless `boost_dv` at the centre. Oil does
+nothing to bodies: lateral grip is a track model, a crate's friction is the
+engine's. Both velocities are the step-start ones.
+**Host:** `TanksSim::apply_body_surfaces` runs in `on_fixed_step` after
+`update_levels` and before the tank loop, returns at once without a surface
+table (the neutral path), skips disabled bodies and bodies whose
+`map_body_state ≥ 2` (destroyed), takes the level and the fall from
+`map.dynamic_level_state(i)` and applies `(body_dv + boost_dv) · mass` as one
+impulse before `world.step`. Nothing is stored per body, `TanksDump` is
+unchanged. **Replica:** `PredictedBodies::pre_step(&PreStepCtx, dt)` (default:
+no forces) is called by `Predictor::step_inner` before `resolve_world` in both
+branches (normal and locked input). `MapDynamics::pre_step` adds the same Δv
+to the velocity of `Predicted` bodies only — a `Follow` body is driven by
+interpolation; remote tanks do not override it. Reconciliation restores only
+the transform and velocities from the frame, which is enough for a stateless
+boost, with one caveat added to the boost's price: body rows are rounded to
+0.01 (`round2` in `dynamic_map_data`), so right at a cell edge `cur`/`prev`
+on the rounded frame may differ from the host's — a rare skipped or extra
+impulse. The own tank does not have it: the player block is not rounded.
+Covered by `crate_on_conveyor`, `crate_hits_boost_once`,
+`crate_in_sand_slows` and `crate_boost_reconcile_replays_one_impulse`
+(`mod parity`).
+
 ## Determinism
 
 - `rapier2d` is built with `enhanced-determinism` (bit-for-bit across
@@ -947,9 +1162,9 @@ and an old one no longer restores.
 
 | Layer | Where | Covers |
 | --- | --- | --- |
-| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence); the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
-| Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots and explosions) |
+| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence), surface formulas (`motion.rs`: the neutral mix bit for bit, sand, oil, the track yaw sign, a belt) and the surface table (`surface.rs`: validation, sampling points inside the hull, the boost entry rule), props (`props.rs`: transitions and `damagedAt`, the multiplier by cause, priming only a blast type and only by a blast, detonation order) and the `coreParams.props` validation; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
+| Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios, 2 on a map; surfaces: 10 scenarios from `sand_straight_run` to `boost_against_arrow_does_nothing`, boost reconciliation, equal cell size; map bodies: `crate_on_conveyor`, `crate_hits_boost_once`, `crate_in_sand_slows`, the crate's boost reconciliation) — **required to run for any edit to motion in the core or `models.js`** |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre) |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
 
 `tests/core/` tests are part of `npm test` and **are skipped** if

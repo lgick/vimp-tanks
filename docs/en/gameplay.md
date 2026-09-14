@@ -107,7 +107,7 @@ Key layout is configured in `src/config/client.js` (`modules.controls`), command
 The tank carries two weapons (switch with `n`/`p`, the active one is highlighted on the panel):
 
 - **`w1` — bullet (hitscan)**: an instant ray, 40 damage, 1500 range, 200 ammo. The hit is computed by the host as a ray; the client draws the tracer instantly. A hit on a dynamic map body applies an impulse of `7500000` along the normalized shot direction — it does **not** scale with the weapon's range.
-- **`w2` — bomb (explosive)**: a physical projectile, planted and detonating on a timer; 70 damage at the epicenter falling off over a 50 radius, 100 ammo. The blast impulse (`2000000`, with the same falloff) applies to every dynamic body in the radius — tanks and dynamic map objects alike; map objects take the push without damage.
+- **`w2` — bomb (explosive)**: a physical projectile, planted and detonating on a timer; 70 damage at the epicenter falling off over a 50 radius, 100 ammo. The blast impulse (`2000000`, with the same falloff) applies to every dynamic body in the radius — tanks and dynamic map objects alike; ordinary map objects take the push without damage, destructible ones take damage too (see [Destructible objects](#destructible-objects)).
 
 Health is 100. The tank's `condition` visually degrades with damage (smoke), and it's destroyed at 0. Stats — [configuration.md](configuration.md#weaponsjs).
 
@@ -263,6 +263,53 @@ ledge ends on the ground, not on the slab layer.
 Which maps have levels and how they are authored — see
 [extending.md](extending.md#new-map).
 
+## Surfaces
+
+A map may lay surfaces on its tiles. A surface acts on the level it is laid on
+(a conveyor under a bridge does not move a tank on the bridge), and a tank in
+flight feels none of them.
+
+- **Sand and mud** — weaker thrust, a lower speed ceiling and extra drag; mud
+  is heavier.
+- **Water** (shallow) — moderate drag and a loss of thrust.
+- **Oil** — almost no lateral grip or braking and sharper turns: the tank
+  skids and spins.
+- **Conveyor** — a moving floor along its arrow. A standing tank is carried:
+  hard across the hull (the tracks' side grip holds it to the belt), barely
+  along it.
+- **Boost plate** — a one-off push along the arrow when you drive onto the
+  plate in the arrow's direction (from 20 units/s). Crossing the cells of one
+  plate pushes once; driving against the arrow does nothing.
+
+Each track feels its own ground: with one track in mud, the tank pulls toward
+the mud. Wrecks are carried and slowed the same way. Crates and barrels ride
+belts, slow down in sand, mud and water and get the boost push too (felt at
+their centre); oil does nothing to them. Bots do not take surfaces
+into account. The values — [configuration.md](configuration.md#core-parameters).
+
+## Destructible objects
+
+A map may make some of its objects destructible:
+
+- **Fence** — little health: a bullet or ramming it at speed breaks it. The
+  debris does not block the way.
+- **Crate** — sturdy: bullets do half damage, blasts one and a half. It shows
+  a "damaged" stage before it breaks; the debris does not block the way.
+- **Barrel** — little health; destroyed, it explodes: damage and a push around
+  it and a camera shake. A barrel caught in another blast goes off after a
+  short delay (0.15 s), so barrels standing together make a chain reaction.
+  The blast does not care about teams, and a death from it counts as a
+  suicide — nobody gets the frag.
+
+Ramming counts only the impact speed along the contact at the moment it
+starts: driving into a fence at speed breaks it, pushing it slowly does not,
+and the tank itself takes no damage. A blast reaches only objects on its own
+level. Everything destroyed is restored at the start of every round.
+
+Bots know nothing about destruction: their navigation graph is static, so a
+broken fence does not open a new route for them. The values —
+[configuration.md](configuration.md#core-parameters).
+
 ## HUD panel
 
 Left to right: round time, health, `w1`/`w2` ammo (the active weapon is highlighted). Spectators see hidden values (an empty panel). Values reset to defaults every round.
@@ -308,6 +355,27 @@ These kick policies are engine mechanisms — see the engine's
 `pool mini`, `canopy`, `garden` — tile-based maps with per-team respawns,
 static geometry, and dynamic objects (sent in the snapshot). Changed by vote
 or map timer. Adding a new one — [extending.md](extending.md#new-map).
+
+`downtown` — a night city on two levels that uses every map mechanic:
+
+- **West and east** — the team bases, eight respawn points each, and a
+  `GUNS` sign on the roof of each base.
+- **Neon Strip** (centre) — a crossing with an oil slick in its middle,
+  lamps on the corners and neon signs on the roofs.
+- **The overpass** runs along the avenue between the northern districts and
+  the centre, with a ramp at each end and two gaps in its railings.
+- **The industrial yard** (north-west) — two conveyors running towards each
+  other, crates, a group of barrels that go off in a chain, rooftop fans.
+- **The construction site** (north-east) — patches of sand and mud, two
+  lines of fences with short detours around them, crates.
+- **The canal** (south) — shallow water across the whole map, two bridges
+  with ramps, barrels by the canal wall and a ford with a boost plate on the
+  southern bank that throws a tank north through the water.
+- **The jump** (west of the centre) — a boost plate in front of a ramp onto a
+  rooftop car park; the boosted jump lands on the roof.
+
+Destroyed fences, crates and barrels are restored at the start of every
+round.
 
 ---
 

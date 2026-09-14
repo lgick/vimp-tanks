@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "seed": 7702,
+  "map": "downtown",
+  "participants": [
+    { "id": "p1", "name": "P1", "model": "m1" },
+    { "id": "p2", "name": "P2", "model": "m1" },
+    { "id": "p3", "name": "P3", "model": "m1" },
+    { "id": "p4", "name": "P4", "model": "m1" },
+    { "id": "p5", "name": "P5", "model": "m1" }
+  ],
+  "timeline": [
+    { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p2", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p3", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p4", "team": "team1" },
+    { "tick": 0, "op": "join", "who": "p5", "team": "team2" },
+    { "tick": 20, "op": "key", "who": "p5", "action": "down", "name": "right" },
+    { "tick": 80, "op": "key", "who": "p5", "action": "up", "name": "right" },
+    { "tick": 80, "op": "key", "who": "p5", "action": "down", "name": "forward" },
+    { "tick": 170, "op": "key", "who": "p5", "action": "up", "name": "forward" },
+    { "tick": 200, "op": "key", "who": "p4", "action": "down", "name": "forward" },
+    { "tick": 400, "op": "key", "who": "p1", "action": "down", "name": "left" },
+    { "tick": 460, "op": "key", "who": "p1", "action": "up", "name": "left" },
+    { "tick": 460, "op": "key", "who": "p1", "action": "down", "name": "forward" },
+    { "tick": 480, "op": "key", "who": "p4", "action": "up", "name": "forward" },
+    { "tick": 556, "op": "key", "who": "p1", "action": "up", "name": "forward" },
+    { "tick": 600, "op": "key", "who": "p3", "action": "down", "name": "forward" },
+    { "tick": 760, "op": "key", "who": "p3", "action": "up", "name": "forward" }
+  ],
+  "unusedSnapshotKeys": ["w1", "w2", "w2e", "c2"],
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "ticks": 1200,
+  "dumpTicks": [80, 260, 480, 570, 640, 760, 1200]
+}

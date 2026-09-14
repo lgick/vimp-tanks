@@ -72,6 +72,7 @@ npm run core:build:web   # browser/Worker → core/pkg-web/
 npm run core:build:node  # Node.js (tests) → core/pkg-node/
 npm run core:test        # cargo test --workspace (this repo's crate)
 npm run build            # full plugin build: client+host JS bundles, assets, manifest.json → dist/
+npm run art:placeholders # redraw downtown's placeholder art (city.png, prop_*.png) → assets/img/
 ```
 
 `npm run build` produces `dist/manifest.json` (a `GameManifest`), the
@@ -253,6 +254,10 @@ the snapshot schema or the panel. The scenarios:
 | `terraces_crate.json` | `terraces`: a crate pushed through a gap in the railings of level 2 lands on the slab of level 1, while the second player climbs the steep run |
 | `jump.json` | `terraces`: full throttle up the steep 0 → 2 run from `team1`'s first spawn — the take-off, the flight and the landing all pass without prediction drift or a panic in the core |
 | `overpass_jump.json` | `overpass`: full throttle up the north ramp from `team1`'s first spawn — the tank jumps onto the bridge deck and stays on it, without prediction drift or a panic in the core |
+| `downtown_surfaces.json` | `downtown`: sand, the oil slick at the crossing, a conveyor, then the boost plate in front of the car-park ramp — the boosted jump lands on the roof, all without prediction drift |
+| `downtown_props.json` | `downtown`: a fence broken by a shot, another one rammed, a shot into the barrel group sets off the chain reaction |
+| `downtown_bridge.json` | `downtown`: one tank over the overpass, another under it along the ramp's edge — prediction drift on two levels |
+| `bots_downtown.json` | `downtown`: a player plus `/bot 4` for 60 s — no bot stuck at a prop, none falls out of the map (invariants 10/11) |
 
 A scenario asserts **nothing about the game rules**: the runner checks the
 engine's invariants and the prediction drift, and the 2.5D scenarios
@@ -274,7 +279,8 @@ bomb, so its 696 reconciliations stay under the detector; the bomb itself
 kept its coverage in `selfblast.json`. Splitting the two beats loosening a
 threshold: a threshold is the definition of "the prediction matched the
 server", and one frame of an authoritative impulse is not a reason to
-redefine it. Both kinds of divergence are also worth knowing when writing a
+redefine it. `downtown_props.json` (a barrel blast) and `bots_downtown.json` set
+`null` for the same reason. Both kinds of divergence are also worth knowing when writing a
 new scenario: a tank ramming a wall at speed and a state transition that
 depends on the position (the edge of a ledge, the end of a ramp)
 legitimately break the tight thresholds for a few ticks — steer around walls

@@ -1,4 +1,4 @@
-import { Texture, Assets } from 'pixi.js';
+import { Container, Texture, Assets } from 'pixi.js';
 import { levelZ } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
@@ -7,6 +7,14 @@ import { createHole, dispose as disposeHole } from './holeOverlay.js';
 import { buildLayerAssets } from './layerAssets.js';
 import { updateSeeThrough } from './layerSeeThrough.js';
 import { updateRampMesh } from './extrusion.js';
+import { cellsOfTiles, mapKeyOf } from '../../lighting/lightMath.js';
+import {
+  buildLayerAnimations,
+  destroyLayerAnimations,
+  hasAnimations,
+  layerAnimationSpec,
+  updateLayerAnimations,
+} from './layerAnimations.js';
 import {
   parallax as parallaxConfig,
   volume as volumeConfig,
@@ -17,7 +25,7 @@ import {
 // КОНТЕЙНЕР парта: ей нужны и дети, и zIndex, и alpha, и filters самого
 // парта.
 export default class MapLayer {
-  constructor(container, data, dependencies, imageBase) {
+  constructor(container, data, dependencies, imageBase, assets = {}) {
     this._container = container;
     this._renderer = dependencies.renderer;
 
@@ -85,6 +93,30 @@ export default class MapLayer {
     // ровно в координатах асфальта и читается как глухая стена
     this._parallaxK = this._level * parallaxConfig.shear;
 
+    // Корень слоя: запечённый спрайт и над ним контейнер `animated`
+    // (анимированные тайлы, декали, дневной неон). Параллакс и масштаб
+    // карты — у корня, поэтому живые спрайты едут вместе с картинкой.
+    // Фильтр дыры и alpha плиты остаются на контейнере парта: в нём же
+    // лежит клин рампы, и гаснуть обязаны оба
+    this._layerRoot = new Container();
+    this._layerRoot.label = 'layerRoot';
+    this._animated = new Container();
+    this._animated.label = 'animated';
+    this._layerRoot.addChild(this._animated);
+    applyParallax(this._layerRoot, null, this._parallaxK, this._baseScale);
+    container.addChild(this._layerRoot);
+
+    // анимации карты (`game.animatedTiles`, `signs`, `decals`), которыми
+    // владеет ЭТОТ слой; строятся в `_build`
+    this._animationSpec = layerAnimationSpec(
+      data.game,
+      this._tiles,
+      this._level,
+      this._layer,
+    );
+    this._animations = null;
+    this._game = data.game;
+
     this._volume = Number(data.volume) || 0;
 
     // клин строит только тот рендер-слой, который сами тайлы рампы и
@@ -98,14 +130,54 @@ export default class MapLayer {
       volumeConfig.slices >= 1 &&
       (this._volume > 0 || this._ramps.length > 0);
 
-    // прозрачность считает только плита моста, параллакс — она же и любой
-    // слой с объёмом: вешать колбэк на плоский слой уровня 0 значило бы
-    // звать его каждый кадр ради выхода по первой же строке
-    this.needsRender = this._level >= 1 || this._extruding;
-
     // грид тайлов значением: им одним отвечают на вопрос «что нарисовано
     // в этой мировой точке» (`tileGrid.tileAt`)
     this._grid = tileGrid(this._map, this._baseScale, this._step);
+
+    // Ночь и освещение (сервис игры, src/client/lighting/). Строго СИНХРОННО,
+    // до `_build` и любого await: иначе сервис станет «ночным» с задержкой,
+    // и танк первого кадра получит `addEmissive → false` и останется без
+    // бликов. Часть не знает, какие ещё слои есть на карте, поэтому
+    // «первой» не бывает — только счётчик по ключу карты; фонари создаёт
+    // сам сервис
+    this._lighting = dependencies.lighting?.enabled
+      ? dependencies.lighting
+      : null;
+    this._mapKey = null;
+
+    if (this._lighting) {
+      this._lighting.registerTextures({
+        radial: assets.lightRadialTexture,
+        head: assets.lampHeadTexture,
+      });
+      this._mapKey = mapKeyOf(data);
+      this._lighting.acquireMap(
+        this._mapKey,
+        data.game?.lighting,
+        this._step,
+        data.scale,
+      );
+
+      // вклад слоя в маску этажа: клетки его тайлов пола (перила уже в
+      // `floor`); вклады слоёв одного уровня сервис объединяет
+      if (this._level >= 1) {
+        this._lighting.setLevelMask(
+          this._level,
+          cellsOfTiles(this._map, this._floor),
+          this,
+        );
+      }
+    }
+
+    // прозрачность считает только плита моста, параллакс — она же и любой
+    // слой с объёмом: вешать колбэк на плоский слой уровня 0 значило бы
+    // звать его каждый кадр ради выхода по первой же строке. На ночной
+    // карте колбэк нужен любому слою: он ведёт сервис освещения
+    this.needsRender =
+      this._level >= 1 ||
+      this._extruding ||
+      Boolean(this._lighting?.isNight()) ||
+      hasAnimations(this._animationSpec);
 
     this._build(data);
   }
@@ -116,6 +188,8 @@ export default class MapLayer {
   async _build(data) {
     const assets = await buildLayerAssets({
       container: this._container,
+      layerRoot: this._layerRoot,
+      exclude: this._animationSpec.exclude,
       baseTexture: this._baseTexturePromise,
       spriteSheetData: data.spriteSheet,
       map: this._map,
@@ -138,6 +212,33 @@ export default class MapLayer {
     this._occluder = assets.occluder;
     this._slices = assets.slices;
     this._rampTexture = assets.rampTexture;
+
+    // Анимации — после запекания (тайл-лист уже загружен) и после
+    // синхронного `acquireMap` конструктора: вывеска спрашивает у сервиса
+    // освещения, ночь ли, и ответ фиксирует навсегда
+    if (
+      !this.mapSprite ||
+      this._container.destroyed ||
+      !hasAnimations(this._animationSpec)
+    ) {
+      return;
+    }
+
+    this._animations = await buildLayerAnimations({
+      spec: this._animationSpec,
+      game: this._game,
+      baseTexture: await this._baseTexturePromise,
+      spriteSheetData: data.spriteSheet,
+      map: this._map,
+      tiles: this._tiles,
+      step: this._step,
+      scale: this._baseScale,
+      level: this._level,
+      animated: this._animated,
+      renderer: this._renderer,
+      lighting: this._lighting,
+      isAborted: () => this._container.destroyed,
+    });
   }
 
   // Что нужно `layerSeeThrough` — одним значением, без единого поля парта
@@ -180,6 +281,20 @@ export default class MapLayer {
       ? this._levelView.camera()
       : cameraCenter(this._container.parent, this._renderer);
 
+    // карты освещённости: реальная работа — раз на трансформ сцены
+    if (this._lighting) {
+      this._lighting.attachStage(this._container.parent, this._renderer);
+      this._lighting.render();
+    }
+
+    if (this._animations) {
+      updateLayerAnimations(this._animations, {
+        camera,
+        levelView: this._levelView,
+        screen: this._renderer?.screen,
+      });
+    }
+
     // прозрачность считает плита моста и любой слой с перекрывателем: у
     // второго объём гаснет уже на уровне игрока
     if (this._level >= 1 || this._occluder) {
@@ -194,9 +309,7 @@ export default class MapLayer {
       return;
     }
 
-    if (this.mapSprite) {
-      applyParallax(this.mapSprite, camera, this._parallaxK, this._baseScale);
-    }
+    applyParallax(this._layerRoot, camera, this._parallaxK, this._baseScale);
 
     for (let i = 0; i < this._slices.length; i += 1) {
       const slice = this._slices[i];
@@ -230,6 +343,19 @@ export default class MapLayer {
   // последний кадр рендерит источник, у которого `resource === null`
   destroy() {
     const container = this._container;
+
+    // анимации первыми: вывески снимают свои источники и эмиссив из
+    // сервиса, пока он ещё держит карту; текстуры — в колбэке ниже
+    const releaseAnimations = destroyLayerAnimations(this._animations);
+
+    this._animations = null;
+
+    // ключ карты освещения и вклад в маску этажа снимаются первыми: на нуле
+    // счётчика текущего ключа сервис освобождает карту (сначала со сцены)
+    if (this._lighting) {
+      this._lighting.releaseMap(this._mapKey, this);
+      this._lighting = null;
+    }
 
     disposeHole(this._hole, container);
 
@@ -275,7 +401,7 @@ export default class MapLayer {
     }
 
     if (mapSprite) {
-      container.removeChild(mapSprite);
+      mapSprite.parent?.removeChild(mapSprite);
     }
 
     // обнуление ссылок
@@ -291,8 +417,11 @@ export default class MapLayer {
     this._spriteSheetData = null;
     this._renderer = null;
     this._levelView = null;
+    this._game = null;
 
     return () => {
+      releaseAnimations();
+
       // срезы объёма делят запечённую текстуру с плоским слоем —
       // освобождает её один владелец, спрайт слоя. Текстуру клина делят его
       // меши, и она тоже своя: источник отдаётся здесь один раз

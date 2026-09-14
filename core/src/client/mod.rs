@@ -20,7 +20,9 @@ use vimp_engine_core::client::unpack::{BlockData, DecodedSnapshot};
 use vimp_engine_core::config::{EngineClientConfig, FieldValue, PLAYER_STATE_LEN, SnapshotConfig};
 use vimp_engine_core::map::MapLevels;
 
-use crate::config::TanksClientConfig;
+use crate::config::{SurfaceRules, TanksClientConfig};
+use crate::map_game::{MapGame, PropGame};
+use crate::surface::SurfaceMap;
 use map_dynamics::MapDynamics;
 use predictor::Predictor;
 use remote_tanks::RemoteTanks;
@@ -62,6 +64,10 @@ pub(crate) struct ClientMapConfig {
     /// уклон рампы, а значит и предсказанная скорость на подъёме.
     #[serde(default)]
     pub(crate) level_height: Option<f32>,
+    /// Игровые данные карты (поле `game`) — тот же разбор, что у хоста
+    /// (`crate::map_game`).
+    #[serde(default, deserialize_with = "crate::map_game::null_as_default")]
+    pub(crate) game: MapGame,
 }
 
 pub(crate) fn default_scale() -> f32 {
@@ -89,6 +95,9 @@ pub(crate) struct ClientDynamicObject {
     /// не толкает)
     #[serde(default)]
     pub(crate) level: u8,
+    /// Игровые данные тела карты (`physicsDynamic[i].game`).
+    #[serde(default, deserialize_with = "crate::map_game::null_as_default")]
+    pub(crate) game: PropGame,
 }
 
 pub(crate) fn default_angular_damping() -> f32 {
@@ -111,6 +120,20 @@ impl ClientMapConfig {
             self.step * self.scale,
             self.level_height.map(|height| height * self.scale),
         )
+    }
+
+    /// Таблица поверхностей карты — той же `surface::build_map`, что у
+    /// хоста. Зовётся после `take_levels`: грид уровня 0 уже переехал в
+    /// `levels`. Размер клетки — `step · scale`, как у хоста после
+    /// масштабирования карты.
+    pub(crate) fn surface_map(
+        &self,
+        levels: &MapLevels,
+        rules: &SurfaceRules,
+    ) -> Result<Option<SurfaceMap>, String> {
+        let grid0 = levels.grid(0).map_or(&[][..], |grid| grid.as_slice());
+
+        crate::surface::build_map(&self.game, rules, levels, grid0, self.step * self.scale)
     }
 }
 
@@ -164,9 +187,24 @@ pub struct TanksClient {
     /// что его разбор прогонов рамп протух, не спрашивая саму геометрию
     /// (`ClientCore::ramp_runs` сериализует ВСЕ прогоны карты в строку)
     map_generation: u32,
+
+    /// Разобранное поле `game` текущей карты и `game` её динамических тел
+    /// (по индексу в `physicsDynamic`)
+    map_game: MapGame,
+    props: Vec<PropGame>,
 }
 
 impl TanksClient {
+    /// Разобранное поле `game` текущей карты.
+    pub fn map_game(&self) -> &MapGame {
+        &self.map_game
+    }
+
+    /// Игровые данные динамических тел карты по индексу в `physicsDynamic`.
+    pub fn props(&self) -> &[PropGame] {
+        &self.props
+    }
+
     /// Динамика карты: геометрия ящиков и её предиктор (потребители —
     /// эффекты игры за WASM-границей и raycast выстрела).
     pub fn map_dynamics(&self) -> Option<&MapDynamics> {
@@ -178,6 +216,18 @@ impl TanksClient {
     /// клина горки (`ClientCore::ramp_runs`).
     pub fn levels(&self) -> Option<&Rc<MapLevels>> {
         self.predictor.levels()
+    }
+
+    /// Таблица поверхностей текущей карты — та же, по которой предиктор
+    /// считает движение; `None` — карты нет или поверхностей она не объявила.
+    /// Потребитель за WASM-границей — эффекты частей (сервис `surfaces`).
+    pub fn surface_map(&self) -> Option<&SurfaceMap> {
+        self.predictor.surface_map().map(|map| map.as_ref())
+    }
+
+    /// Правила поверхностей: имена типов в порядке индексов `surface_map`.
+    pub fn surface_rules(&self) -> &SurfaceRules {
+        self.predictor.surface_rules()
     }
 
     /// Поколение карты: дешёвый признак «геометрия сменилась» для кеша на
@@ -209,6 +259,7 @@ impl GameClientDef for TanksClient {
             &cfg.player_keys,
             &cfg.models,
             cfg.levels,
+            cfg.surfaces.clone(),
         );
         let shot = ShotPredictor::new(&cfg.models, &cfg.weapons, cfg.seed);
 
@@ -235,6 +286,8 @@ impl GameClientDef for TanksClient {
             my_tank_meta: None,
             my_game_id: None,
             map_generation: 0,
+            map_game: MapGame::default(),
+            props: Vec::new(),
         }
     }
 
@@ -486,12 +539,15 @@ impl GameClientDef for TanksClient {
         )?;
 
         let levels = Rc::new(cfg.take_levels());
+        let surface_map = cfg.surface_map(&levels, self.predictor.surface_rules())?;
 
         self.predictor.reset();
         self.reset_remote_tanks();
-        self.predictor.set_map(&cfg, Rc::clone(&levels));
+        self.predictor.set_map(&cfg, Rc::clone(&levels), surface_map);
         self.shot.set_map(levels);
         self.map_generation = self.map_generation.wrapping_add(1);
+        self.props = cfg.physics_dynamic.iter().map(|item| item.game.clone()).collect();
+        self.map_game = cfg.game;
 
         Ok(())
     }
@@ -548,6 +604,7 @@ mod tests {
 
     fn config_json() -> serde_json::Value {
         serde_json::json!({
+            "surfaces": { "types": { "sand": { "accel": 0.6, "maxSpeed": 0.55, "drag": 1.2 } } },
             "timeStepMs": 1000.0 / 120.0,
             "models": {
                 "m1": {
@@ -1012,6 +1069,53 @@ mod tests {
         client.reset();
 
         assert!(client.map_dynamics().unwrap().render_box("d0").is_some());
+    }
+
+    // поле карты `game` и `game` её тел клиент разбирает тем же
+    // `crate::map_game`, что и хост; карта без них (или с null) — пустые данные
+    #[test]
+    fn map_data_parses_game_fields() {
+        let mut client = TanksClient::new(&game_client_config(), &engine_client_config());
+        let map_json = serde_json::json!({
+            "step": 32,
+            "scale": 1.0,
+            "setId": "c1",
+            "map": [[0, 0]],
+            "physicsStatic": [1],
+            "physicsDynamic": [
+                { "position": [0.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0, "game": { "prop": "barrel" } },
+                { "position": [40.0, 0.0], "angle": 0.0, "width": 20.0, "height": 20.0,
+                  "density": 1.0 }
+            ],
+            "game": {
+                "surfaces": { "0": { "41": "sand" } },
+                "lighting": { "ambient": 0.2 }
+            }
+        })
+        .to_string();
+
+        client.set_map(&map_json).unwrap();
+
+        assert_eq!(client.map_game().surfaces["0"].len(), 1);
+        assert_eq!(client.props().len(), 2);
+        assert_eq!(client.props()[0].prop.as_deref(), Some("barrel"));
+        assert_eq!(client.props()[1], PropGame::default());
+
+        let bare = serde_json::json!({
+            "step": 32,
+            "scale": 1.0,
+            "map": [[0, 0]],
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "game": null
+        })
+        .to_string();
+
+        client.set_map(&bare).unwrap();
+
+        assert_eq!(*client.map_game(), MapGame::default());
+        assert!(client.props().is_empty());
     }
 
     // MAP_DATA приходит по сети, и до проверки клиент верил ему на слово:

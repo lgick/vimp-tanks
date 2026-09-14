@@ -1254,6 +1254,47 @@ mod tests {
     }
 
     #[test]
+    fn tracer_passes_through_a_destroyed_body() {
+        use vimp_engine_core::client::unpack::DecodedBlock;
+
+        let mut shot = make_shot();
+        // тот же ящик по курсу, но кадр уже принёс state = 2 (обломки)
+        let mut dynamics = dynamics_at(50.0, 0.0);
+        let mut items = IndexMap::new();
+
+        items.insert(
+            0u8,
+            vec![
+                FieldValue::F32(50.0),
+                FieldValue::F32(-10.0),
+                FieldValue::F32(0.0),
+                FieldValue::F32(0.0),
+                FieldValue::U8(0),
+                FieldValue::U8(2),
+                FieldValue::F32(0.0),
+                FieldValue::F32(0.0),
+                FieldValue::F32(0.0),
+            ],
+        );
+        dynamics.begin_reconcile(&DecodedSnapshot {
+            blocks: vec![DecodedBlock {
+                key: "c1".to_string(),
+                key_id: 5,
+                data: BlockData::IndexedNoNull8(items),
+            }],
+        });
+
+        let world = ShotWorld {
+            dynamics: Some(&dynamics),
+            remote_tanks: None,
+        };
+        let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6], Value::Bool(false));
+    }
+
+    #[test]
     fn tracer_casts_by_sim_geometry_and_ends_on_the_drawn_box() {
         let mut shot = make_shot();
         // нарисован далеко в стороне (центр (60, 1000)), а у хоста — на

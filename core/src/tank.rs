@@ -2,11 +2,12 @@ use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
-use crate::config::{KeyConfig, LevelRules, ModelConfig, PanelValue, WeaponConfig};
+use crate::config::{KeyConfig, LevelRules, ModelConfig, PanelValue, SurfaceRules, WeaponConfig};
 use crate::level::{Footprint, LevelState, Transit};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
 use crate::motion::{self, TurretInput};
+use crate::surface::{self, SurfaceMap, SurfaceMix};
 use vimp_engine_core::map::{level_interaction, levels_interaction, levels_interaction_on_ramp};
 use vimp_engine_core::physics::{deg_to_rad, round2};
 use vimp_engine_core::rng::Rng;
@@ -339,12 +340,6 @@ impl Tank {
         false
     }
 
-    fn lateral_velocity(body: &RigidBody) -> f32 {
-        let current_right_normal = body.rotation().transform_vector(RIGHT);
-
-        current_right_normal.dot(body.linvel())
-    }
-
     /// Проверяет кулдаун/патроны и списывает выстрел
     /// (BaseModel.tryConsumeAmmoAndShoot).
     fn try_consume_ammo_and_shoot(
@@ -438,6 +433,8 @@ impl Tank {
 
     /// Обновление логики танка на фиксированном шаге (Tank.updateData).
     /// Порядок операций закреплён паритет-тестом клиентской реплики.
+    /// `surfaces` — таблица поверхностей карты; `None` — нейтральный путь.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         dt: f32,
@@ -446,6 +443,8 @@ impl Tank {
         weapons: &indexmap::IndexMap<String, WeaponConfig>,
         bits: &PlayerKeyBits,
         rules: &LevelRules,
+        surfaces: Option<&SurfaceMap>,
+        surface_rules: &SurfaceRules,
         rng: &mut Rng,
         events: &mut Vec<CoreEvent>,
     ) -> Option<ShotCommand> {
@@ -501,15 +500,37 @@ impl Tank {
             return shot_data;
         }
 
+        // поверхность под гусеницами и снимок скоростей НАЧАЛА шага: Rapier
+        // меняет `linvel` сразу при `apply_impulse`, поэтому любое чтение
+        // после бокового импульса или тяги было бы уже другим. Реплика берёт
+        // те же скорости — до всех импульсов шага
+        let position = body.translation();
+        let mix = surfaces.map_or(SurfaceMix::NEUTRAL, |map| {
+            surface::tank_mix(
+                map,
+                surface_rules,
+                &self.level_state,
+                position.x,
+                position.y,
+                body.rotation().angle(),
+                self.width / 2.0,
+                self.height / 2.0,
+            )
+        });
+        let start_velocity = body.linvel();
+        let start_angvel = body.angvel();
+
         self.engine_throttle =
             motion::step_throttle(self.engine_throttle, forward || back, model, dt);
 
-        let current_velocity = body.linvel();
-        let current_forward_speed = current_velocity.dot(forward_vec);
+        // скорость относительно «грунта» (ленты конвейера); вне ленты
+        // вычитается ноль — точное тождество
+        let velocity_rel = start_velocity - Vector::new(mix.belt_x, mix.belt_y);
+        let current_forward_speed = velocity_rel.dot(forward_vec);
 
         // импульс против бокового скольжения: Δv · масса
-        let lateral_vel = Self::lateral_velocity(body);
-        let lateral_dv = motion::lateral_dv(lateral_vel, model, dt);
+        let lateral_vel = body.rotation().transform_vector(RIGHT).dot(velocity_rel);
+        let lateral_dv = motion::lateral_dv_on(lateral_vel, model, mix.grip, dt);
         let sideways_vec = body
             .rotation()
             .transform_vector(Vector::new(0.0, lateral_dv * self.mass));
@@ -521,7 +542,7 @@ impl Tank {
         let grade = self
             .level_state
             .grade(forward_vec.x, forward_vec.y);
-        let accel = motion::drive_accel(
+        let accel = motion::drive_accel_on(
             self.engine_throttle,
             forward,
             back,
@@ -529,16 +550,57 @@ impl Tank {
             grade,
             model,
             rules,
+            &mix,
         );
 
         if accel != 0.0 {
             body.apply_impulse(forward_vec * (accel * self.mass * dt), true);
         }
 
+        // сопротивление поверхности и импульс бустера — Δv · масса
+        if mix != SurfaceMix::NEUTRAL {
+            let (drag_x, drag_y) =
+                motion::surface_drag_dv((velocity_rel.x, velocity_rel.y), mix.drag, dt);
+
+            if drag_x != 0.0 || drag_y != 0.0 {
+                body.apply_impulse(Vector::new(drag_x, drag_y) * self.mass, true);
+            }
+        }
+
+        if let Some(map) = surfaces {
+            let (boost_x, boost_y) = surface::boost_dv(
+                map,
+                self.level_state.level,
+                self.level_state.airborne(),
+                position.x,
+                position.y,
+                start_velocity.x,
+                start_velocity.y,
+                dt,
+            );
+
+            if boost_x != 0.0 || boost_y != 0.0 {
+                body.apply_impulse(Vector::new(boost_x, boost_y) * self.mass, true);
+            }
+        }
+
         self.engine_load = motion::engine_load(self.engine_throttle, current_forward_speed, model);
 
         // импульс поворота корпуса: Δω · инерция
-        let delta_omega = motion::turn_delta(left, right, current_forward_speed, model, dt);
+        let mut delta_omega =
+            motion::turn_delta(left, right, current_forward_speed, model, dt) * mix.turn;
+
+        if mix != SurfaceMix::NEUTRAL {
+            delta_omega += motion::track_yaw_dv(
+                self.engine_throttle,
+                forward,
+                back,
+                &mix,
+                model,
+                surface_rules,
+                dt,
+            ) + motion::angular_drag_dw(start_angvel, mix.angular_drag, dt);
+        }
 
         if delta_omega != 0.0 {
             body.apply_torque_impulse(delta_omega * self.inertia, true);
@@ -841,6 +903,8 @@ mod tests {
             &weapons(),
             &bits,
             &rules(),
+            None,
+            &SurfaceRules::default(),
             &mut rng,
             &mut events,
         );
@@ -860,6 +924,8 @@ mod tests {
             &weapons(),
             &bits,
             &rules(),
+            None,
+            &SurfaceRules::default(),
             &mut rng,
             &mut events,
         );

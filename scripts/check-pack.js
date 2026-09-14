@@ -16,6 +16,14 @@ const REQUIRED = [
   /^dist\/img\/tiles\.png$/,
   /^dist\/img\/tiles3\.png$/,
   /^dist\/img\/b1\.png$/,
+  // карта downtown: тайл-лист города и спрайты пропов
+  /^dist\/img\/city\.png$/,
+  /^dist\/img\/prop_fence\.png$/,
+  /^dist\/img\/prop_fence_broken\.png$/,
+  /^dist\/img\/prop_crate\.png$/,
+  /^dist\/img\/prop_crate_damaged\.png$/,
+  /^dist\/img\/prop_crate_broken\.png$/,
+  /^dist\/img\/prop_barrel\.png$/,
 ];
 
 // --ignore-scripts обязателен: сам скрипт висит на prepack, а npm pack

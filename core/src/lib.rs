@@ -12,8 +12,11 @@ pub mod bots;
 pub mod client;
 pub mod config;
 pub mod level;
+pub mod map_game;
 pub mod motion;
+pub mod props;
 pub mod shot_levels;
+pub mod surface;
 pub mod tank;
 pub mod tanks;
 
@@ -158,6 +161,38 @@ impl ClientCore {
             .unwrap_or_default();
 
         serde_json::to_string(&runs).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Индекс типа поверхности под мировой точкой уровня (порядок
+    /// `surface_types`); `-1` — карты нет, поверхностей она не объявила или
+    /// клетка нейтральна. Эффекты частей берут поверхность отсюда, а не из
+    /// копии таблицы на JS: пыль обязана подниматься ровно там, где физика
+    /// тормозит танк.
+    pub fn surface_at(&self, x: f32, y: f32, level: u8) -> i32 {
+        self.state
+            .game()
+            .surface_map()
+            .and_then(|map| map.type_at(level, x, y))
+            .map_or(-1, |index| index as i32)
+    }
+
+    /// Имена типов поверхностей JSON-массивом в порядке индексов
+    /// `surface_at`. Направлений не содержит — их даёт `surface_dir_at`.
+    pub fn surface_types(&self) -> String {
+        let names: Vec<&String> = self.state.game().surface_rules().types.keys().collect();
+
+        serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Направление стрелки клетки под мировой точкой уровня: `0..3` —
+    /// север/юг/запад/восток (как у рамп); `-1` — нейтральная клетка или тип
+    /// без направления.
+    pub fn surface_dir_at(&self, x: f32, y: f32, level: u8) -> i32 {
+        self.state
+            .game()
+            .surface_map()
+            .and_then(|map| map.dir_at(level, x, y))
+            .map_or(-1, i32::from)
     }
 }
 

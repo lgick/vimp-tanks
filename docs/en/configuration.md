@@ -29,6 +29,8 @@ Imports maps, models, and weapons from `src/data/`.
 | `mapsInVote` | `4` | How many maps show up in a vote |
 | `mapSetId` | `'c1'` | The default snapshot key for the map constructor |
 | `coreParams.levels` | `fallTime: 0.35, fallDamage: 30, fallDamageFreeHeight: 0.5, maxFallDamage: 100, climbGravity: 500, climbMaxSpeedFactor: 0.5, levelAdoptFrames: 8, maxSideEntryRise: 0.5, rampLaunchFactor: 0.35, minLaunchVz: 0.35, maxLaunchVz: 3.5, jumpClearance: 0.45, tiltGain: 2.0, tiltAirGain: 0.12, tiltResponse: 12.0, tiltMax: 0.6, landingShake: { intensity: 3, duration: 220, minImpact: 1.5, fullImpact: 6 }` | 2.5D level rules handed to the game's Rust core as-is (the engine neither reads nor validates `coreParams`): `fallTime` is the time of ONE level of height, and `fallDamage` the price of one level ABOVE the dead zone `fallDamageFreeHeight` (`0` — falling is free): the landing costs `fallDamage · max(0, height − fallDamageFreeHeight)`, so an arc lower than the dead zone — a ramp jump — is free, while a drop of exactly one level costs `fallDamage · (1 − fallDamageFreeHeight)`. `maxFallDamage` caps a single landing, `climbGravity` is the roll-back acceleration per unit of longitudinal grade, and `climbMaxSpeedFactor` is how much a grade of 1.0 trims the speed ceiling (`[0, 1)`). The grade is DIMENSIONLESS: the engine computes it as `rise * levelHeight / span`, where `levelHeight` is the map's level height in world units (the tile size by default), so a level-per-tile climb gives 1.0 while the demo maps' runs range from 0.11 (`terraces.rampLong`) to 0.5 (`terraces.rampSteep`). `levelAdoptFrames` is how many frames in a row must hold a level ABOVE the client's replica before it adopts one (a level below is adopted at once — a late frame can only lie upwards; see `client::predictor`). `maxSideEntryRise` caps how far the ramp's height at the entry point may sit from the body's own height when it enters a run across the axis (in levels, the bound excluded). `fallTime` no longer sets a duration directly but the GRAVITY: falling is ballistic (`vz -= g·dt`), and `g` is picked so that a drop of exactly one level still takes `fallTime`. Jumping: `rampLaunchFactor` (dimensionless, `0` — no jump at all) is the share of the slope's vertical speed carried into flight when the body leaves a run's top end; `minLaunchVz` (levels/s, `0` — even a walking-pace exit jumps) is the threshold below which no flight starts; `maxLaunchVz` (levels/s) caps the take-off speed and with it the arc — `maxLaunchVz² / (2·g)`, where `g = 2 / fallTime²`, 0.375 of a level at the values above; `jumpClearance` (levels, `0` — walls vanish the instant the tank takes off) is how far above the take-off level the tank stops seeing walls and flies over obstacles. The pair is an invariant: while `maxLaunchVz² / (2·g) < jumpClearance` holds, a regular jump never reaches the clearance, so flying over walls stays a core mechanic that the shipped settings never trigger — a map that wants it raises `rampLaunchFactor`/`maxLaunchVz` of its own, and `jumpClearance` along with them (see [extending.md](extending.md)). The invariant is no longer a convention: `TanksConfig::validate()` checks it (`core/src/config.rs`), so an arc that reaches the clearance — whether from a raised `maxLaunchVz` or from a longer `fallTime`, which lowers gravity and grows the arc — is a config load error, not a silent regression. The same check refuses `maxLaunchVz < minLaunchVz`: the ceiling is applied to the take-off speed BEFORE the threshold is compared, so a ceiling below the threshold does not make jumps low, it turns them off entirely (use `rampLaunchFactor: 0` for that). Hull tilt: `tiltGain` (dimensionless, `1` — the angle equals the grade's arctangent, `0` — no tilt on a ramp) is how strongly the grade turns into an angle; `tiltAirGain` (radians per level/s, `0` — the nose does not follow the flight) tilts the nose by the vertical speed; `tiltResponse` (1/s, `0` — the hull freezes at its current angle) is how fast the hull returns to the target angle; `tiltMax` (radians, `0` — no tilt at all) caps the tilt by absolute value. `landingShake` is the camera shake on touchdown, declared exactly like a weapon's (`cameraShake` in `src/data/weapons.js`): `intensity` is the strength at a full impact, `duration` its length in ms, `minImpact` the contact |vz| (levels/s) below which the landing is soft and there is no shake at all, and `fullImpact` the |vz| that yields the full strength (anything above gives the same — `intensity` is the cap). The block may be omitted, and then a landing shakes nothing, exactly as before the rule existed. NOTE: `minImpact`/`fullImpact` numerically duplicate the `landing` block in `src/config/render.js` (hull squash, dust and sound on the client) — the client renderer and the WASM core share no source for them, so the two must always be changed together; otherwise you get a camera without dust, or dust without a camera. A flat map never touches them |
+| `coreParams.surfaces` | `trackYawGain: 0.004, trackSampleX: 0.6, trackSampleY: 0.75, bodyBeltCoupling: 4.0, types: { sand, mud, water, oil, conveyor, boost }` | Surface types a map can lay on its tiles (`game.surfaces`, see [Surfaces](#surfaces-gamesurfaces)); the values are starting ones. `trackYawGain` is Δω per unit of the difference in track thrust; `trackSampleX`/`trackSampleY` place the sampling points along the hull (share of half the length) and on the track line (share of half the width), both in `(0, 1]`. `bodyBeltCoupling` (`≥ 0`, 1/s) is how hard a belt pulls a map body (crate, barrel) toward its speed: `(belt − v) · bodyBeltCoupling · dt`, plus the belt tile's `drag` if set. Per type, multipliers (neutral `1`): `accel` — thrust, `[0, 2]`; `maxSpeed` — the forward speed ceiling, `(0, 2]`; `grip` — lateral grip, `≥ 0`; `brake` — braking without gas, `≥ 0`; `turn` — turning, `≥ 0`. Additive terms (neutral `0`): `drag` — extra linear drag, 1/s; `angularDrag` — extra angular drag, 1/s (a negative one weakens the damping and gives a spin; it may not go below `−damping.angular` of any model). The kind fields: `belt` (units/s along the tile's arrow) makes a conveyor; `boostDv` makes a boost plate and then requires both `boostMaxSpeed` (`> 0`, the speed along the arrow the push never exceeds) and `minEntrySpeed` (`≥ 0`, the lowest entry speed along the arrow) — they have no defaults, and a missing one is a load error naming the type. `belt` together with `boostDv`, or `boostMaxSpeed`/`minEntrySpeed` without `boostDv`, is an error too. Shipped types: `sand { accel 0.6, maxSpeed 0.55, drag 1.2, turn 0.8 }`, `mud { accel 0.45, maxSpeed 0.4, drag 2.0, grip 0.9, turn 0.7 }`, `water { accel 0.7, maxSpeed 0.6, drag 1.5, grip 0.8, brake 0.8, turn 0.85 }`, `oil { accel 0.35, grip 0.08, brake 0.1, turn 1.6, angularDrag −0.5 }`, `conveyor { belt 60 }`, `boost { boostDv 160, boostMaxSpeed 340, minEntrySpeed 20 }`. Checked by `TanksConfig::validate()`; the client gets the same section through `prediction.coreParams` |
+| `coreParams.props` | `fence { hp 30, ramThreshold 60, ramDamagePerSpeed 0.5 }, crate { hp 120, damagedAt 0.5, bulletFactor 0.5, blastFactor 1.5, ramThreshold 140, ramDamagePerSpeed 0.6 }, barrel { hp 40, ramThreshold 150, ramDamagePerSpeed 1.0, chainDelay 0.15, blast { radius 70, damage 80, impulse 2500000, cameraShake { intensity 30, duration 400 } } }` | Destructible map-body types that a map assigns with `physicsDynamic[i].game.prop` (see [Destructible props](#destructible-props-physicsdynamicgameprop)); world units after `mapScale`, the values are starting ones. `hp` (`> 0`) is the body's health. `damagedAt` (`[0, 1)`, `0` — no stage) is the share of `hp` below which the body is damaged (state `1`). `bulletFactor`/`blastFactor` (`≥ 0`, default `1`) multiply the damage of a shot and of a blast. `ramThreshold` (`≥ 0`) is the impact speed along the contact normal below which ramming deals nothing, and `ramDamagePerSpeed` (`≥ 0`) the damage per unit of speed above it. `blast` (`radius > 0`, `damage`, `impulse`, optional `cameraShake`) makes the type explode when destroyed (a barrel); such a type requires `chainDelay` (`> 0`, seconds) — the fuse after someone else's blast, rounded up to whole steps and never shorter than one. Checked by `TanksConfig::validate()`; the client does not use the section |
 | `roomDefaults.maxPlayers` | `8` | The bounds for the lobby's room settings: caps the limit picked by the creator (also published in `GameManifest.roomDefaults`) |
 | `roomForm` | 5 field descriptors | The room-creation form's schema (published as `GameManifest.roomForm`, engine forms v3): one descriptor per `roomDefaults` key (`maxPlayers`, `roundTime`, `mapTime`, `friendlyFire`, `map`), each with a `control` (`text`/`checkbox`/`select`) and `label`; no `default` — the engine seeds values from `roomDefaults`. Time bounds (`roundTime`/`mapTime`) are in ms; `map` uses `source: 'maps'` so the engine supplies choices from the map catalog. `scripts/build-game-manifest.js` adds `regExp` **and** `min`/`max` to `maxPlayers`/`roundTime`/`mapTime` from these same bounds — the engine renders `min`/`max` as a "(min–max)" hint next to the field's label and checks them client-side; the authoritative clamp stays in the engine's `applyRoomOverrides.js` |
 | `scripted` | `namePrefix: 'Bot', defaultModel: 'm1'` | Scripted-participant (bot) parameters: the `Bot<id>` name prefix and the default tank model |
@@ -150,11 +152,20 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   `contentSize` semantics. A `blur` above ~1/4 of `baseRadius` smears the
   blob across the whole canvas and the rim stops reading.
 
+  `scorchTexture` and `debrisTexture` belong to `Map` (the destroyed prop,
+  `parts/map/MapObject.js`). `scorchTexture` bakes `variants` blurred dark
+  blobs with a darker core (`baseRadius`, `irregularity`, `blur`,
+  `numPoints`, `color`, `coreColor`, `coreRatio`) — the mark of a destroyed
+  prop without `game.imgDestroyed`; `debrisTexture` bakes `variants` white
+  splinters (`length`, `width`, `color`) tinted per sprite by the debris
+  burst. Both return `{ textures, contentSize }`.
+
 - **`componentDependencies`** — which services get injected into which
   components (`renderer` → Map, Tank, Tracks, Smoke, Dust, Bomb, ShotEffect,
   ExplosionEffect; `assetsBase` → Map;
-  `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust;
-  `mapDynamics` → ShotEffect; `rampRuns` → Map; `levelView` → Tank, Map, MapRadar,
+  `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust, Map;
+  `mapDynamics` → ShotEffect; `rampRuns` → Map; `surfaces` → Dust, Tracks,
+  Tank; `levelView` → Tank, Map, MapRadar,
   Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` →
   Tank, ShotEffect).
   `mapDynamics` is the map-dynamics geometry from the client core
@@ -167,7 +178,11 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   `ClientCore.ramp_runs`: `forLevel(level)` gives the level's ramp runs in
   world units, and the layer draws the ramp wedge by them — the same
   geometry the physics puts its guards on, instead of a second grid walk on
-  JS. `levelView` is the game's own service too
+  JS. `surfaces` is the game's service over `ClientCore.surface_at`/
+  `surface_dir_at`: `kindAt(x, y, level)` and `dirAt(x, y, level)` tell the
+  dust, the track marks and the tank what cell the tank is on (see
+  [architecture.md](architecture.md)); on a map without `game.surfaces` they
+  return `null` and the parts behave as before. `levelView` is the game's own service too
 (`src/client/levelView.js`): where the local player is, on which level and
 at which height — the local `Tank` writes it (`localPlayer`, an engine
 service, is what tells it that it is the local one), and everything that has
@@ -249,6 +264,75 @@ constant: `levelHeight` (see [extending.md](extending.md)). It is a
 layers of different maps would read differently from one another. A map with
 an unusual `levelHeight` therefore climbs differently but looks the same.
 
+### Night and lighting: `lighting`
+
+`src/config/render.js → lighting` (also exported from `src/config/client.js`)
+configures the `lighting` service (`src/client/lighting/`), the headlights
+of `Tank` and the flashes of `ExplosionEffect` and `ShotEffect`. A map turns
+night on with `game.lighting` ([below](#night-lighting-gamelighting)); how it
+is drawn — [architecture.md](architecture.md#lighting-night).
+
+| `lighting` | Meaning |
+| --- | --- |
+| `enabled` | `false` switches the system off entirely, night maps included: no overlays, no sources, `addEmissive` returns `false` |
+| `resolution` | Resolution of a level's light map relative to the screen (`0.5` by default) |
+| `maxLights` | Cap on visible sources per frame, after screen culling |
+| `headlights` | Two cones per live tank: `length` (world units), `spread` (half-width at the far end as a share of the length), `intensity`, `color`, `offset` (headlight offset from the hull axis as a share of the hull half-width), `glareSize` (radius of the emissive glare) |
+| `tankGlow` | A faint light under every live tank so enemies stay readable: `radius`, `intensity`, `color` |
+| `flash.explosion`, `flash.shot` | Short flashes: `radius`, `intensity`, `duration` (ms), `color` |
+
+Baked textures (`parts.bakedAssets.vimp`): `lightRadialTexture` and
+`lampHeadTexture` (component `Map`), `headlightConeTexture` (component
+`Tank`). The engine hands a baked asset to one component only, so the
+service receives them through the parts (`registerTextures` merges a partial
+set) and gives `Tank` the head texture for its glares
+(`lighting.texture('head')`).
+
+The service (`componentDependencies.lighting`: `Map`, `Tank`,
+`ExplosionEffect`, `ShotEffect`) exposes `enabled`, `attachStage`,
+`acquireMap`/`releaseMap` (per-key counter, owner-bound mask),
+`setLevelMask`, `registerTextures`, `texture`,
+`addLight`/`updateLight`/`removeLight`, `flash`,
+`addEmissive`/`removeEmissive`, `isNight` and `render`.
+
+### Animations: `animations`
+
+`src/config/render.js → animations` (also exported from
+`src/config/client.js`) drives the client-only animated map elements: the
+tiles of `game.animatedTiles`, the decals of `game.decals` and the neon
+flicker of `game.signs` ([below](#animated-elements-gameanimatedtiles-gamesigns-gamedecals)).
+The host knows nothing about them.
+
+| `animations` | Meaning |
+| --- | --- |
+| `enabled` | `false` — animated tiles and decals stay on frame 0 and neon does not flicker; nothing is updated per tick (a night sign still follows the camera) |
+| `maxFps` | Cap on how often frames change (`30` by default): the animation time is quantized to `1 / maxFps` |
+
+### Surface effects: `surfaceFx`
+
+`src/config/render.js → surfaceFx` — how the cell surfaces look under a tank
+(`Dust.js`, `Tracks.js`). What surface a cell has comes from the core (the
+`surfaces` service); a map without `game.surfaces` never reads these numbers.
+
+| Key | Meaning |
+| --- | --- |
+| `sand`, `mud`, `water` | Continuous emission while driving: `color`, `rate` (particles per second per track at `fullSpeed`), `fullSpeed`, `minSpeed` (no emission below it), `lifetime` (`{min, max}`, ms), `sizeFactor`, `alpha`. Sand gives frequent light dust, mud short-lived large dark clods, water blue spray to the sides of the tracks |
+| `water.sideSpeed`, `water.entryBurst`, `water.entryMinSpeed` | The spray's lateral speed; the one-off splash on entering water: particles per track and the entry-speed threshold |
+| `boost` | The one-off tail flash when a boost fires: `color`, `burst`, `lifetime`, `sizeFactor`, `alpha`, `tailSpeed` (thrown against the arrow) |
+| `boost.boostMinSpeed` | A visual copy of `coreParams.surfaces.types.boost.minEntrySpeed`: the render and the WASM share no source, and a mismatch only costs an extra or a missed flash |
+| `boost.resetDistance` | A per-frame position jump (world units, ~2 map cells) after which the part does not compare cells and only remembers the current one — a teleport or respawn of one's own or another tank |
+| `tracks.oil`, `tracks.mud` | Track marks on the surface: `alpha` and `lifetime` multipliers and the mark's `tint`. Oil leaves dark, denser, long-lived marks; mud darker ones |
+| `tracks.noMarks` | Surfaces that leave no marks at all (`water`) |
+
+Oil raises no dust at all, not even when the tracks spin. The boost flash
+follows the core's entry rule (`surface::boost_dv`): the hull centre is on a
+`boost` cell with arrow `dir`, the previous frame's cell is not a boost with
+the same `dir`, the speed along the arrow is `≥ boostMinSpeed`, the tank is
+not airborne. Moving between cells of one plate gives no flash; the first
+frame of a part, a respawn (`condition` 0 → alive) and a jump beyond
+`resetDistance` only remember the cell. The engine's camera-reset flag is not
+used: the engine consumes it in the canvas model and the parts never see it.
+
 ### `modules.controls.keySetList`
 
 An array of two `keyCode: 'command'` sets: `[0]` — spectator (`n`/`p` —
@@ -315,6 +399,11 @@ when voices compete), `volume`, optionally `loop: true`.
 mechanics — the engine's
 [client.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/client.md#soundmanager).
 
+Surfaces have no sounds of their own yet: the splash and boost sounds are
+postponed until there are source files for them (reusing `hit`/`explosion`
+would read as a shot). Mud is still heard — the host's higher `engineLoad`
+already raises the engine's pitch in `Tank.js`.
+
 `volume` is read against **normalized** sources. `scripts/process-audio.js`
 used to pass `-af` once, and since that is an *output* option it filtered
 only the file that followed it — the mp3, which in practice is the Safari
@@ -377,6 +466,13 @@ between camera and tank throws the same source fully into one ear, because
 the Web Audio azimuth follows direction, not distance. Everything else stays
 in the world and pans normally.
 
+`propBreak` is a destroyed prop (a fence, a crate): the `hit` file, quieter
+and at a lower priority, so the shot that broke the fence is heard over the
+crack. It is fired by the `Map` part itself (`MapObject`) on the transition
+to `state = 2` — not on the first frame of a prop that is already destroyed.
+A barrel's explosion sounds as `explosion` through `ExplosionEffect` (its
+`w2e` row).
+
 ## src/config/snapshot.js — the snapshot key schema
 
 Registered as `HostPlugin.gameConfig.snapshot`: `m1`, `w1`, `w2`, `w2e`,
@@ -411,7 +507,7 @@ it ended at (they differ where the ray drops off a ledge) — while the bomb
 derive all four from its own copy of the layers, but then the picture would
 depend on one more repeated algorithm; four bytes are cheaper.
 
-The dynamic map row (`c1`/`c2`) is `[x, y, angle, z, level, vx, vy,
+The dynamic map row (`c1`/`c2`) is `[x, y, angle, z, level, state, vx, vy,
 angvel]`, and `z`/`level` must declare `role: 'z'` and `role: 'level'`:
 the engine recognises a layered row by its ROLES, not by field names (the
 name belongs to the game), and a role without its pair fails the map load
@@ -419,9 +515,13 @@ instead of silently falling back to a flat row. The height and the level
 sit in the HEAD rather than the tail,
 because a resting body ships no tail at all and the level would read as
 zero — a crate on the bridge would "fall" to the ground for the viewer.
-`optionalFrom: 5`: a dynamic map element ships `[vx, vy, angvel]` only
+`state` (`u8`, `role: 'state'`, capability `map.bodyState`) is the map
+body's state byte: the engine writes it at the role's position, its meaning
+belongs to the game. For now it is always `0` (intact). It sits in the head
+for the same reason as the level.
+`optionalFrom: 6`: a dynamic map element ships `[vx, vy, angvel]` only
 while it moves, so a resting crate costs 12 bytes less per frame (decoding
-still yields the full eight-field row, the missing tail as zeros). Full
+still yields the full nine-field row, the missing tail as zeros). Full
 mechanism — the engine's
 [network.md](https://github.com/lgick/vimp-engine/blob/main/docs/en/network.md#binary-snapshot-frame-port-5).
 
@@ -462,8 +562,10 @@ Two architecturally different weapon types:
 
 ### maps/
 
-Five maps: `pool mini` (small), `canopy`, `garden`, `overpass` (the two-level
-2.5D demo) and `terraces` (the three-level one). Each describes tile layers (`layers`, `tiles`), respawn points
+Six maps: `pool mini` (small), `canopy`, `garden`, `overpass` (the two-level
+2.5D demo), `terraces` (the three-level one) and `downtown` (the night city —
+the reference for the `game` fields: surfaces, props, lighting, animated
+tiles, signs and decals). Each describes tile layers (`layers`, `tiles`), respawn points
 (`respawns`), static (`physicsStatic`) and dynamic (`physicsDynamic`)
 physics. Registration — `src/data/maps/index.js`. How to add a map — see
 [extending.md](extending.md#new-map).
@@ -488,6 +590,8 @@ passage under the slab, crates at the gaps in the railings of both levels and
 | `levels[n].layers` | Render layers of that grid (`zIndex` → tiles), the same base values as level 0; the renderer shifts them by `LEVEL_Z_STRIDE = 100` itself |
 | `ramps[]` | Transitions: `{ tile, dir, from, to }` — the tile index in the `from` level's grid, and `dir` (`north`/`south`/`west`/`east`) is the direction you drive **to climb** |
 | `physicsDynamic[].level` | The level a box stands on (`0` by default). Bodies of different levels never touch |
+| `game` | Optional, the game's own map data (capability `map.gameData`): the engine stores it as raw JSON and the core parses it on both sides (`core/src/map_game.rs`). Unknown keys are ignored. The core reads `game.surfaces` (see [Surfaces](#surfaces-gamesurfaces)); the client reads `game.lighting` (see [Night lighting](#night-lighting-gamelighting)). `downtown.js` is the reference |
+| `physicsDynamic[].game` | Optional, the game's data of a map body (`{ prop, imgDamaged, imgDestroyed }`, see [Destructible props](#destructible-props-physicsdynamicgameprop)); `downtown.js` is the reference |
 | `volumes` / `levels[n].volumes` | Optional, **visual only**: `zIndex of the render layer` → its height in levels. A layer with a height is extruded by `Map` itself and shifts as the camera moves; the engine validates the value and passes it to the part in `data.volume` |
 | `levelHeight` | Optional: **world units per level** (before `scale`), the tile size by default. One number that makes the ramp grade dimensionless in the core (physics only — the client no longer computes a grade); the part receives it as `data.levelHeight`, and the engine validates it (`vimp-engine >= 0.32.0`) |
 | `respawns[team][i][3]` | Optional 4th element of a respawn point — the level. Without it the level is derived from the geometry (`GameMap::level_at`), i.e. a ground point that happens to sit under the slab would spawn the tank **on** the bridge |
@@ -503,6 +607,113 @@ and refuses a map with mismatched grid dimensions, a gap in the level
 numbering, a railing outside `floor`, a ramp tile missing from its grid or a
 level number out of range in `respawns`/`physicsDynamic`. Structural checks
 of the same kind run offline as contract rule `E4` (`vimp-contract`).
+
+#### Surfaces (`game.surfaces`)
+
+```js
+game: {
+  surfaces: {
+    '0': { 41: 'sand', 44: 'oil', 45: { type: 'conveyor', dir: 'east' }, 47: { type: 'boost', dir: 'north' } },
+    '1': { 44: 'oil' },
+  },
+},
+```
+
+The key is a level; inside it, the tile id of that level's grid (`map` for
+`0`, `levels[n].map` for `n`) maps to a type from `coreParams.surfaces.types`:
+its name, or `{ type, dir }`. `dir` (`north` = −y, `south` = +y, `west` = −x,
+`east` = +x — as for `ramps`) is required for a conveyor and a boost and
+forbidden for any other type. Both sides check it on load
+(`MapGame::validate_surfaces`): the level exists, the type is declared, `dir`
+matches the kind, and the tile is neither a wall (`physicsStatic`/`walls`) nor
+a ramp tile of its level — otherwise the map is refused. How surfaces act on
+motion — [core.md](core.md#surfaces-coresrcsurfacers).
+
+#### Night lighting (`game.lighting`)
+
+```js
+game: {
+  lighting: {
+    night: true,
+    ambient: 0x3a4260,
+    lamps: [{ cell: [12, 30], level: 0, radius: 110, color: 0xffc070, intensity: 0.9, head: true, flicker: 0 }],
+  },
+},
+```
+
+Only the client reads it; the core ignores the key.
+
+| Field | Meaning |
+| --- | --- |
+| `night` | `true` — the map is dark. `false` or no `game.lighting` — day, the system draws nothing |
+| `ambient` | Colour of the darkness the scene is multiplied by (brightness ≈ 0.35–0.45 keeps enemies readable) |
+| `lamps[].cell` | `[col, row]` of the grid; the lamp stands in the cell centre (`(col + 0.5) · step · scale`) |
+| `lamps[].level` | The level the lamp lights (`0` by default); it has to exist |
+| `lamps[].radius`, `color`, `intensity` | The light spot: world units, colour, strength |
+| `lamps[].head` | `true` — draw a glowing lamp head over the darkness |
+| `lamps[].flicker` | `0..1`, flicker strength (deterministic, the same on every client) |
+
+On a night map no render layer of any level may have a base `zIndex` of 40
+or more: the light map lies at 40 and the emissive layer at 45
+(`tests/config/game.test.js` checks it together with the lamp cells).
+
+#### Animated elements (`game.animatedTiles`, `game.signs`, `game.decals`)
+
+```js
+game: {
+  animatedTiles: {
+    45: { kind: 'frames', frames: [45, 60, 61, 62], speed: 60 }, // conveyor: fps is derived from speed
+    43: { kind: 'frames', frames: [43, 63, 64, 65], fps: 4 },    // water
+  },
+  signs: [
+    { cell: [40, 20], level: 1, layer: 1, text: 'HOTEL', color: 0xff3ad0, size: 18, angle: 0,
+      flicker: { pulse: 0.15, dropouts: 0.2 }, light: { radius: 80, intensity: 0.7 } },
+  ],
+  decals: [
+    { cell: [10, 8], level: 1, layer: 1, frame: 70, kind: 'rotate', rps: 1.5 }, // a rooftop fan
+  ],
+},
+```
+
+Only the client reads these keys; the core ignores them.
+
+| Field | Meaning |
+| --- | --- |
+| `animatedTiles[id]` | The tile `id` is animated on every level and layer that draws it. It is left out of the layer bake and drawn as live sprites |
+| `animatedTiles[id].frames` | Frame indices of `spriteSheet.frames`; they have to exist |
+| `animatedTiles[id].fps` / `speed` | Exactly one of them. `fps` — a plain animation. `speed` (units/s) — a conveyor: `fps = speed · frames / (step · scale)`, and `speed` must equal the `belt` of the tile's surface type. Frames are chevrons already drawn in the belt direction (one tile and its own frames per direction); sprites are never rotated |
+| `signs[].cell`, `level`, `layer` | Grid cell and the owning render layer: exactly the layer whose `(level, layer)` match builds the sign |
+| `signs[].text`, `size`, `color`, `angle` | Text (bold monospace), font size in grid units, colour (`tint`), angle in degrees |
+| `signs[].flicker` | `pulse` — depth of the slow pulse; `dropouts` — share of time windows with a short deterministic dropout (the core dims more than the glow) |
+| `signs[].light` | `radius`, `intensity` of a light source in the sign's colour — night maps only |
+| `decals[].cell`, `level`, `layer`, `frame` | A sprite of `frame` in the cell centre of the owning layer |
+| `decals[].kind` | `'rotate'` with `rps` (turns per second) or `'frames'` with `frames` and `fps` |
+
+Rooftop fans go on the roof slabs of a level ≥ 1 (the level's render layer),
+not on top of a volume extrusion. `tests/config/game.test.js` checks the
+rules above: one of `fps`/`speed`, existing frames, every conveyor tile has
+an animation whose `speed` equals its `belt`, and signs and decals stand on
+existing layers.
+
+#### Destructible props (`physicsDynamic[].game.prop`)
+
+```js
+physicsDynamic: [
+  { position: [200, 84], width: 32, height: 32, density: 100, game: { prop: 'barrel' } },
+],
+```
+
+A body with `game.prop` becomes a prop of that type from `coreParams.props`;
+a body without it stays an ordinary indestructible crate. An unknown name
+fails the map load (`physicsDynamic[i].game.prop: unknown prop '…'`). The
+prop's state travels in the `state` byte of its `c1`/`c2` row: `0` — intact,
+`1` — damaged, `2` — destroyed (debris or scorch). The optional
+`game.imgDamaged` and `game.imgDestroyed` name the images of those states
+(files in `assets/img/`, checked by `npm run build:manifest`); without
+`imgDestroyed` a destroyed prop is drawn as a procedural scorch
+(`scorchTexture`). How props break —
+[gameplay.md](gameplay.md#destructible-objects), the core side —
+[core.md](core.md#destructible-props-coresrcpropsrs).
 
 ---
 

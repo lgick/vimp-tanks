@@ -38,6 +38,11 @@ const sounds = {
     volume: 0.48,
   },
 
+  // разрушение пропа (забор, ящик): тот же файл, что у попадания, тише и
+  // с меньшим приоритетом — выстрел, сломавший забор, слышен поверх треска.
+  // Взрыв бочки звучит своим `explosion` через ExplosionEffect
+  propBreak: { file: 'hit', priority: 80, volume: 0.28 },
+
   // https://freesound.org/people/7of9Designs/sounds/640204/
   tankLanding: { file: 'tank-landing', priority: 60, volume: 0.7 },
 

@@ -11,14 +11,13 @@ import { Container, Rectangle, Sprite, Spritesheet } from 'pixi.js';
 //
 // Текстура принадлежит вызывающему: она сделана под конкретный экземпляр
 // карты, и освобождать её обязан он (`textureSource: true`).
-export async function bakeTileLayer({
-  baseTexture,
-  spriteSheetData,
-  map,
-  tiles,
-  step,
-  renderer,
-}) {
+
+// Разбор тайл-листа карты в `Spritesheet`: кадр `frame<i>` на каждый
+// элемент `spriteSheetData.frames`. Общий код запекания и анимированных
+// частей слоя (`layerAnimations.js`): текстуры обеих сторон делят один
+// источник и потому один батч. Лист принадлежит вызывающему: он же зовёт
+// `spriteSheet.destroy()` (сам baseTexture — общий ассет игры)
+export async function parseSpriteSheet(baseTexture, spriteSheetData) {
   const framesData = {};
 
   spriteSheetData.frames.forEach((frameDef, index) => {
@@ -40,6 +39,24 @@ export async function bakeTileLayer({
   const spriteSheet = new Spritesheet(baseTexture, sheetDataForPixi);
   await spriteSheet.parse();
 
+  return spriteSheet;
+}
+
+// `exclude` — тайлы, которые в запекание не попадают: анимированные тайлы
+// карты (`game.animatedTiles`) рисуются живыми спрайтами поверх
+export async function bakeTileLayer({
+  baseTexture,
+  spriteSheetData,
+  map,
+  tiles,
+  step,
+  renderer,
+  exclude = [],
+}) {
+  const spriteSheet = await parseSpriteSheet(baseTexture, spriteSheetData);
+  const excluded = new Set(exclude);
+  const baked = tiles.filter(tile => !excluded.has(tile));
+
   const mapWidth = map[0].length * step;
   const mapHeight = map.length * step;
 
@@ -50,7 +67,7 @@ export async function bakeTileLayer({
     for (let x = 0, lenX = map[y].length; x < lenX; x += 1) {
       const tileIndex = map[y][x];
 
-      if (tiles.includes(tileIndex)) {
+      if (baked.includes(tileIndex)) {
         // предполагается, что spriteSheet имеет свойство textures,
         // где ключ соответствует названию тайла
         const textureName = `frame${tileIndex}`;

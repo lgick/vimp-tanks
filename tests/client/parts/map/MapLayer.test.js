@@ -10,6 +10,8 @@ import {
 import Map from '../../../../src/client/parts/Map.js';
 import { bakeTileLayer } from '../../../../src/client/parts/bakeTileLayer.js';
 import { createLevelView } from '../../../../src/client/levelView.js';
+import { createLighting } from '../../../../src/client/lighting/createLighting.js';
+import { mapKeyOf } from '../../../../src/client/lighting/lightMath.js';
 import { levelZ } from '../../../../src/client/levelZ.js';
 import { seeThrough, parallax, volume } from '../../../../src/config/render.js';
 
@@ -31,6 +33,7 @@ import { seeThrough, parallax, volume } from '../../../../src/config/render.js';
 // а не на картинку
 vi.mock('../../../../src/client/parts/bakeTileLayer.js', () => ({
   bakeTileLayer: vi.fn(async () => ({ destroy: vi.fn() })),
+  parseSpriteSheet: vi.fn(async () => ({ textures: {}, destroy: vi.fn() })),
 }));
 
 // Кадр: шаг общего тикера плюс отрисовка. Сглаживание прозрачности шагает
@@ -441,9 +444,11 @@ describe('Map: параллакс и объём слоя', () => {
 
     const k = 1 * parallax.shear;
 
-    expect(bridge._mode.mapSprite.scale.x).toBeCloseTo(0.5 * (1 + k), 6);
-    expect(bridge._mode.mapSprite.position.x).toBeCloseTo(-CAM_X * k, 6);
-    expect(bridge._mode.mapSprite.position.y).toBeCloseTo(-CAM_Y * k, 6);
+    // трансформ несёт корень слоя: запечённый спрайт и живые спрайты
+    // `animated` едут вместе
+    expect(bridge._mode._layerRoot.scale.x).toBeCloseTo(0.5 * (1 + k), 6);
+    expect(bridge._mode._layerRoot.position.x).toBeCloseTo(-CAM_X * k, 6);
+    expect(bridge._mode._layerRoot.position.y).toBeCloseTo(-CAM_Y * k, 6);
 
     // плоский слой земли не платит даже за колбэк
     const ground = make(
@@ -917,5 +922,193 @@ describe('Map: параллакс и объём слоя', () => {
         expect(mesh.destroyed).toBe(true);
       }
     });
+  });
+});
+
+// Ночь: каждая статическая часть берёт ключ карты освещения и (на уровне
+// >= 1) вносит вклад в маску этажа — синхронно в конструкторе, до `_build`.
+describe('MapLayer: освещение', () => {
+  const nightGame = { lighting: { night: true, lamps: [] } };
+
+  const bridge = {
+    ...staticData,
+    level: 1,
+    layer: 1,
+    step: 10,
+    map: [
+      [0, 5],
+      [6, 0],
+    ],
+    tiles: [5, 6],
+    floor: [5, 6],
+    game: nightGame,
+  };
+
+  const makeLit = (data, lighting) =>
+    new Map(data, {}, { renderer, assetsBase: '/build/', lighting });
+
+  it('acquireMap с ключом карты и вклад в маску с владельцем-частью', () => {
+    const lighting = createLighting();
+    const acquireMap = vi.spyOn(lighting, 'acquireMap');
+    const setLevelMask = vi.spyOn(lighting, 'setLevelMask');
+    const part = makeLit(bridge, lighting);
+
+    expect(acquireMap).toHaveBeenCalledWith(
+      mapKeyOf(bridge),
+      nightGame.lighting,
+      10,
+      1,
+    );
+    expect(setLevelMask).toHaveBeenCalledWith(
+      1,
+      [
+        [1, 0],
+        [0, 1],
+      ],
+      part._mode,
+    );
+  });
+
+  it('слой уровня 0 в маску не вкладывается', () => {
+    const lighting = createLighting();
+    const setLevelMask = vi.spyOn(lighting, 'setLevelMask');
+
+    makeLit({ ...staticData, game: nightGame }, lighting);
+
+    expect(setLevelMask).not.toHaveBeenCalled();
+  });
+
+  it('destroy отдаёт ключ вместе со своим вкладом в маску', () => {
+    const lighting = createLighting();
+    const releaseMap = vi.spyOn(lighting, 'releaseMap');
+    const part = makeLit(bridge, lighting);
+    const owner = part._mode;
+
+    part.destroy();
+
+    expect(releaseMap).toHaveBeenCalledWith(mapKeyOf(bridge), owner);
+    expect(lighting.isNight()).toBe(false);
+  });
+
+  it('isNight() истинен сразу после конструктора, до завершения _build', () => {
+    const lighting = createLighting();
+    const part = makeLit({ ...staticData, game: nightGame }, lighting);
+
+    // Assets.load здесь «вечный»: _build не завершён, спрайта ещё нет
+    expect(part._mode.mapSprite).toBeNull();
+    expect(lighting.isNight()).toBe(true);
+  });
+
+  it('на ночной карте плоский слой уровня 0 регистрирует onRender', () => {
+    const lighting = createLighting();
+    const night = makeLit({ ...staticData, game: nightGame }, lighting);
+    const day = makeLit(staticData, createLighting());
+
+    expect(typeof night._onRender).toBe('function');
+    expect(day._onRender).toBe(null);
+  });
+});
+
+// Анимированные элементы карты (этап 8): корень слоя `layerRoot` держит
+// запечённый спрайт и контейнер `animated`; без `game` структура та же, что
+// у любого слоя, и колбэк не регистрируется.
+describe('MapLayer: корень слоя и анимации', () => {
+  const structure = node => ({
+    label: node.label || null,
+    children: node.children.map(structure),
+  });
+
+  it('без game: парт → layerRoot → [animated], трансформ корня — масштаб карты', () => {
+    const part = makeMap({ ...staticData, scale: 0.5 }, '/build/');
+
+    expect(structure(part)).toEqual({
+      label: null,
+      children: [
+        {
+          label: 'layerRoot',
+          children: [{ label: 'animated', children: [] }],
+        },
+      ],
+    });
+    expect(part._mode._layerRoot.scale.x).toBe(0.5);
+    expect(part._mode._layerRoot.position.x).toBe(0);
+    expect(part._onRender).toBe(null);
+  });
+
+  it('слой с анимированным тайлом регистрирует onRender, чужой слой — нет', () => {
+    const game = { animatedTiles: { 1: { kind: 'frames', frames: [0], fps: 4 } } };
+    const own = makeMap({ ...staticData, game }, '/build/');
+    const other = makeMap({ ...staticData, tiles: [2], game }, '/build/');
+
+    expect(typeof own._onRender).toBe('function');
+    expect(other._onRender).toBe(null);
+  });
+
+  it('вывеска и декаль достаются только слою с совпадающими (level, layer)', () => {
+    const game = {
+      signs: [{ cell: [0, 0], level: 1, layer: 2, text: 'A', size: 10 }],
+      decals: [{ cell: [0, 0], level: 0, layer: 1, frame: 0, kind: 'rotate', rps: 1 }],
+    };
+    const ground = makeMap({ ...staticData, game }, '/build/');
+    const roof = makeMap({ ...staticData, level: 1, layer: 2, game }, '/build/');
+    const wall = makeMap({ ...staticData, level: 1, layer: 1, game }, '/build/');
+
+    expect(ground._mode._animationSpec.decals).toHaveLength(1);
+    expect(ground._mode._animationSpec.signs).toHaveLength(0);
+    expect(roof._mode._animationSpec.signs).toHaveLength(1);
+    expect(roof._mode._animationSpec.decals).toHaveLength(0);
+    expect(wall._mode._animationSpec.signs).toHaveLength(0);
+    expect(wall._mode._animationSpec.decals).toHaveLength(0);
+  });
+
+  it('анимированные тайлы исключаются из запекания слоя', async () => {
+    let resolveLoad;
+
+    load.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveLoad = resolve;
+        }),
+    );
+    bakeTileLayer.mockClear();
+
+    const game = { animatedTiles: { 7: { kind: 'frames', frames: [0], fps: 4 } } };
+
+    makeMap({ ...staticData, tiles: [1, 7], game }, '/build/');
+    resolveLoad(Texture.EMPTY);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bakeTileLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ exclude: [7] }),
+    );
+  });
+
+  it('дыра плиты висит на парте, то есть и над содержимым animated', () => {
+    const view = createLevelView({ ...seeThrough, mode: 'hole' });
+
+    view.set(0, 15, 5, 0);
+
+    const bridge = new Map(
+      {
+        ...staticData,
+        level: 1,
+        map: [[0, 5]],
+        tiles: [5],
+        floor: [5],
+        step: 10,
+      },
+      {},
+      { renderer, assetsBase: '/build/', levelView: view },
+    );
+    const stage = new Container();
+
+    stage.addChild(bridge);
+    bridge._mode.mapSprite = new Sprite();
+    drawFrames(bridge, 50);
+
+    expect(bridge.filters.length).toBe(1);
+    expect(bridge._mode._animated.parent.parent).toBe(bridge);
+    expect(bridge._mode._layerRoot.filters ?? []).toEqual([]);
   });
 });

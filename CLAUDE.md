@@ -59,6 +59,7 @@ npm run core:build:node   # Node.js (tests) → core/pkg-node/
 npm run core:test         # cargo test --workspace
 npm run dev                # standalone match in a browser tab (no master, no OAuth)
 npm run build              # full plugin build → dist/ (client+host bundles, assets, manifest.json)
+npm run art:placeholders   # regenerate downtown placeholder art → assets/img/
 npx eslint .               # lint
 npm test                   # Vitest, single run
 npm run test:watch

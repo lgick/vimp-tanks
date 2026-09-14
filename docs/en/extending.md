@@ -30,6 +30,12 @@ files serve as templates), and every change ends with a green `npx eslint
    [New map image](#new-map-image); `npm run build:manifest` fails if a
    name has no file.
 
+`downtown.js` is the reference for the optional `game` fields — surfaces,
+props, night lighting, animated tiles, signs and decals — all in one map. Its
+grids are built by constructor functions (`grid`, `rect`, `hline`/`vline`) the
+way `overpass.js` builds its own, and its tile ids are named in
+`src/data/maps/city/tiles.js` (an id is the index in `spriteSheet.frames`).
+
 ### Upper levels (2.5D)
 
 An optional `levels` field adds an overpass over the same grid (`ramps`
@@ -179,6 +185,65 @@ otherwise desync prediction silently. The contract checker (`E4`) and the
 Rust validator share one corpus of cases
 (`vimp-engine/contract/fixtures/layered/`), so the two cannot drift apart.
 
+### Surfaces
+
+1. Declare the type in `coreParams.surfaces.types` (`src/config/game.js`): a
+   plain type sets only multipliers and additive terms, a conveyor sets
+   `belt`, a boost plate sets `boostDv` together with `boostMaxSpeed` and
+   `minEntrySpeed` ([configuration.md](configuration.md#core-parameters)).
+   The name is free.
+2. Mark the tiles on the map: `game.surfaces['<level>'][<tile id>]` is the type
+   name, or `{ type, dir }` for a conveyor and a boost
+   ([configuration.md](configuration.md#surfaces-gamesurfaces)). A surface
+   tile may be neither a wall nor a ramp tile of its level — such a map is
+   refused on load.
+3. Run `npm run core:test` and `npm run core:build`; for a new map also
+   `npm run build` and `npm run sim:scenarios`.
+
+**A boost in front of a ramp.** The plate adds speed, and the jump's
+horizontal reach grows with the take-off speed (`speed × 2·vz/g`, see above):
+lengthen the landing pad or keep the plate away from the ramp's run.
+
+### Night and lamps
+
+1. Set `game.lighting.night: true` and pick `ambient` — dark enough for
+   atmosphere, bright enough (≈ 0.35–0.45) for enemies to stay readable
+   ([configuration.md](configuration.md#night-lighting-gamelighting)).
+2. Place lamps by grid cell: `lamps: [{ cell: [col, row], level, radius,
+   color, intensity, head, flicker }]`. The cell must be inside the grid and
+   the level must exist. A lamp lights only its own level: a level-0 lamp
+   under the bridge does not light the slab, and a bridge lamp does not
+   spill off the slab.
+3. Keep every render layer of every level below base `zIndex` 40: the light
+   map of a level lies at 40 and its emissive layer at 45.
+4. Run `npm test` (the night-map rules live in `tests/config/game.test.js`)
+   and look at the map with `render.js → lighting.enabled = false` as well —
+   everything must stay readable without the night.
+
+### Animated tiles, neon signs and decals
+
+1. **An animated tile.** Draw its frames into the map's tile sheet and add
+   `game.animatedTiles[<tile id>] = { kind: 'frames', frames: [...], fps }`
+   ([configuration.md](configuration.md#animated-elements-gameanimatedtiles-gamesigns-gamedecals)).
+   The tile is left out of the bake and animated on every layer that draws it.
+2. **A conveyor in sync with its belt.** Give the conveyor tile `speed`
+   instead of `fps`, equal to `coreParams.surfaces.types.<type>.belt`: the
+   client derives `fps = speed · frames / (step · scale)`, so each frame
+   shifts the chevrons by `1/frames` of a tile exactly as fast as the belt
+   carries a tank. Draw the frames already pointing along the belt — one
+   tile with its own frames per direction (`CONVEYOR_E`, `CONVEYOR_W`); the
+   sprite is never rotated, and the direction comes from the surface's `dir`.
+3. **A neon sign.** Add `game.signs[]` with `cell`, `level`, `layer` (an
+   existing render layer of that level — it owns the sign), `text`, `size`,
+   `color`, optional `angle`, `flicker` and `light`. At night it glows over
+   the darkness and lights its surroundings; by day it is drawn in the layer.
+4. **A decal (a rooftop fan).** Add `game.decals[]` with `cell`, `level`,
+   `layer`, `frame` and `kind: 'rotate'` + `rps` (or `kind: 'frames'` +
+   `frames` + `fps`). Put fans on roof slabs of a level ≥ 1, not on top of a
+   volume extrusion.
+5. Run `npm test` (the rules live in `tests/config/game.test.js`) and look
+   at the map with `render.js → animations.enabled = false` too.
+
 ## New map image
 
 Images are part of this package, not of the engine: `Map`
@@ -198,6 +263,35 @@ resolve to `${assetsBase}sounds/`.
 5. If the image is required by a map, add it to the `REQUIRED` list in
    `scripts/check-pack.js` so a broken publish fails instead of the
    player's match.
+
+**Placeholder art.** `npm run art:placeholders`
+(`scripts/generate-placeholder-art.js`, no dependencies, deterministic) draws
+the `downtown` art into `assets/img/`: `city.png` — the tile sheet, a 16 × 8
+grid of 32 px cells — and the prop sprites `prop_*.png`. Final art replaces
+these files without code changes as long as it keeps the `city.png` layout
+(frame `id` sits in cell `(id % 16, id / 16)`, see
+`src/data/maps/city/tiles.js`) and the `prop_*.png` names. Do not rerun the
+generator after that: it overwrites the files.
+
+## New prop
+
+A prop is a dynamic map body that breaks
+([gameplay.md](gameplay.md#destructible-objects)).
+
+1. Pick a type from `coreParams.props` (`fence`, `crate`, `barrel`) or add
+   one there — HP, the damaged stage, damage multipliers, ramming, and for an
+   exploding type `blast` and `chainDelay`
+   ([configuration.md](configuration.md#core-parameters)).
+2. In the map: `physicsDynamic[i].img` is the intact image; add
+   `game: { prop: '<type>' }` and, optionally, `game.imgDamaged` and
+   `game.imgDestroyed`. Without `imgDamaged` a damaged prop keeps `img`;
+   without `imgDestroyed` a destroyed one is drawn as a procedural scorch.
+3. Put the images into `assets/img/` (see [New map image](#new-map-image)):
+   `npm run build:manifest` checks `imgDamaged`/`imgDestroyed` too — the
+   engine's `E2` rule does not see the `game` field.
+4. Checks: `npm run build`, `npx vimp-contract`, `npm run sim:scenarios`, and
+   by hand in `npm run dev`: the prop breaks, a barrel explodes, and a new
+   round restores everything.
 
 ## New weapon
 

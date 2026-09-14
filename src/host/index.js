@@ -18,9 +18,9 @@ import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 // HostPlugin танков (Worker-safe): вся игровая половина хоста одним объектом.
 // default export host-entry игры (vite.config.js --mode host,
 // Этап 6.1); host.worker.js грузит его динамически по entries.host
-// GameManifest (Этап 6.4). Танки не используют 'custom'-события ядра —
-// onCoreEvent не задан, движок роутит стандартный словарь
-// (panelSet/panelActive/death/shake) сам.
+// GameManifest (Этап 6.4). Стандартный словарь событий ядра
+// (panelSet/panelActive/death/shake) движок роутит сам; из 'custom'-событий
+// танки разбирают только mapDerivedError (см. onCoreEvent).
 export default {
   id: 'tanks',
   engineApi: ENGINE_API_VERSION,
@@ -28,7 +28,7 @@ export default {
   // без слоёных карт движка (`levels`/`ramps` в MAP_DATA, маски уровней в
   // физике) карта overpass соберётся без второго уровня и без единой
   // ошибки — поэтому возможность объявлена жёстким требованием
-  requires: ['map.layers', 'map.levelsN'],
+  requires: ['map.layers', 'map.levelsN', 'map.gameData', 'map.bodyState'],
 
   // wasmUrl — из GameManifest.entries.wasm (мастер, Этап 6.2); init() грузит
   // по явному url, а не через import.meta.url-резолюцию глюe-модуля
@@ -44,6 +44,17 @@ export default {
     await init({ module_or_path: wasmUrl });
 
     return new GameCore(coreConfigJson);
+  },
+
+  // 'custom'-событие ядра: движок передаёт сюда только его data.
+  // mapDerivedError — поле карты `game` не разобралось при пересборке после
+  // восстановления из дампа (core/src/tanks.rs, rebuild_map_derived): ядро
+  // шагает дальше без производных данных, а причина уходит в консоль.
+  // Прочие custom-события игнорируются
+  onCoreEvent(data) {
+    if (data?.type === 'mapDerivedError') {
+      console.warn(`[tanks] map game data: ${data.message}`);
+    }
   },
 
   gameConfig,

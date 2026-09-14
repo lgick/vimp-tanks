@@ -78,3 +78,50 @@ describe('ClientPlugin.hooks.services', () => {
     expect(services.levelView.y).toBe(640);
   });
 });
+
+describe('ClientPlugin: сервис surfaces', () => {
+  it('serviceNames содержит surfaces', () => {
+    expect(clientPlugin.serviceNames).toContain('surfaces');
+  });
+
+  const makeSurfaceCore = () => ({
+    'map_generation': vi.fn(() => 1),
+    'surface_types': vi.fn(() => '["boost","sand"]'),
+    'surface_at': vi.fn((x) => (x < 0 ? -1 : Math.floor(x))),
+    'surface_dir_at': vi.fn((x) => (x < 0 ? -1 : 3)),
+  });
+
+  it('kindAt переводит индекс ядра в имя, -1 — в null', () => {
+    const core = makeSurfaceCore();
+    const { surfaces } = clientPlugin.hooks.services(core);
+
+    expect(surfaces.kindAt(0, 0, 0)).toBe('boost');
+    expect(surfaces.kindAt(1, 5, 1)).toBe('sand');
+    expect(surfaces.kindAt(-1, 0, 0)).toBe(null);
+    expect(core.surface_at).toHaveBeenCalledWith(1, 5, 1);
+  });
+
+  it('имена типов кешируются до смены карты', () => {
+    const core = makeSurfaceCore();
+    const { surfaces } = clientPlugin.hooks.services(core);
+
+    surfaces.kindAt(0, 0, 0);
+    surfaces.kindAt(1, 0, 0);
+    expect(core.surface_types).toHaveBeenCalledTimes(1);
+
+    core.map_generation.mockReturnValue(2);
+    surfaces.kindAt(0, 0, 0);
+    expect(core.surface_types).toHaveBeenCalledTimes(2);
+  });
+
+  it('dirAt переводит индекс стрелки в единичный вектор', () => {
+    const core = makeSurfaceCore();
+    const { surfaces } = clientPlugin.hooks.services(core);
+
+    expect(surfaces.dirAt(0, 0, 0)).toEqual([1, 0]);
+    expect(surfaces.dirAt(-1, 0, 0)).toBe(null);
+
+    core.surface_dir_at.mockReturnValue(0);
+    expect(surfaces.dirAt(0, 0, 0)).toEqual([0, -1]);
+  });
+});

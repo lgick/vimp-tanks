@@ -4,10 +4,14 @@ import ImpactEffect from './ImpactEffect.js';
 import { levelZ } from '../../../levelZ.js';
 import { cameraCenter } from '../../../camera.js';
 import { applyParallax } from '../../../parallax.js';
-import { parallax as parallaxConfig } from '../../../../config/render.js';
+import {
+  parallax as parallaxConfig,
+  lighting as lightingConfig,
+} from '../../../../config/render.js';
 import {
   W1_START_X,
   W1_START_Y,
+  W1_START_LEVEL,
   W1_END_X,
   W1_END_Y,
   W1_BODY_X,
@@ -36,9 +40,9 @@ export default class ShotEffectController extends Container {
     // 2.5D: трассер рисуется целиком на уровне КОНЦА луча — ломать линию
     // на кромке плиты отложено (plan/README.md), а осколки обязаны лежать
     // там же, где луч закончился, иначе они провалятся под мост. Уровень
-    // начала (`W1_START_LEVEL`) кадром приходит, но до разлома линии он
-    // здесь не нужен — читать его нечем
+    // начала (`W1_START_LEVEL`) нужен только вспышке выстрела на стволе
     this.endLevel = data[W1_END_LEVEL] || 0;
+    this.startLevel = data[W1_START_LEVEL] || 0;
     this.zIndex = levelZ(SHOT_BASE_Z, this.endLevel);
 
     // якорь попадания в динамику карты — одиннадцатый элемент строки, только
@@ -66,6 +70,8 @@ export default class ShotEffectController extends Container {
       dependencies.localPlayer?.is(data[W1_SHOOTER_ID]) === true;
     this._mapDynamics = dependencies.mapDynamics || null;
     this._levelView = dependencies.levelView || null;
+    // ночь: вспышка выстрела на стволе (no-op днём)
+    this._lighting = dependencies.lighting || null;
 
     // трассер и осколки уступают видимость игроку под плитой ровно так же,
     // как всё остальное на верхнем уровне (единая формула — в levelView).
@@ -128,6 +134,14 @@ export default class ShotEffectController extends Container {
     if (this._isDestroyed) {
       return;
     }
+
+    this._lighting?.flash({
+      ...lightingConfig.flash.shot,
+      level: this.startLevel,
+      x: this.startPositionX,
+      y: this.startPositionY,
+      z: this.startLevel,
+    });
 
     this.tracer = new TracerEffect(
       this.startPositionX,

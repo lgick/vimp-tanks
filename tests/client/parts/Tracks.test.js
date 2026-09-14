@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { Container } from 'pixi.js';
+import { Container, Texture } from 'pixi.js';
 import Tracks from '../../../src/client/parts/tracks/Tracks.js';
 import { createLevelView } from '../../../src/client/levelView.js';
-import { seeThrough, parallax } from '../../../src/config/render.js';
+import {
+  seeThrough,
+  parallax,
+  surfaceFx,
+} from '../../../src/config/render.js';
 
 // Следы были единственной сущностью 2.5D, не читавшей levelView: на плите
 // над игроком они оставались непрозрачными, хотя дым, ящики, танки и бомбы
@@ -107,6 +111,17 @@ describe('Tracks: видимость и высота уровня', () => {
     tracks.destroy();
   });
 
+  it('с сервисом surfaces колбэк onRender по-прежнему регистрируется', () => {
+    const tracks = makeTracks({
+      levelView: createLevelView(seeThrough),
+      surfaces: { kindAt: () => 'oil', dirAt: () => null },
+    });
+
+    expect(typeof tracks._onRender).toBe('function');
+
+    tracks.destroy();
+  });
+
   it('без единой отметки колбэк не считает ничего', () => {
     const view = createLevelView(seeThrough);
     const alphaFor = vi.spyOn(view, 'alphaFor');
@@ -115,6 +130,84 @@ describe('Tracks: видимость и высота уровня', () => {
     tracks.onRender();
 
     expect(alphaFor).not.toHaveBeenCalled();
+
+    tracks.destroy();
+  });
+});
+
+describe('Tracks: поверхности', () => {
+  const assets = { trackMarkTexture: Texture.WHITE };
+
+  const makeOn = kind => {
+    const surfaces = { kindAt: vi.fn(() => kind), dirAt: () => null };
+    const tracks = new Tracks(row(), assets, { renderer, surfaces });
+
+    new Container().addChild(tracks);
+
+    return { tracks, surfaces };
+  };
+
+  const marks = tracks => tracks._markLayer(0).children;
+
+  it('без сервиса surfaces следы прежние', () => {
+    const tracks = new Tracks(row(), assets, { renderer });
+
+    tracks.createTrackMarksAtPreviousPosition();
+
+    expect(marks(tracks).length).toBe(2);
+    expect(marks(tracks)[0].alpha).toBeCloseTo(0.4, 5);
+    expect(marks(tracks)[0].tint).toBe(0xffffff);
+
+    tracks.destroy();
+  });
+
+  it('на нейтральной клетке следы прежние', () => {
+    const { tracks, surfaces } = makeOn(null);
+
+    tracks.createTrackMarksAtPreviousPosition();
+
+    expect(surfaces.kindAt).toHaveBeenCalledWith(100, 100, 0);
+    expect(marks(tracks)[0].alpha).toBeCloseTo(0.4, 5);
+
+    tracks.destroy();
+  });
+
+  it('вода следов не оставляет', () => {
+    const { tracks } = makeOn('water');
+
+    tracks.createTrackMarksAtPreviousPosition();
+
+    expect(marks(tracks).length).toBe(0);
+
+    tracks.destroy();
+  });
+
+  it('масло: тёмный след плотнее и живёт дольше', () => {
+    const { tracks } = makeOn('oil');
+    const plain = new Tracks(row(), assets, { renderer });
+
+    tracks.createTrackMarksAtPreviousPosition();
+    plain.createTrackMarksAtPreviousPosition();
+
+    const oil = marks(tracks)[0];
+
+    expect(oil.tint).toBe(surfaceFx.tracks.oil.tint);
+    expect(oil.alpha).toBeGreaterThan(marks(plain)[0].alpha);
+    // минимальная жизнь масляного следа длиннее максимальной обычного
+    expect(oil._fadeDuration).toBeGreaterThanOrEqual(
+      1800 * surfaceFx.tracks.oil.lifetime,
+    );
+
+    tracks.destroy();
+    plain.destroy();
+  });
+
+  it('грязь темнит след', () => {
+    const { tracks } = makeOn('mud');
+
+    tracks.createTrackMarksAtPreviousPosition();
+
+    expect(marks(tracks)[0].tint).toBe(surfaceFx.tracks.mud.tint);
 
     tracks.destroy();
   });

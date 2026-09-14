@@ -8,6 +8,16 @@ import parts from './parts/index.js';
 import bakers from './bakers/index.js';
 import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 import { createLevelView } from './levelView.js';
+import { createLighting } from './lighting/createLighting.js';
+
+// стрелка клетки по индексу `surface_dir_at`: север/юг/запад/восток, как у
+// рамп (north = −y, east = +x)
+const SURFACE_DIRS = [
+  [0, -1],
+  [0, 1],
+  [-1, 0],
+  [1, 0],
+];
 
 // ClientPlugin танков: рендеры сущностей (parts), процедурные текстуры
 // (bakers) и игровые хуки клиентского ядра (ClientCore). default export
@@ -21,7 +31,7 @@ export default {
 
   // см. комментарий в src/host/index.js: обе половины плагина обязаны
   // объявлять одинаковый список возможностей
-  requires: ['map.layers', 'map.levelsN'],
+  requires: ['map.layers', 'map.levelsN', 'map.gameData', 'map.bodyState'],
 
   // wasmUrl — из GameManifest.entries.wasm (общий с host-плагином ассет)
   async createClientCore(clientConfigJson, { wasmUrl }) {
@@ -47,7 +57,7 @@ export default {
   // контрактный чекер (правило C4) не может отличить игровой сервис от
   // опечатки в componentDependencies — хук требует живого ядра, а имена
   // из его `return` статически не видны
-  serviceNames: ['levelView', 'mapDynamics', 'rampRuns'],
+  serviceNames: ['levelView', 'mapDynamics', 'rampRuns', 'surfaces', 'lighting'],
 
   hooks: {
     // сервисы игры для её же parts (движок их не описывает — только раздаёт
@@ -64,12 +74,18 @@ export default {
       // VirtualClient, и общее на модуль состояние «где игрок» перезаписывал
       // бы тот из них, кто обновился последним
       const levelView = createLevelView();
+      // ночь и освещение: камеру и прозрачность над игроком берёт у levelView
+      const lighting = createLighting(undefined, { levelView });
       // разбор прогонов рамп: общий на все слои карты, живёт до её смены
       let runsCache = [];
       let runsGeneration = null;
+      // имена типов поверхностей по индексу `surface_at`: живут до смены карты
+      let surfaceNames = [];
+      let surfaceGeneration = null;
 
       return {
         levelView,
+        lighting,
         mapDynamics: {
           // локальная точка тела → мировая в рендерном фрейме;
           // null — ключ неизвестен (карта сменилась, ящика больше нет)
@@ -98,6 +114,33 @@ export default {
             }
 
             return runsCache.filter(run => run.from === level);
+          },
+        },
+        // поверхности клеток из ядра: та же таблица, по которой физика
+        // тормозит и разворачивает танк, — пыль, брызги и следы не могут
+        // разойтись с тем, что чувствует гусеница
+        surfaces: {
+          // имя типа под мировой точкой уровня; null — нейтрально или карты нет
+          kindAt(x, y, level) {
+            const index = core.surface_at(x, y, level);
+
+            if (index < 0) {
+              return null;
+            }
+
+            const generation = core.map_generation();
+
+            if (generation !== surfaceGeneration) {
+              surfaceGeneration = generation;
+              surfaceNames = JSON.parse(core.surface_types());
+            }
+
+            return surfaceNames[index] ?? null;
+          },
+
+          // единичный вектор стрелки клетки; null — у клетки нет направления
+          dirAt(x, y, level) {
+            return SURFACE_DIRS[core.surface_dir_at(x, y, level)] ?? null;
           },
         },
       };

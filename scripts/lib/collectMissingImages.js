@@ -8,7 +8,9 @@
 // Чистые функции без fs: предикат существования файла передаётся снаружи.
 
 // имена картинок, которые карта просит у клиента: spriteSheet.img (тайл-лист
-// статического слоя) и img каждого динамического тела
+// статического слоя), img каждого динамического тела и картинки состояний
+// пропа — game.imgDamaged/game.imgDestroyed (правило E2 движка поле `game`
+// не видит, поэтому проверка остаётся здесь)
 export function collectRequiredImages(maps) {
   const required = new Set();
 
@@ -18,8 +20,14 @@ export function collectRequiredImages(maps) {
     }
 
     for (const body of map.physicsDynamic || []) {
-      if (body.img) {
-        required.add(body.img);
+      for (const img of [
+        body.img,
+        body.game?.imgDamaged,
+        body.game?.imgDestroyed,
+      ]) {
+        if (img) {
+          required.add(img);
+        }
       }
     }
   }

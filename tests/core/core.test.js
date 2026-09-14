@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
+import downtown from '../../src/data/maps/downtown.js';
 import poolMini from '../../src/data/maps/pool_mini.js';
 import {
   coreAvailable,
@@ -50,6 +51,40 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
 
     it('map_info без карты — null', () => {
       expect(core.map_info()).toBe('null');
+    });
+
+    it('downtown загружается в GameCore и ClientCore, map_info отдаёт 16 респаунов', () => {
+      const json = JSON.stringify(downtown);
+
+      expect(() => core.load_map(json)).not.toThrow();
+
+      const info = JSON.parse(core.map_info());
+      const respawns = Object.values(info.respawns).flat();
+
+      expect(respawns).toHaveLength(16);
+      expect(() => makeClientCore().set_map(json)).not.toThrow();
+    });
+  });
+
+  describe('поверхности (game.surfaces)', () => {
+    const withSurfaces = surfaces =>
+      JSON.stringify({ ...poolMini, game: { surfaces } });
+
+    it('карта с game.surfaces загружается', () => {
+      expect(() =>
+        core.load_map(
+          withSurfaces({ 0: { 99: 'sand', 98: { type: 'boost', dir: 'east' } } }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('неизвестный тип и dir у sand отклоняются с ошибкой', () => {
+      expect(() => core.load_map(withSurfaces({ 0: { 99: 'lava' } }))).toThrow(
+        /lava/,
+      );
+      expect(() =>
+        core.load_map(withSurfaces({ 0: { 99: { type: 'sand', dir: 'east' } } })),
+      ).toThrow(/dir/);
     });
   });
 
