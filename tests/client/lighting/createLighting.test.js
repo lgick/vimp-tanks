@@ -8,7 +8,7 @@ import {
   LIGHT_OVERLAY_BASE_Z,
   EMISSIVE_BASE_Z,
 } from '../../../src/client/lighting/lightMath.js';
-import { lighting } from '../../../src/config/render.js';
+import { lighting, parallax } from '../../../src/config/render.js';
 
 // Сервис освещения поверх настоящих контейнеров Pixi и мок-рендерера:
 // проверяется, ЧТО лежит на сцене и что уходит в раскладку источников, а не
@@ -178,6 +178,34 @@ describe('lighting: раскладка раз на трансформ сцены
     stage.position.x += 5;
     service.render();
     expect(layout.mock.calls.length).toBe(calls + 1);
+  });
+});
+
+describe('lighting: источник в нескольких уровнях', () => {
+  it('источник с levels [0, 1] попадает в раскладку обоих уровней', () => {
+    const { service } = setup();
+    const layout = spyLayout();
+
+    service.registerTextures(textures());
+    makeParts(service, 'k', nightLighting([]), { 1: [[0, 0]] });
+    service.addLight({ kind: 'radial', radius: 40, z: 0.6, level: 1, levels: [0, 1] });
+    frame(service);
+
+    expect(lastItems(layout, 0)).toHaveLength(1);
+    expect(lastItems(layout, 1)).toHaveLength(1);
+  });
+
+  it('уровень без карты освещённости пропускается', () => {
+    const { service } = setup();
+    const layout = spyLayout();
+
+    service.registerTextures(textures());
+    makeParts(service, 'k', nightLighting([]));
+    service.addLight({ kind: 'radial', radius: 40, z: 0.6, level: 1, levels: [0, 1] });
+    frame(service);
+
+    expect(lastItems(layout, 0)).toHaveLength(1);
+    expect(lastItems(layout, 1)).toBeNull();
   });
 });
 
@@ -543,5 +571,93 @@ describe('lighting: эмиссив', () => {
 
     expect(sprite.parent).toBe(emissiveOf(stage, 1));
     expect(emissiveOf(stage, 0).children).toHaveLength(0);
+  });
+});
+
+// Крыши (`game.roofs`) — отдельная карта уровня со своей дырой, вершины
+// объёмов — полумрак поверх источников.
+describe('lighting: крыши и вершины объёмов', () => {
+  // карты освещённости, прошедшие раскладку в последнем кадре
+  const levelMaps = spy => [...new Set(spy.mock.contexts)];
+
+  it('вклад с { roof: true } — своя карта, обычная маска без клеток крыш', () => {
+    const { service, stage } = setup();
+    const setMask = vi.spyOn(LevelLightMap.prototype, 'setMask');
+    const slab = {};
+    const roof = {};
+
+    makeParts(service, 'k', nightLighting([]));
+    service.setLevelMask(1, [[0, 0], [1, 0]], slab);
+    service.setLevelMask(1, [[1, 0]], roof, { roof: true });
+    frame(service);
+
+    expect(overlayOf(stage, 1)).toBeDefined();
+    expect(stage.children.find(child => child.label === 'lighting-roof-1')).toBeDefined();
+
+    const runsOf = isRoof => {
+      const index = setMask.mock.contexts.findIndex(map => map.roof === isRoof);
+
+      return setMask.mock.calls[index][0];
+    };
+
+    expect(runsOf(false)).toEqual([{ col: 0, row: 0, length: 1 }]);
+    expect(runsOf(true)).toEqual([{ col: 1, row: 0, length: 1 }]);
+  });
+
+  it('дыра карты крыш открывается, только когда крыша закрывает танк', () => {
+    const { service, levelView } = setup();
+    const layout = spyLayout();
+    const k = parallax.shear;
+
+    service.registerTextures(textures());
+    makeParts(service, 'k', nightLighting([]));
+    service.setLevelMask(1, [[5, 5]], {});
+    service.setLevelMask(1, [[1, 0]], {}, { roof: true });
+
+    // игрок на земле далеко от крыши: обычная карта открывает дыру, крыш — нет
+    levelView.set(0, -300, -300, 0);
+
+    for (let i = 0; i < 200; i += 1) {
+      frame(service);
+    }
+
+    const maps = levelMaps(layout);
+    const roofMap = maps.find(map => map.roof);
+    const slabMap = maps.find(map => !map.roof && map.level === 1);
+
+    expect(roofMap.hole.attached).toBe(false);
+    expect(slabMap.hole.attached).toBe(true);
+
+    // камера в (0, 0): центр клетки (48, 16) нарисован в w · (1 + k)
+    levelView.set(0, 48 * (1 + k), 16 * (1 + k), 0);
+
+    for (let i = 0; i < 200; i += 1) {
+      frame(service);
+    }
+
+    expect(roofMap.hole.attached).toBe(true);
+  });
+
+  it('setVolumeTops рисует вершины, releaseMap снимает их вместе с владельцем', () => {
+    const { service } = setup();
+    const layout = spyLayout();
+    const walls = {};
+
+    makeParts(service, 'k', nightLighting([]));
+    service.acquireMap('k', nightLighting([]), STEP, 1);
+    service.setVolumeTops(0, [[0, 0], [1, 0]], 1, walls);
+    frame(service);
+
+    const ground = levelMaps(layout).find(map => map.level === 0);
+
+    expect(ground.topGroups).toHaveLength(1);
+    expect(ground.topGroups[0].volume).toBe(1);
+    expect(ground.tops.children).toHaveLength(1);
+
+    service.releaseMap('k', walls);
+    frame(service);
+
+    expect(ground.topGroups).toHaveLength(0);
+    expect(ground.tops.children).toHaveLength(0);
   });
 });

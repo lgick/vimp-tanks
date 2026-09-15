@@ -45,3 +45,71 @@ export function tileAt(grid, worldX, worldY, tiles) {
 
   return tile !== undefined && tiles.has(tile);
 }
+
+// Закрывает ли набор клеток, нарисованный на высотах `ks`, нарисованную
+// точку `point` с запасом `margin` (мировые единицы). Срез на высоте k
+// рисует мировую точку w в `w + (w - cam) * k`, поэтому исходная точка
+// считается обратной формулой `w = (p + cam * k) / (1 + k)`. Проверяются
+// центр и при `margin > 0` ещё 4 точки по кругу: крыша начинает уступать
+// до того, как край корпуса въедет под неё. `test(worldX, worldY)` —
+// «есть ли в мировой точке клетка набора»
+function covers(test, point, camera, ks, margin) {
+  if (!camera || !point) {
+    return false;
+  }
+
+  const offsets = margin > 0
+    ? [[0, 0], [margin, 0], [-margin, 0], [0, margin], [0, -margin]]
+    : [[0, 0]];
+
+  for (const k of ks) {
+    const scale = 1 + k;
+
+    for (const [dx, dy] of offsets) {
+      if (
+        test(
+          (point.x + dx + camera.x * k) / scale,
+          (point.y + dy + camera.y * k) / scale,
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// вариант по гриду слоя и набору его тайлов (см. `tileAt`)
+export function coversPoint(grid, tileSet, point, camera, ks, margin) {
+  if (!grid?.map) {
+    return false;
+  }
+
+  return covers(
+    (x, y) => tileAt(grid, x, y, tileSet),
+    point,
+    camera,
+    ks,
+    margin,
+  );
+}
+
+// вариант по набору клеток `Set('col,row')`: у сервиса освещения нет грида
+// слоя, только объединённые клетки масок
+export function cellsCoverPoint(cellSet, step, scale, point, camera, ks, margin) {
+  if (!cellSet || cellSet.size === 0) {
+    return false;
+  }
+
+  return covers(
+    (x, y) =>
+      cellSet.has(
+        `${cellOfPoint(x, scale.x, step)},${cellOfPoint(y, scale.y, step)}`,
+      ),
+    point,
+    camera,
+    ks,
+    margin,
+  );
+}

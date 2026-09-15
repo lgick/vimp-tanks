@@ -519,17 +519,56 @@ describe('Map: параллакс и объём слоя', () => {
       return map;
     };
 
-    it('слой с объёмом печётся ОДИН раз и даёт ровно slices срезов', async () => {
+    it('объём слоя: грани мешем и один верх', async () => {
       const map = await ready({ ...parallaxData, volume: 1 });
+      const slices = map._mode._slices;
 
-      expect(bakeTileLayer).toHaveBeenCalledTimes(1);
-      expect(map._mode._slices).toHaveLength(volume.slices);
-      // срезы делят текстуру с плоским слоем
-      for (const slice of map._mode._slices) {
-        expect(slice.target.texture.source).toBe(
-          map._mode.mapSprite.texture.source,
-        );
+      // картинка слоя плюс боковая текстура на каждый его тайл
+      expect(bakeTileLayer).toHaveBeenCalledTimes(2);
+      expect(map._mode._wallTextures).toHaveLength(1);
+
+      // одна клетка: 4 грани в одном меше и верхняя копия слоя
+      expect(slices).toHaveLength(2);
+      expect(slices[0].walls).toBe(true);
+      expect(slices[1].target).toBeInstanceOf(Sprite);
+      expect(slices[1].k).toBeCloseTo(2 * parallax.shear, 6);
+
+      // верх делит запечённую текстуру с плоским слоем, у граней она своя
+      // — полоса из копий картинки тайла
+      expect(slices[1].target.texture.source).toBe(
+        map._mode.mapSprite.texture.source,
+      );
+      expect(slices[0].target.texture.source).not.toBe(
+        map._mode.mapSprite.texture.source,
+      );
+    });
+
+    // путь отхода: прежняя стопка копий слоя
+    it('при volume.faces = false объём — slices копий слоя', async () => {
+      volume.faces = false;
+
+      try {
+        const map = await ready({ ...parallaxData, volume: 1 });
+
+        expect(map._mode._slices).toHaveLength(volume.slices);
+
+        for (const slice of map._mode._slices) {
+          expect(slice.target).toBeInstanceOf(Sprite);
+        }
+      } finally {
+        volume.faces = true;
       }
+    });
+
+    it('кадр сдвигает вершины граней и упорядочивает их к камере', async () => {
+      const map = await ready({ ...parallaxData, volume: 1 });
+      const [walls] = map._mode._slices;
+
+      makeStage(map);
+      map.onRender();
+
+      expect(walls.facing.every(side => side === 0 || side === 1)).toBe(true);
+      expect(walls.target.vertices[0]).not.toBeCloseTo(walls.base[0], 6);
     });
 
     // объём слоя перекрывает динамику СВОЕГО уровня: экструзия уходит от
@@ -664,7 +703,9 @@ describe('Map: параллакс и объём слоя', () => {
       map.onRender();
 
       const occluder = map._mode._occluder;
-      const source = map._mode._slices[0].target.texture.source;
+      // верхняя копия слоя: запечённую текстуру она делит со слоем
+      const top = map._mode._slices[map._mode._slices.length - 1];
+      const source = top.target.texture.source;
       const destroy = vi.spyOn(source, 'destroy');
 
       map.destroy();
@@ -674,6 +715,17 @@ describe('Map: параллакс и объём слоя', () => {
       // запечённую текстуру перекрыватель делит со слоем: отдаёт её один
       // владелец — спрайт слоя, и ровно один раз
       expect(destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it('destroy освобождает боковые текстуры граней', async () => {
+      const map = await ready({ ...parallaxData, volume: 1 });
+      const [wallTexture] = map._mode._wallTextures;
+      const destroy = vi.spyOn(wallTexture, 'destroy');
+
+      map.destroy();
+
+      expect(destroy).toHaveBeenCalledTimes(1);
+      expect(destroy).toHaveBeenCalledWith(true);
     });
 
     it('срезы стоят по возрастанию высоты и сдвинуты сильнее слоя', async () => {
@@ -923,6 +975,88 @@ describe('Map: параллакс и объём слоя', () => {
       }
     });
   });
+  // Крыша (`game.roofs`) уступает видимость, только когда закрывает сам
+  // танк: иначе сквозь неё проступала верхушка стены без неона своего уровня
+  describe('прозрачность крыши', () => {
+    const roofData = {
+      ...parallaxData,
+      game: { roofs: { 1: [5] } },
+    };
+
+    // клетка крыши (1, 0): центр в мире — (7.5, 2.5) при шаге 10 и scale 0.5
+    const CELL = { x: 7.5, y: 2.5 };
+
+    const readyRoof = (view, data = roofData) => {
+      const map = make(data, view);
+
+      map._mode.mapSprite = {};
+      makeStage(map);
+
+      return map;
+    };
+
+    it('слой из одних тайлов game.roofs — крыша, смешанный — нет', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const roof = make(roofData, createLevelView(seeThrough));
+      const mixed = make(
+        { ...roofData, map: [[6, 5]], tiles: [5, 6], floor: [5, 6] },
+        createLevelView(seeThrough),
+      );
+
+      expect(roof._mode._roof).toBe(true);
+      expect(mixed._mode._roof).toBe(false);
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it('игрок ниже, но рядом — крыша дыру не открывает', () => {
+      const view = createLevelView({ ...seeThrough, mode: 'hole' });
+
+      view.set(0, CELL.x, CELL.y, 0);
+
+      const roof = readyRoof(view);
+      const slab = readyRoof(view, { ...roofData, game: {} });
+
+      drawFrames(roof, 200);
+      drawFrames(slab, 200);
+
+      expect(roof._mode._hole.attached).toBe(false);
+      // обычная плита на том же месте открывает дыру, как раньше
+      expect(slab._mode._hole.attached).toBe(true);
+    });
+
+    it('крыша закрывает нарисованную точку игрока — дыра открывается', () => {
+      const view = createLevelView({ ...seeThrough, mode: 'hole' });
+      const k = parallax.shear;
+
+      // игрок на земле там, где нарисована клетка крыши
+      view.set(0, CELL.x + (CELL.x - CAM_X) * k, CELL.y + (CELL.y - CAM_Y) * k, 0);
+
+      const roof = readyRoof(view);
+
+      drawFrames(roof, 200);
+
+      expect(roof._mode._hole.attached).toBe(true);
+      expect(roof._mode._hole.strength).toBeGreaterThan(0.9);
+    });
+
+    it("режим 'layer': крыша гаснет только над танком", () => {
+      const k = parallax.shear;
+      const near = createLevelView({ ...seeThrough, mode: 'layer' });
+      const under = createLevelView({ ...seeThrough, mode: 'layer' });
+
+      near.set(0, CELL.x, CELL.y, 0);
+      under.set(0, CELL.x + (CELL.x - CAM_X) * k, CELL.y + (CELL.y - CAM_Y) * k, 0);
+
+      const nearRoof = readyRoof(near);
+      const underRoof = readyRoof(under);
+
+      drawFrames(nearRoof, 200);
+      drawFrames(underRoof, 200);
+
+      expect(nearRoof.alpha).toBeCloseTo(1);
+      expect(underRoof.alpha).toBeCloseTo(seeThrough.layerAlpha, 2);
+    });
+  });
 });
 
 // Ночь: каждая статическая часть берёт ключ карты освещения и (на уровне
@@ -966,6 +1100,7 @@ describe('MapLayer: освещение', () => {
         [0, 1],
       ],
       part._mode,
+      { roof: false },
     );
   });
 

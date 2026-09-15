@@ -5,7 +5,7 @@ import {
   parallax as parallaxConfig,
   volume as volumeConfig,
 } from '../../../config/render.js';
-import { tileAt } from './tileGrid.js';
+import { coversPoint, tileAt } from './tileGrid.js';
 
 // See-through статического слоя: плита моста и её перекрыватель уступают
 // видимость локальному игроку — в двух режимах (`layer` и `hole`) и для
@@ -28,6 +28,7 @@ import { tileAt } from './tileGrid.js';
 //   level, volume       уровень слоя и его высота в уровнях
 //   grid                грид тайлов (`tileGrid`)
 //   tileSet, floorSet   наборы тайлов слоя и тайлов пола
+//   roof                слой — крыша (`game.roofs`)
 
 // прозрачность плиты моста над локальным игроком: в GTA 2 игрок под
 // эстакадой продолжает видеть свою машину. Считается по НАШЕМУ гриду
@@ -67,11 +68,19 @@ export function updateSeeThrough(view, camera) {
 function updateLayerSeeThrough(view, cfg, rate, camera) {
   const { levelView, container } = view;
 
+  // Крыша уступает видимость, только когда закрывает сам танк: иначе
+  // дыра открывала её всякий раз, когда игрок ниже, и сквозь неё
+  // проступала верхушка стены без неона своего уровня
+  const roofHides = view.roof
+    ? levelView.level < view.level && roofHidesPlayer(view, cfg, camera)
+    : null;
+
   // путь отхода: гаснет весь слой целиком (прежнее поведение)
   if (levelView.mode === 'layer') {
-    const under =
-      levelView.level < view.level &&
-      tileAt(view.grid, levelView.x, levelView.y, view.floorSet);
+    const under = view.roof
+      ? roofHides
+      : levelView.level < view.level &&
+        tileAt(view.grid, levelView.x, levelView.y, view.floorSet);
     const target = under ? cfg.layerAlpha : 1;
 
     container.alpha += (target - container.alpha) * rate;
@@ -81,7 +90,7 @@ function updateLayerSeeThrough(view, cfg, rate, camera) {
 
   // режим 'hole': проверки пола нет — дыра ездит за игроком, и её край
   // сам показывает, где кончается плита
-  const above = levelView.level < view.level;
+  const above = view.roof ? roofHides : levelView.level < view.level;
 
   advanceHole(view.hole, above, rate);
   applyHole(container, view.hole, cfg, levelView, view.stage, camera);
@@ -112,38 +121,54 @@ function updateOccluderSeeThrough(view, cfg, rate, camera) {
   applyHole(occluder, view.occluderHole, cfg, levelView, view.stage, camera);
 }
 
+// нарисованная точка локального игрока: он смещён проекцией на свою высоту
+function playerPoint(view, camera) {
+  const player = view.levelView;
+
+  return offsetPoint(player.x, player.y, camera, player.z * parallaxConfig.shear);
+}
+
+// Накрывает ли крыша нарисованную точку игрока (с запасом `roofMargin`):
+// крыша плоская и рисуется на высоте своего уровня
+function roofHidesPlayer(view, cfg, camera) {
+  if (!camera) {
+    return false;
+  }
+
+  return coversPoint(
+    view.grid,
+    view.tileSet,
+    playerPoint(view, camera),
+    camera,
+    [view.level * parallaxConfig.shear],
+    cfg.roofMargin ?? 0,
+  );
+}
+
 // Накрывает ли объём этого слоя нарисованную точку игрока.
 //
 // Срез объёма на высоте k рисует тайл из мировой точки w в точке
-// `w + (w - cam) * k`. Значит по нарисованной точке игрока `p` исходная
-// клетка среза считается обратной формулой `w = (p + cam * k) / (1 + k)`:
-// если в ней есть тайл этого слоя, срез накрывает танк. Проверяются те же
-// k, что и рисуются, — ни одного лишнего среза.
+// `w + (w - cam) * k`; обратную проекцию считает `coversPoint`. Проверяются
+// те же k, что и рисуются, — ни одного лишнего среза.
 function volumeHidesPlayer(view, camera) {
   if (!camera || !view.grid.map) {
     return false;
   }
 
-  const player = view.levelView;
   const shear = parallaxConfig.shear;
-  const point = offsetPoint(player.x, player.y, camera, player.z * shear);
   const count = volumeConfig.slices;
+  const ks = [];
 
   for (let i = 1; i <= count; i += 1) {
-    const k = (view.level + (view.volume * i) / count) * shear;
-    const scale = 1 + k;
-
-    if (
-      tileAt(
-        view.grid,
-        (point.x + camera.x * k) / scale,
-        (point.y + camera.y * k) / scale,
-        view.tileSet,
-      )
-    ) {
-      return true;
-    }
+    ks.push((view.level + (view.volume * i) / count) * shear);
   }
 
-  return false;
+  return coversPoint(
+    view.grid,
+    view.tileSet,
+    playerPoint(view, camera),
+    camera,
+    ks,
+    0,
+  );
 }

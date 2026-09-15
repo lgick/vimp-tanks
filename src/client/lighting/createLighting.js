@@ -1,7 +1,11 @@
 import { Container, Sprite, Ticker } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
-import { baseScale, cellOfPoint } from '../parts/map/tileGrid.js';
+import {
+  baseScale,
+  cellOfPoint,
+  cellsCoverPoint,
+} from '../parts/map/tileGrid.js';
 import {
   advance as advanceHole,
   apply as applyHole,
@@ -10,6 +14,7 @@ import {
   lighting as lightingConfig,
   parallax as parallaxConfig,
 } from '../../config/render.js';
+import { offsetPoint } from '../parallax.js';
 import LevelLightMap from './LevelLightMap.js';
 import {
   EMISSIVE_BASE_Z,
@@ -60,6 +65,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   let map = null;
   // level -> Map(owner -> cells)
   const masks = new Map();
+  // то же для крыш (`game.roofs`): у них своя карта освещённости уровня
+  const roofMasks = new Map();
+  // level -> Map(owner -> { cells, volume }) — вершины объёмов
+  const tops = new Map();
   let masksDirty = false;
 
   // ключ раскладки: трансформ сцены + тик (см. render)
@@ -121,9 +130,14 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       lamps: [],
       headsReady: false,
       levels: new Map(),
+      // level -> LevelLightMap крыш уровня
+      roofLevels: new Map(),
       emissive: new Map(),
       // level -> Set('col,row') — для режима 'layer' дыры
       maskCells: new Map(),
+      // level -> Set('col,row') — клетки крыш: дыра их карты открывается,
+      // только когда крыша закрывает танк
+      roofCells: new Map(),
     };
 
     if (!night) {
@@ -174,7 +188,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       container.parent?.removeChild(container);
     }
 
-    for (const levelMap of map.levels.values()) {
+    for (const levelMap of allLevelMaps()) {
       levelMap.overlay.parent?.removeChild(levelMap.overlay);
     }
 
@@ -197,7 +211,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       container.destroy({ children: true });
     }
 
-    for (const levelMap of map.levels.values()) {
+    for (const levelMap of allLevelMaps()) {
       levelMap.destroy();
     }
 
@@ -208,61 +222,110 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   const clear = () => {
     releaseMapResources();
     masks.clear();
+    roofMasks.clear();
+    tops.clear();
     masksDirty = false;
     mapKey = null;
   };
 
   // --- маски этажей ---
 
+  // все карты освещённости карты: обычные и крыш
+  const allLevelMaps = () => [...map.levels.values(), ...map.roofLevels.values()];
+
+  // объединение вкладов уровня без повторов: `[cells, keys]`, где `keys` —
+  // Set('col,row'); клетки из `exclude` пропускаются
+  const unionOf = (byOwner, exclude = null) => {
+    const union = [];
+    const keys = new Set();
+
+    for (const cells of byOwner?.values() || []) {
+      for (const cell of cells) {
+        const key = `${cell[0]},${cell[1]}`;
+
+        if (!keys.has(key) && !exclude?.has(key)) {
+          keys.add(key);
+          union.push(cell);
+        }
+      }
+    }
+
+    return [union, keys];
+  };
+
+  // карта уровня в реестре `registry`: пустой маске — уходит, иначе
+  // создаётся при необходимости и получает маску
+  const syncLevelMap = (registry, level, cells, roof) => {
+    let levelMap = registry.get(level);
+
+    if (cells.length === 0) {
+      // вкладов уровня не осталось — оверлей уходит
+      if (levelMap) {
+        levelMap.destroy();
+        registry.delete(level);
+      }
+
+      return;
+    }
+
+    if (!levelMap) {
+      levelMap = new LevelLightMap({
+        level,
+        ambient: map.ambient,
+        resolution: cfg.resolution,
+        roof,
+      });
+      registry.set(level, levelMap);
+    }
+
+    levelMap.setMask(cellRuns(cells), map.step, map.scale);
+  };
+
+  // вершины объёмов уровня группами по высоте: `[{ volume, runs }]`
+  const topGroupsOf = level => {
+    const byVolume = new Map();
+
+    for (const { cells, volume } of tops.get(level)?.values() || []) {
+      if (!byVolume.has(volume)) {
+        byVolume.set(volume, []);
+      }
+
+      byVolume.get(volume).push(...cells);
+    }
+
+    return [...byVolume].map(([volume, cells]) => ({
+      volume,
+      runs: cellRuns(cells),
+    }));
+  };
+
   const syncLevels = () => {
+    const dirty = masksDirty;
+
     if (masksDirty) {
       masksDirty = false;
 
-      const levels = new Set([...masks.keys(), ...map.levels.keys()]);
+      const levels = new Set([
+        ...masks.keys(),
+        ...roofMasks.keys(),
+        ...map.levels.keys(),
+        ...map.roofLevels.keys(),
+      ]);
 
       for (const level of levels) {
         if (level < 1) {
           continue;
         }
 
-        const union = [];
-        const keys = new Set();
-
-        for (const cells of masks.get(level)?.values() || []) {
-          for (const cell of cells) {
-            const key = `${cell[0]},${cell[1]}`;
-
-            if (!keys.has(key)) {
-              keys.add(key);
-              union.push(cell);
-            }
-          }
-        }
+        // крыши — своя карта; обычная маска уровня их клеток не несёт,
+        // иначе дыра обычной карты снимала бы затемнение и с крыш
+        const [roofUnion, roofKeys] = unionOf(roofMasks.get(level));
+        const [union, keys] = unionOf(masks.get(level), roofKeys);
 
         map.maskCells.set(level, keys);
-
-        let levelMap = map.levels.get(level);
-
-        if (union.length === 0) {
-          // вкладов уровня не осталось — оверлей уходит
-          if (levelMap) {
-            levelMap.destroy();
-            map.levels.delete(level);
-          }
-
-          continue;
-        }
-
-        if (!levelMap) {
-          levelMap = new LevelLightMap({
-            level,
-            ambient: map.ambient,
-            resolution: cfg.resolution,
-          });
-          map.levels.set(level, levelMap);
-        }
-
-        levelMap.setMask(cellRuns(union), map.step, map.scale);
+        map.roofCells.set(level, roofKeys);
+        syncLevelMap(map.levels, level, union, false);
+        syncLevelMap(map.roofLevels, level, roofUnion, true);
       }
     }
 
@@ -277,10 +340,17 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         }),
       );
     }
+
+    // вершины объёмов — в обычную карту своего уровня
+    if (dirty) {
+      for (const levelMap of map.levels.values()) {
+        levelMap.setTops(topGroupsOf(levelMap.level), map.step, map.scale);
+      }
+    }
   };
 
   const attachToStage = () => {
-    for (const levelMap of map.levels.values()) {
+    for (const levelMap of allLevelMaps()) {
       if (levelMap.overlay.parent !== stage) {
         stage.addChild(levelMap.overlay);
       }
@@ -343,8 +413,14 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     const perLevel = new Map();
     let count = 0;
 
+    // источник с `levels` (танк на рампе) светит в карты нескольких уровней:
+    // проекция одна (по `z`), лимит считается по добавленным спрайтам
     const push = (light, factor) => {
-      if (count >= cfg.maxLights || !map.levels.has(light.level)) {
+      const levels = (light.levels ?? [light.level]).filter(level =>
+        map.levels.has(level),
+      );
+
+      if (count >= cfg.maxLights || levels.length === 0) {
         return;
       }
 
@@ -366,12 +442,18 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       item.x = item.view.x;
       item.y = item.view.y;
 
-      if (!perLevel.has(light.level)) {
-        perLevel.set(light.level, []);
-      }
+      for (const level of levels) {
+        if (count >= cfg.maxLights) {
+          return;
+        }
 
-      perLevel.get(light.level).push(item);
-      count += 1;
+        if (!perLevel.has(level)) {
+          perLevel.set(level, []);
+        }
+
+        perLevel.get(level).push(item);
+        count += 1;
+      }
     };
 
     // вспышки — первыми: они короткие и заметнее всего
@@ -394,7 +476,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       push(lamp, flicker(lamp.seed, now, lamp.flicker));
     }
 
-    for (const levelMap of map.levels.values()) {
+    // карта крыш уровня получает те же источники, что и обычная
+    for (const levelMap of allLevelMaps()) {
       levelMap.place(stage, screen, camera, shear);
       levelMap.layout(perLevel.get(levelMap.level) || []);
     }
@@ -411,27 +494,49 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
     const dt = Ticker.shared.deltaMS / 1000;
     const rate = stepped ? Math.min(1, see.fadeRate * dt) : 0;
+    // нарисованная точка игрока: крыша закрывает её, а не мировую
+    const player = offsetPoint(levelView.x, levelView.y, camera, levelView.z * shear);
 
-    for (const levelMap of map.levels.values()) {
+    for (const levelMap of allLevelMaps()) {
       if (levelMap.level < 1) {
         continue;
       }
 
+      const below = levelView.level < levelMap.level;
+      // крыша уступает, только когда закрывает танк (как её слой)
+      const roofHides =
+        levelMap.roof &&
+        below &&
+        cellsCoverPoint(
+          map.roofCells.get(levelMap.level),
+          map.step,
+          map.scale,
+          player,
+          camera,
+          [levelMap.level * shear],
+          see.roofMargin ?? 0,
+        );
       const overlay = levelMap.overlay;
 
       if (levelView.mode === 'layer') {
-        const col = cellOfPoint(levelView.x, map.scale.x, map.step);
-        const row = cellOfPoint(levelView.y, map.scale.y, map.step);
-        const under =
-          levelView.level < levelMap.level &&
-          Boolean(map.maskCells.get(levelMap.level)?.has(`${col},${row}`));
+        let under = roofHides;
+
+        if (!levelMap.roof) {
+          const col = cellOfPoint(levelView.x, map.scale.x, map.step);
+          const row = cellOfPoint(levelView.y, map.scale.y, map.step);
+
+          under =
+            below &&
+            Boolean(map.maskCells.get(levelMap.level)?.has(`${col},${row}`));
+        }
+
         const target = under ? see.layerAlpha : 1;
 
         overlay.alpha += (target - overlay.alpha) * rate;
         continue;
       }
 
-      advanceHole(levelMap.hole, levelView.level < levelMap.level, rate);
+      advanceHole(levelMap.hole, levelMap.roof ? roofHides : below, rate);
       applyHole(overlay, levelMap.hole, see, levelView, stage, camera);
 
       // фильтр дыры сам становится последним в цепочке и обязан класть
@@ -518,9 +623,11 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
 
       if (owner !== undefined) {
-        for (const byOwner of masks.values()) {
-          if (byOwner.delete(owner)) {
-            masksDirty = true;
+        for (const registry of [masks, roofMasks, tops]) {
+          for (const byOwner of registry.values()) {
+            if (byOwner.delete(owner)) {
+              masksDirty = true;
+            }
           }
         }
       }
@@ -544,20 +651,44 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
     },
 
-    // вклад части в маску этажа уровня >= 1; маска — объединение вкладов
-    setLevelMask(level, cells, owner) {
+    // вклад части в маску этажа уровня >= 1; маска — объединение вкладов.
+    // `roof: true` — клетки крыш (`game.roofs`): они уходят в отдельную
+    // карту уровня со своей дырой
+    setLevelMask(level, cells, owner, { roof = false } = {}) {
       if (!enabled || !(level >= 1)) {
         return;
       }
 
-      if (!masks.has(level)) {
-        masks.set(level, new Map());
+      const registry = roof ? roofMasks : masks;
+
+      if (!registry.has(level)) {
+        registry.set(level, new Map());
       }
 
       if (cells && cells.length > 0) {
-        masks.get(level).set(owner, cells);
+        registry.get(level).set(owner, cells);
       } else {
-        masks.get(level).delete(owner);
+        registry.get(level).delete(owner);
+      }
+
+      masksDirty = true;
+    },
+
+    // вклад части в вершины объёмов уровня: клетки тайлов объёма и его
+    // высота в уровнях. Снимается `releaseMap` вместе с масками
+    setVolumeTops(level, cells, volume, owner) {
+      if (!enabled || !(level >= 0)) {
+        return;
+      }
+
+      if (!tops.has(level)) {
+        tops.set(level, new Map());
+      }
+
+      if (cells && cells.length > 0 && volume > 0) {
+        tops.get(level).set(owner, { cells, volume });
+      } else {
+        tops.get(level).delete(owner);
       }
 
       masksDirty = true;

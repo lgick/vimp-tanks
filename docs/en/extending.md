@@ -50,8 +50,9 @@ holds the transitions). Each level brings its own `layers`, over its own
   has to be done to make an upper layer cover the ground.
 - **Height for a layer (`volumes`, optional).** `volumes` maps a render
   layer's `zIndex` to its height in levels; the `Map` part extrudes such a
-  layer itself — `parts.volume.slices` sprites of the same baked picture,
-  each pushed further from the camera centre — while the flat layer stays
+  layer itself — side walls along the outer edges of its tiles plus one copy
+  of the same baked picture at the top height, pushed away from the camera
+  centre (`parts.volume.faces`) — while the flat layer stays
   underneath as the block's base. Visual only: the core knows nothing about
   the height, and `parts.volume.enabled = false` switches the effect off
   entirely.
@@ -216,7 +217,11 @@ lengthen the landing pad or keep the plate away from the ramp's run.
    spill off the slab.
 3. Keep every render layer of every level below base `zIndex` 40: the light
    map of a level lies at 40 and its emissive layer at 45.
-4. Run `npm test` (the night-map rules live in `tests/config/game.test.js`)
+4. Give roofs their own render layer and list their tiles in `game.roofs`
+   ([configuration.md](configuration.md#roofs-gameroofs)): a roof then stays
+   dark and keeps its neon until it covers the tank. Put signs and decals that
+   stand on a roof on the roof's layer.
+5. Run `npm test` (the night-map rules live in `tests/config/game.test.js`)
    and look at the map with `render.js → lighting.enabled = false` as well —
    everything must stay readable without the night.
 

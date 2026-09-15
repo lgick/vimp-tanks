@@ -1,0 +1,609 @@
+# План: доработки карты `downtown` после тестирования night-city
+
+Предыдущий план — `plan/done/night-city/` (движок: 9686a76c 9bdcb47d a695ca04 6a5c44c9; игра: 858de65).
+Все правки — только в репозитории `vimp-tanks` (`/Users/dmitry/Sites/my/vimp-tanks`); движок не меняется.
+
+## Статус этапов
+
+| # | Этап | Проблемы | Статус |
+| --- | --- | --- | --- |
+| 1 | Фары на рампах: свет в оба уровня | 1.2, 1.3 | ✅ выполнен |
+| 2 | Крыши: непрозрачны, пока не закрывают танк; вершины объёмов не ловят свет | 1.1, 2 | ✅ выполнен |
+| 3 | Монолитные объёмы: боковые грани мешем вместо стопки срезов | 8.1 | ✅ выполнен |
+| 4 | Границы фильтров: ночь при ресайзе, белый экран, пропадающий верх объёмов | 3, 8.2 | ⬜ |
+| 5 | Квадрат вокруг воронки бочки | 4 | ⬜ |
+| 6 | Остаточное скольжение после масла (ядро + предиктор) | 5 | ⬜ |
+| 7 | Бустер: импульс + удержание скорости (ядро + предиктор) | 7 | ⬜ |
+| 8 | Звук воды под гусеницами | 6 | ⬜ |
+
+Выполненный этап отмечается «✅ выполнен» в заголовке и в таблице. Когда выполнены все — файл переносится
+в `plan/done/` через `git mv`, без коммита.
+
+Порядок: этапы независимы, кроме **3 → 4** (этап 4 проверяет глюк 8.2 уже на новой геометрии объёмов) и
+**2 → 3** (оба трогают `extrusion.js`/`layerSeeThrough.js`; делать по очереди). 6 и 7 трогают одни и те же функции
+ядра — делать по очереди, паритет закрывать после каждого.
+
+## Зафиксированные решения (ответы пользователя)
+
+| Вопрос | Решение |
+| --- | --- |
+| Крыши (проблема 2) | Это не задумка, а побочный эффект see-through. Чиним **только крыши**: новое поле карты `game.roofs`; такие слои не прозрачны и не снимают затемнение, пока крыша не закрывает сам танк. Эстакады и мосты — как раньше |
+| Масло после съезда | Плавный линейный спад эффекта за `slickTime` (для масла 1.5 с), время — в конфиге |
+| Бустер | Больше импульс и потолок + на `boostTime` секунд поднятый предел скорости и компенсация демпфирования |
+
+## Общий контекст для исполнителя (прочитать перед любым этапом)
+
+### Правила на каждом этапе
+
+1. **Никаких `git commit`.** Изменения остаются в рабочем дереве.
+2. **Документация**: функциональная правка обновляет парные `docs/en/` и `docs/ru/` (таблица «область → страница» в
+   `CLAUDE.md`). Разделы, которые затронет план: `configuration.md` («The 2.5D render», «Night and lighting: `lighting`»,
+   «Surface effects: `surfaceFx`», «src/config/sounds.js», «Surfaces (`game.surfaces`)», «Night lighting (`game.lighting`)»),
+   `gameplay.md` («Surfaces»), `core.md` («Surfaces (`core/src/surface.rs`)»), `extending.md` («Surfaces», «Night and lamps»,
+   «New sound»). Раздел ищется по заголовку (`grep -n "^#" docs/en/<page>.md`).
+3. **CHANGELOG.md** (английский) — в `## [Unreleased]`, под `### Added` / `### Changed` / `### Fixed`. Тесты, рефакторинг и
+   `docs/` не пишутся. Ни одна правка плана не меняет формат кадра.
+4. **Проверки в конце этапа** (тихие флаги):
+   ```bash
+   npx eslint .
+   npm test -- --silent
+   npm run core:test          # после правок core/ (этапы 6, 7)
+   npm run core:build         # перед npm run build и тестами на core/pkg-node
+   npm run build              # когда меняются карта, ассеты, звуки
+   npx vimp-contract          # когда меняются карта или конфиг
+   npm run sim:scenarios      # после npm run build; этапы 6, 7 и правки карты
+   ```
+5. **Визуальная проверка** — `npm run dev` (матч в вкладке браузера), карта `downtown`. Для визуальных этапов (1–5, 8)
+   ручная проверка обязательна: юнит-тесты не ловят проблемы композитинга PixiJS.
+6. **Код**: ES-модули, `===`, только `let`/`const`, фигурные скобки, без двух заглавных подряд; комментарии в коде — на
+   русском, в стиле окружающего кода. `src/host/` — Worker-safe.
+7. **Части PixiJS**: `onRender` назначается свойством и тестируется на регистрацию (`part._onRender`). Анимация по
+   времени шагает раз за тик (`Ticker.shared.lastTime`).
+8. **Паритет движения** (этапы 6, 7): формулы живут в `core/src/motion.rs`/`core/src/surface.rs` и вызываются и хостом
+   (`Tank::update`, `core/src/tank.rs` ≈438–618), и репликой (`Predictor::step_inner`, `core/src/client/predictor.rs`
+   ≈1000–1160). Нейтральный путь (без масла и бустера) — бит-в-бит прежний. Закрывается тестами `mod parity` в
+   `predictor.rs` (`simulate_on_map`, `expect_close`).
+
+### Как устроена отрисовка (на это опираются этапы 1–5)
+
+- **zIndex**: `levelZ(base, level) = base + 100·level` (`src/client/levelZ.js`). База внутри уровня: следы 1, эффекты 2,
+  танк 3, дым 4, перекрыватель объёмов (occluder) 5, **карта освещённости 40**, эмиссив 45
+  (`src/client/lighting/lightMath.js`). Статический слой карты — `levelZ(layer, level)`.
+- **Проекция 2.5D**: точка на высоте `z` (в уровнях) рисуется в `p + (p − cam)·k`, `k = z·shear`, `shear = 0.22`, масштаб
+  `1 + k` (`src/client/parallax.js`: `offsetPoint`, `applyParallax`).
+- **Уровень отрисовки** тела: `renderLevel(level, z) = min(level, round(z))` (`levelZ.js`). На рампе уровень переключается
+  на середине подъёма (`z = 0.5`).
+- **Статический слой** — `src/client/parts/map/MapLayer.js`: запечённая текстура (`layerAssets.js`), экструзия
+  (`extrusion.js`): объём `volume` — K = `volume.slices` (4) копий той же текстуры со сдвигом `k = (level + volume·i/K)·shear`
+  в контейнере-перекрывателе (сиблинг на сцене, zIndex `levelZ(max(layer,5), level)`); клин рампы — меш с повершинной
+  высотой (`buildRampMeshes`, `updateRampMesh`) в контейнере парта уровня `from`.
+- **See-through** (`src/client/parts/map/layerSeeThrough.js`, `holeOverlay.js`, `src/client/seeThrough.js`): у слоя уровня
+  `L ≥ 1` при игроке ниже (`levelView.level < L`) на контейнер вешается фильтр «дыры» радиуса `seeThrough.radius = 260`
+  мировых единиц (у `downtown` клетка = 32·0.4 = 12.8 ед., то есть ~20 клеток). У перекрывателя дыра открывается, только
+  когда объём реально закрывает танк (`volumeHidesPlayer` — обратная проекция нарисованной точки игрока по каждому `k`).
+- **Ночь** — сервис `lighting` (`src/client/lighting/createLighting.js`) + `LevelLightMap.js`. На каждый уровень — оверлей
+  (контейнер на сцене, `zIndex = levelZ(40, L)`), контр-трансформ сцены (растянут на экран), `boundsArea` = экран, фильтр
+  `AlphaFilter` (resolution 0.5, `blendMode: 'multiply'`). Содержимое: фон (L=0 — цвет `ambient`, L≥1 — белый), маска этажа
+  L≥1 (клетки тайлов `floor` уровня, цвет `ambient`, `applyParallax(k = L·shear)`), источники уровня — аддитивные спрайты.
+  Источник `{ kind: 'radial'|'cone', level, x, y, z, radius, rotation, color, intensity }` попадает **только** в оверлей
+  своего `level` (`layoutLights`, `perLevel`). У оверлея L≥1 своя дыра (`updateHoles`), фильтр дыры тоже кладётся multiply.
+- **Карта `downtown`** (`src/data/maps/downtown.js`): здания — тайл `T.WALL` уровня 0, слой 2, `volume 1.0`; у зданий с
+  `roof: true` в гриде уровня 1 лежит `T.ROOF` (в `floor`). Уровень 1 сейчас: `layers: {1: [SLAB, ROOF, OIL], 4: [RAILING]}`.
+  Все рампы — `from: 0, to: 1`, тайлы в гриде уровня 0. Вывески (`game.signs`) и вентиляторы (`game.decals`) — `level: 1,
+  layer: 1`, все стоят на крышах.
+
+---
+
+## Этап 1. Фары на рампах: свет в оба уровня ✅ выполнен
+
+### Причина (проблемы 1.2 и 1.3 — одна ошибка)
+
+`Tank._updateLights` (`src/client/parts/Tank.js` ≈510) отдаёт конусам фар и свечению `level = renderLevel(level, z)`.
+Клин рампы нарисован в контейнере уровня 0 (zIndex < 40) и затемняется оверлеем уровня 0. На верхней половине рампы
+(`z ≥ 0.5`) уровень танка уже 1, конусы уходят в оверлей уровня 1, а там клетки рампы не входят в маску этажа (белый фон:
+свет на белом не виден). Оверлей уровня 0 при этом света не получает — горка тёмная. При спуске то же самое в обратном
+порядке.
+
+### Решение
+
+Источник света танка на рампе (земля под гусеницами дробная: `0 < z < уровень`, танк не в полёте) светит **в оба уровня**
+`floor(z)` и `ceil(z)`: нижний — это клин и земля, верхний — плита, на которую выезжает луч.
+
+### Шаги
+
+1. `src/client/lighting/lightMath.js`: чистая функция
+   ```js
+   // уровни, в карты освещённости которых светит источник на высоте z:
+   // на рампе — оба соседних, иначе — один уровень отрисовки
+   export function lightLevels(level, z, airborne) { ... }
+   ```
+   Правило: `airborne === false` и `z` не целое (с допуском `1e-3`) → `[Math.floor(z), Math.ceil(z)]`; иначе →
+   `[renderLevel(level, z)]` (импортировать из `../levelZ.js`).
+2. `createLighting.js`:
+   - запись источника принимает необязательное поле `levels: number[]`; `layoutLights.push` раскладывает item в каждый
+     уровень из `light.levels ?? [light.level]`, для которого есть `map.levels`. Проекция одна (по `light.z`), лимит
+     `cfg.maxLights` считается по добавленным спрайтам.
+   - `addLight`/`updateLight` поле не трогают — `Object.assign` его переносит.
+3. `Tank.js`, `_updateLights`:
+   - `const levels = lightLevels(this._physLevel, this._z, this._vz !== 0);`
+   - в `updateLight` конусов и `glow` передавать `{ ..., level, levels }` (`level` оставить — по нему идут блики
+     `_glareLevel`).
+   - **Проверить** в `core/src/tank.rs` (`snapshot_row`) и `core/src/level.rs`, что на рампе `vz` в кадре равен 0 (комментарий
+     `_groundZ` утверждает, что `vz ≠ 0` — точный флаг полёта). Если на рампе `vz ≠ 0`, признак полёта брать иначе:
+     `Math.abs(this._z - Math.round(this._z)) > 1e-3 && this._physLevel >= Math.ceil(this._z)` — уточнить по `level.rs`
+     (`step_airborne` держит `level` уровнем отрыва).
+4. Тесты:
+   - `tests/client/lighting/lightMath.test.js`: `lightLevels(0, 0.3, false)` → `[0, 1]`; `(1, 0.7, false)` → `[0, 1]`;
+     `(1, 1, false)` → `[1]`; `(1, 0.4, true)` → `[0]` (в полёте — `renderLevel`); `(0, 0, false)` → `[0]`.
+   - `tests/client/lighting/createLighting.test.js`: источник с `levels: [0, 1]` на ночной карте с маской уровня 1 попадает в
+     `layout` обоих `LevelLightMap` (по образцу существующих тестов раскладки).
+   - `tests/client/parts/Tank.test.js`: на `z = 0.6`, `vz = 0` конусы получают `levels: [0, 1]`; на `z = 1` — `[1]`.
+5. Ручная проверка: `npm run dev`, `downtown`, team1 (спавн носом на западную рампу эстакады). Подъём и спуск — луч на клине
+   виден на всей длине, на верхней половине освещается и плита впереди.
+6. Документация: `configuration.md` → «Night and lighting» (как уровень источника выбирается на рампе). CHANGELOG `### Fixed`:
+   «Headlights now light the whole ramp while climbing or descending».
+
+---
+
+## Этап 2. Крыши и вершины объёмов ✅ выполнен
+
+### Причины
+
+- **Проблема 2 и основная часть 1.1.** Когда танк на уровне 0, у слоя уровня 1 (в нём сейчас и `SLAB`, и `ROOF`) и у
+  оверлея освещения уровня 1 открывается дыра радиусом ~20 клеток. Крыша в дыре становится прозрачной, и сквозь неё видна
+  верхушка объёма стены уровня 0 (кирпич). Её затемняет только оверлей уровня 0: неона уровня 1 там нет (градиент пропал),
+  а фары уровня 0 есть (крыша «ловит» фары).
+- **Остаток 1.1.** У зданий без `roof` (север центра, укрытие) верхний срез объёма стены — часть перекрывателя уровня 0
+  (zIndex 5 < 40): его освещают все источники уровня 0, в том числе фары наземного танка, хотя луч «лежит» на земле.
+
+### Решение
+
+A. Новое поле карты `game.roofs` — тайлы крыш по уровням: `roofs: { 1: [T.ROOF] }`. Крыша — отдельный рендер-слой. Дыра у
+   слоя-крыши и у её части карты освещённости открывается **только когда крыша закрывает нарисованную точку танка**
+   (как у перекрывателя объёмов), а не всегда, когда игрок ниже.
+
+B. Карта освещённости уровня `L` закрывает вершины объёмов своего уровня: поверх источников рисуются прямоугольники
+   клеток объёмных тайлов в проекции `k = (L + volume)·shear` цветом `ambient` (обычный блендинг). Боковые грани остаются
+   освещёнными — луч фары на стене здания физически верен.
+
+### Шаги
+
+1. **Хелпер покрытия** — `src/client/parts/map/tileGrid.js` (там уже `tileAt`, `cellOfPoint`):
+   ```js
+   // закрывает ли что-то из набора тайлов, нарисованное на высотах `ks`,
+   // нарисованную точку `point` с запасом `margin` (мировые единицы):
+   // обратная проекция w = (p + cam·k) / (1 + k) — центр и 4 точки по кругу
+   export function coversPoint(grid, tileSet, point, camera, ks, margin) { ... }
+   ```
+   `volumeHidesPlayer` в `layerSeeThrough.js` переписать через него (`margin = 0`, те же `ks`, что сейчас) — поведение
+   перекрывателя не меняется, существующие тесты должны остаться зелёными.
+   Для сервиса освещения нужен вариант по набору клеток (`Set('col,row')`) — сделать внутреннюю функцию, которую
+   `coversPoint` вызывает через `tileAt`, и экспортировать вариант `cellsCoverPoint(cellSet, step, scale, point, camera, ks,
+   margin)` для `createLighting.js`.
+2. **Конфиг** `src/config/render.js`, `seeThrough`: `roofMargin` — запас (мировые единицы), с которым крыша считается
+   закрывающей танк. **Итог ручной проверки: `0`.** При 10 танк у стены (корпус 8×6) «закрывался» крышей, дыра
+   открывалась и вывески HOTEL/BAR/CLUB/MOTEL тускнели (решение пользователя).
+3. **Поле карты**:
+   - Проверить, пропускает ли разбор `game` на хосте неизвестный ключ: `core/src/map_game.rs` (struct `MapGame`,
+     наличие `deny_unknown_fields`) и контрактное правило движка
+     `../vimp/packages/engine/src/devtools/contract/rules/e7-map-game-field.js`. Если ключи проверяются — добавить `roofs`
+     (`BTreeMap<String, Vec<i32>>`, `#[serde(default)]`) в `MapGame`; хост его не использует. Валидация (уровень существует,
+     тайл есть в `floor` этого уровня) — в `MapGame`, по образцу `validate_surfaces`, с тестом в `map_game.rs`.
+   - `src/data/maps/downtown.js`: уровень 1 → `layers: { 1: [T.SLAB, T.OIL], 2: [T.ROOF], 4: [T.RAILING] }`;
+     `game.roofs: { 1: [T.ROOF] }`; у всех 6 `game.signs` и 4 `game.decals` `layer: 1` → `layer: 2` (все стоят на крышах —
+     проверено по координатам зданий с `roof: true`). Комментарий у `layers` уровня 1 обновить.
+4. **MapLayer** (`src/client/parts/map/MapLayer.js`):
+   - `this._roof` = все тайлы слоя входят в `data.game?.roofs?.[level]` (ключ — строка или число; нормализовать). Слой,
+     где крыши смешаны с другими тайлами, — `console.warn` и обычное поведение (документировать: крыше нужен свой слой).
+   - `_seeThroughView()` отдаёт `roof: this._roof`.
+   - вклад в маску освещения: `setLevelMask(level, cells, this, { roof: this._roof })`.
+   - **вершины объёмов** (решение B): если `this._volume > 0` и есть сервис освещения —
+     `this._lighting.setVolumeTops(this._level, cellsOfTiles(this._map, this._tiles), this._volume, this)`; снимать в
+     `destroy()` (`releaseMap` уже чистит вклады по `owner` — расширить на новый набор).
+5. **layerSeeThrough.js**, `updateLayerSeeThrough`: при `view.roof`
+   `const hides = levelView.level < view.level && coversPoint(view.grid, view.tileSet, point, camera, [view.level·shear], cfg.roofMargin)`,
+   где `point` — нарисованная точка игрока (как в `volumeHidesPlayer`). Режим `'hole'`: `advanceHole(view.hole, hides, rate)`;
+   режим `'layer'`: `under = hides`. Слои без `roof` — без изменений.
+6. **Вывески на крыше**: `NeonSign.update` сейчас берёт `levelView.alphaFor(level…)` — вывеска гасла бы при непрозрачной
+   крыше. Передать из `MapLayer.render` в `updateLayerAnimations` параметр `roofAlpha` (для слоя-крыши —
+   `1 + (cfg.minAlpha − 1)·this._hole.strength`, иначе `null`); в `layerAnimations.js` пробросить в `NeonSign.update`, и при
+   `roofAlpha !== null` использовать его вместо `alphaFor`.
+7. **Сервис освещения** (`createLighting.js`, `LevelLightMap.js`):
+   - `setLevelMask(level, cells, owner, { roof } = {})`: вклады крыш хранятся отдельно (`roofMasks`). Для уровня с
+     крышами создаётся второй `LevelLightMap` с флагом `roof: true` (хранить в `map.roofLevels: Map(level → LevelLightMap)`),
+     маска — объединение клеток крыш; обычная маска уровня — без клеток крыш.
+   - `layoutLights`: item уровня раскладывается и в обычную карту, и в карту крыш этого уровня (тот же массив items).
+   - `updateHoles`: у карты крыш дыра ведётся условием `levelView.level < L && cellsCoverPoint(roofCells, …,
+     [L·shear], see.roofMargin)` вместо «игрок ниже».
+   - `setVolumeTops(level, cells, volume, owner)`: вклады по `owner`; на `syncLevels` `LevelLightMap.setTops(groups, step,
+     scale)`, где `groups` — `[{ volume, runs: cellRuns(cells) }]`. `LevelLightMap`: `this.tops` — контейнер после
+     `this.lights` в `this.world`; по `Graphics` на высоту, заливка `ambient`; в `place()` —
+     `applyParallax(graphics, camera, (level + volume)·shear, 1)`. Для L=0 заливка `ambient`; для L≥1 — тоже `ambient`
+     (вершина объёма этажа стоит на этаже).
+   - `attachToStage`/`releaseMapResources`/`clear` учитывают карты крыш.
+8. Тесты:
+   - `tests/client/parts/map/tileGrid` (новый файл, если нет) — `coversPoint`: точка над тайлом, вне, на краю с `margin`.
+   - `layerSeeThrough` (в `MapLayer.test.js` или новом `layerSeeThrough.test.js`): слой-крыша не открывает дыру, когда
+     танк ниже, но рядом; открывает, когда точка под крышей; обычная плита открывает как раньше.
+   - `createLighting.test.js`: вклад с `{ roof: true }` создаёт отдельную карту; её дыра не открывается без покрытия;
+     `setVolumeTops` рисует графику вершин и снимается `releaseMap`.
+   - `tests/config/game.test.js` / `core/src/map_game.rs` — валидация `game.roofs`, если добавлялась.
+9. Ручная проверка (`npm run dev`): танк на уровне 0 рядом со зданиями HOTEL/BAR/CLUB/MOTEL — крыши тёмные, с цветным
+   градиентом вывески, фары не светят на крышу; танк заезжает за здание (объём закрывает) — крыша плавно открывается;
+   под эстакадой и мостами дыра работает как раньше; здания без крыш (север центра) — вершина стены не ловит фары.
+10. Документация: `configuration.md` (поле `game.roofs`, `seeThrough.roofMargin`, раздел про ночь), `extending.md`
+    («Night and lamps»: крыша — отдельный слой и `game.roofs`, вывески на крыше ставятся на её слой). CHANGELOG:
+    `### Added` — «`game.roofs` map field»; `### Fixed` — «Roofs no longer turn see-through (and lose neon light) whenever
+    the player is on a lower level; headlights no longer light building tops».
+
+---
+
+## Этап 3. Монолитные объёмы (проблема 8.1) ✅ выполнен
+
+### Причина
+
+`buildVolumeSlices` (`src/client/parts/map/extrusion.js`) рисует объём как 4 копии запечённого слоя со ступенчатым сдвигом.
+Когда сдвиг верха больше ~4 пикселей (край экрана, отдалённая камера), между копиями видны ступени — здание «из слоёв».
+
+### Решение
+
+Объём = **боковые грани одним мешем** (как юбка рампы `buildRampSkirt`) + **одна верхняя копия** слоя на высоте
+`level + volume`. Грани строятся по границам клеток объёмного тайла, у которых соседняя клетка не из набора тайлов слоя.
+
+### Шаги
+
+1. `extrusion.js`:
+   - переименовать `rampMesh` в `batchedMesh` (оставить комментарий про `batchMode: 'batch'` — он критичен);
+     `updateRampMesh` → `updateHeightMesh` (старое имя оставить реэкспортом только если используется в тестах; лучше
+     поправить импорты в `MapLayer.js` и тестах).
+   - новая `buildVolumeWalls({ map, tiles, step, baseScale, level, volume, shear, sideTint, bakedTexture })`:
+     1) набор клеток `tileSet`; для каждой из 4 сторон собрать **прогоны** рёбер: северные/южные рёбра — по строкам (слить
+        соседние по колонкам), западные/восточные — по колонкам;
+     2) на каждое ребро-прогон — квад из 4 вершин: две на ребре (мировые единицы: `col·step·baseScale.x`, …) с высотой
+        `k0 = level·shear` и две в тех же точках с `k1 = (level + volume)·shear`; массивы `base`, `heights`, `uvs`, `indices`
+        в формате, который понимает `updateHeightMesh` (см. `buildRampSkirt`);
+     3) UV: пиксели кромки внутри клетки со сдвигом `uvInset = 1` (как у юбки рампы) — грань тянет кромку тайла вниз;
+     4) тинт: `sideTint`; дополнительно (по желанию) светотень по нормали грани от `tilt.lightDir` — через два меша (грани,
+        смотрящие к свету / от света) с разными тинтами;
+     5) при > 1000 квадов на меш — делить на несколько мешей (осторожность с размером батча Pixi; проверить в браузере,
+        что ошибок нет);
+     6) возвращает срезы `{ target, k: k1 − ε, base, heights, occluder: true, walls: true }`.
+   - **Порядок граней.** Невидимые грани (обращённые от камеры) обязаны рисоваться раньше видимых, иначе дальняя грань
+     узкой стены перекроет ближнюю. В `walls`-срезе хранить нормаль каждого квада и центр ребра; в `updateHeightMesh`
+     (или отдельной `orderWallMesh(slice, camera)`) раз в кадр переписывать `indices`: сначала квады с
+     `dot(normal, camera − edgeCenter) ≤ 0`, затем остальные; присваивать `mesh.geometry.indices` только при смене порядка.
+   - `buildVolumeSlices` оставить как путь отхода.
+2. `src/config/render.js`, `volume`: `faces: true` — `false` возвращает старые срезы. Комментарий к `slices`: для граней
+   число срезов — только плотность проверки `volumeHidesPlayer`.
+3. `layerAssets.js`, `buildExtrusion`: при `volumeConfig.faces` — `buildVolumeWalls(...)` + одна верхняя копия
+   (`Sprite(bakedTexture)`, `tint 0xffffff`, `k = (level + volume)·shear`, `occluder: true`); сортировка по `k` уже есть
+   (грани с `k1 − ε` лягут под верх).
+4. `MapLayer.render`: срезы с `base` уже идут через `updateRampMesh` → `updateHeightMesh`; для `walls` вызвать упорядочивание.
+   `destroy`: меши граней делят `bakedTexture` со слоем — текстуру не освобождать (как у срезов: `slice.target.texture =
+   Texture.EMPTY`, затем `destroy` контейнера).
+5. Тесты `tests/client/parts/map/extrusion.test.js`:
+   - одиночная клетка → 4 квада; прямоугольник 3×2 → 4 квада (прогоны слиты); L-образная фигура → внутренние рёбра не
+     строятся;
+   - `heights` нижней/верхней кромки = `k0`/`k1`; UV внутри тайла;
+   - порядок индексов: камера севернее блока → южная грань в конце списка индексов не оказывается раньше северной и т. п.;
+   - `layerAssets`: при `faces: true` в перекрывателе один верхний спрайт и меши граней; при `false` — прежние срезы.
+6. Ручная проверка: здания и стены канала выглядят монолитно на краях экрана и при отдалении камеры (разгон); перила
+   уровня 1 (volume 0.35) — тоже; FPS не просел заметно (DevTools Performance).
+7. Документация: `configuration.md` («The 2.5D render»: `volume.faces`, смысл `slices`), `architecture.md`, если там описаны
+   срезы объёма (`grep -n "slice" docs/en/architecture.md`). CHANGELOG `### Changed`: «Volumes are drawn as solid side
+   walls plus a top instead of stacked copies».
+
+### Итог этапа (после ручной проверки пользователем)
+
+Объём монолитен, но вскрылись два недостатка — оба исправлены здесь же:
+
+- **Полосы вместо кирпича, затем кирпич разного размера.** Сперва грань тянула одну линию пикселей кромки на всю
+  высоту (полосы), потом — тайл своей клетки, растянутый на всю грань. Второе дало кирпич разного размера: экранная
+  высота грани равна `|p − cam| · (k1 − k0)`, то есть у дальних от центра камеры стен грань длиннее. Итог: у КАЖДОГО
+  тайла своя боковая текстура — ПОЛОСА из `volume.faceTileRepeats` копий его картинки по вертикали (печёт
+  `layerAssets.js` по образцу текстуры клина, освобождает слой в `destroy`). По ширине грани тайл идёт раз, по высоте —
+  столько копий полосы, сколько грань занимает на экране (`updateWallMesh` считает UV в кадре). Кирпич один и тот же
+  везде. Нового арта не понадобилось: `T.WALL` уже кирпичный и стыкуется сам с собой.
+
+  Промежуточная попытка с аппаратным повтором (`addressMode: 'repeat'`) не сработала: у батченого меша координаты
+  зажимаются, грань размазывала крайний столбец тайла и читалась горизонтальными полосами. Поэтому полоса печётся
+  заранее, а UV никогда не выходят за 0..1.
+
+  Число копий считается по ГЛУБИНЕ грани (расстояние до камеры вдоль её нормали), а не по радиусу `|p − cam|`: вдоль
+  прямой стены радиус меняется, ряды кирпича расходились веером и стена выглядела выпуклой.
+- **Мерцающий стык с крышей.** Верх — спрайт, грань — меш; на дробном масштабе сцены между двумя растеризациями
+  открывается щель в пиксель, а движок плавно меняет зум от скорости (`zoomOutFactor: 0.5`) — поэтому первый вариант
+  нахлёста (в долях уровня, то есть в мировых единицах) закрывал щель только на приближенной камере. Нахлёст задаётся в
+  ЭКРАННЫХ пикселях (`volume.faceBleedPx`, по умолчанию 2) и пересчитывается от масштаба сцены каждый кадр; порядок
+  отрисовки считается по верху БЕЗ нахлёста, поэтому крыша по-прежнему рисуется поверх грани.
+
+Цена: ~1700 квадов на всю `downtown` (984 стены + 328 канал + 380 перила) вместо 136 и по одной 32×32 текстуре на
+объёмный тайл. По GPU по-прежнему дешевле стопки срезов: те рисовали 4 копии полноразмерной картинки карты на слой.
+
+---
+
+## Этап 4. Границы фильтров: ресайз, белый экран, пропадающий верх (проблемы 3 и 8.2)
+
+Причина не доказана чтением кода — этап начинается с диагностики. Обе проблемы относятся к одному классу: у контейнера с
+фильтром (оверлей освещения, перекрыватель объёмов с дырой, слой с дырой) Pixi 8.19 считает область фильтра в
+`FilterSystem._calculateFilterArea` (`node_modules/pixi.js/lib/filters/FilterSystem.mjs` ≈491) через
+`container.getFastGlobalBounds` (у оверлея — `boundsArea × worldTransform`), обрезает по вьюпорту и при непозитивной
+области ставит `filterData.skip = true`. При `skip` содержимое рисуется **без фильтра**, то есть без `multiply`:
+- белый фон оверлея уровня 1 ложится на экран обычным блендингом → **белый экран**;
+- при другом раскладе оверлей не рисуется / рисуется без умножения → **ночь пропадает**;
+- у перекрывателя с дырой обрезанная область фильтра срезает самый смещённый (верхний) срез → **объёмы теряют верх** на
+  кадр при смене зума (дыра перекрывателя включается как раз при ударе о стену — `volumeHidesPlayer`).
+
+### Шаг 4.1. Воспроизведение и диагностика
+
+1. `npm run dev`, Chrome, `downtown`. Сценарии: (а) team1, изменить размер окна несколько раз (в т. ч. сузить до ~500 px и
+   развернуть); (б) то же за team2 (спавн на востоке); (в) разгон и удар о здание (глюк 8.2), лучше записать GIF.
+2. Во время воспроизведения в консоли (через `javascript_tool` или DevTools) найти сцену игрового полотна и оверлеи
+   (`label` = `lighting-0`, `lighting-1`, перекрыватели — контейнеры с zIndex `5 + 100·L`). Снимать на каждом кадре
+   (`Ticker.shared.add`): `overlay.getFastGlobalBounds(true)`, `overlay.filters`, `overlay.worldTransform`,
+   `renderer.screen`, `stage.scale`, `stage.position`. Временно пропатчить `FilterSystem.prototype._calculateFilterBounds`
+   логом `filterData.skip` с `label` контейнера.
+3. Проверить гипотезы по порядку и записать в этот файл, какая подтвердилась:
+   - H1: область фильтра считается по трансформу, который `place()`/`applyParallax` меняют в `onRender` — после ресайза
+     или смены зума она устаревает/уходит за экран → `skip`;
+   - H2: после `renderer.resize` `boundsArea` оверлея остаётся старой (ресайз без смены трансформа сцены не
+     сбрасывает `layoutKey`, если `render()` не вызвался в этом кадре);
+   - H3: у team2 камера у восточного края карты, и контр-трансформ даёт отрицательную/огромную позицию оверлея.
+
+### Шаг 4.2. Исправление (по результатам 4.1; ниже — рекомендуемое, устраняющее класс целиком)
+
+1. **Оверлей освещения в мировых координатах, без контр-трансформа.** `LevelLightMap`:
+   - оверлей с единичным трансформом; фон — не на экран, а на прямоугольник карты с запасом
+     (`cols·step·scale.x` × `rows·step·scale.y`, запас по каждой стороне — например `max(ширина, высота) карты`, чтобы при
+     максимальном отдалении камеры за краем карты тоже был полумрак); размеры карты передать в конструктор из
+     `syncLevels` (у сервиса есть `map.step`, `map.scale`; число колонок/строк передать в `acquireMap` из `MapLayer`).
+   - `boundsArea` — тот же мировой прямоугольник, задаётся один раз; обрезку по экрану делает сам Pixi
+     (`clipToViewport`), область никогда не становится непозитивной, пока карта на экране.
+   - `place()` упрощается до `applyParallax` маски/вершин; `world` больше не нужен (или единичный).
+   - Удалить сравнение `width/height` экрана из `layoutKey`, если оно больше ничего не решает.
+2. **Перекрыватель и слои с дырой**: задать `boundsArea` (мировой прямоугольник слоя, расширенный на максимальный сдвиг
+   параллакса: `(level + volume)·shear·размер карты`) при сборке в `layerAssets.js` — область фильтра дыры перестаёт
+   зависеть от геометрии детей и текущего кадра.
+3. Если 4.1 показал другую причину — исправить её и описать здесь; пункты 1–2 всё равно выполнить, если они устраняют
+   подтверждённый `skip`.
+4. Тесты: `LevelLightMap` — `boundsArea` покрывает карту и не зависит от `renderer.screen`; `createLighting.test.js` —
+   после смены размеров экрана раскладка остаётся валидной; `layerAssets` — у перекрывателя задан `boundsArea`.
+5. Ручная проверка: все сценарии 4.1 — ночь не пропадает, белого экрана нет за обе команды, при ударе о стену с
+   отдалённой камерой верх зданий не мигает.
+6. Документация: `configuration.md` («Night and lighting» — как устроена карта освещённости), `architecture.md` при
+   описании оверлеев. CHANGELOG `### Fixed`: «Night overlay no longer disappears (or turns the screen white) after a window
+   resize; building tops no longer flicker when the camera zooms back in».
+
+---
+
+## Этап 5. Квадрат вокруг воронки бочки (проблема 4)
+
+При взрыве бочки рисуются: воронка `FunnelEffect` (`src/client/parts/effects/explosion/FunnelEffect.js`, текстура
+`funnelTexture`), вспышка освещения (`lighting.flash`, текстура `lightRadialTexture`), щепки `DebrisEffect` и копоть на месте
+бочки (`MapObject._showScorch`, текстура `scorchTexture` — новая в night-city; у бочки нет `imgDestroyed`). Все три
+текстуры пекутся одинаково: `Graphics` + `BlurFilter` + `renderer.generateTexture({ frame })` с запасом `blurMargin`.
+
+### Шаги
+
+1. **Найти источник.** `npm run dev`, `downtown`, бочки промзоны (клетки 28–29 × 13–14) или у канала (10,63). Взорвать,
+   сделать скриншот. Затем в консоли по очереди скрывать: спрайт копоти (`_scorch.visible = false` у части
+   `MapObject`), воронку, отключить освещение (`lighting.enabled = false` в `src/config/render.js` и перезапуск). Сравнить
+   с воронкой от бомбы танка — если у неё квадрата нет, виновата копоть или освещение.
+2. **Проверить кромку текстуры**: `renderer.extract.pixels(texture)` для `scorchTexture.textures[i]` и
+   `funnelTexture.textures[i]` — альфа крайних строк/столбцов обязана быть 0. Если не 0 — размытие упирается в рамку
+   (например, `clipToViewport` обрезал фильтр по кадру `generateTexture`).
+3. **Исправить по найденному источнику**:
+   - кромка текстуры ненулевая → печь фигуру в контейнер с прозрачным отступом больше `blurMargin` и выставлять
+     `frame` внутрь (или `filter.clipToViewport = false`); для копоти можно вовсе отказаться от `BlurFilter` — рисовать
+     мягкий край кольцами, как `drawRadialRings` в `lightRadialTexture.js`;
+   - квадрат — это спрайт бочки/контейнер `MapObject` (например, тинт или фильтр контейнера на прозрачных пикселях
+     прямоугольника) → убрать причину в `MapObject.js`;
+   - квадрат от освещения (пятно вспышки с жёсткой кромкой) → поправить `lightRadialTexture`.
+4. Тест на найденный случай: для баркера — альфа по периметру текстуры равна 0 (в `tests/client/bakers/` по образцу
+   существующих тестов баркеров; если рендерер в тестах мокается — проверять `frame`/отступ аргументов
+   `generateTexture`); для `MapObject` — соответствующее состояние в `MapObject.test.js`.
+5. Ручная проверка: после взрыва бочек (одиночной и цепной) — только воронка/копоть, без контура.
+6. CHANGELOG `### Fixed`: «No square outline around the crater of an exploded barrel». Документация — только если
+   поменялись параметры баркера (`configuration.md`, раздел с `scorchTexture`).
+
+---
+
+## Этап 6. Остаточное скольжение после масла (проблема 5)
+
+### Модель
+
+Поверхность с `slickTime` оставляет на гусеницах «след»: пока любая из 4 точек сэмплинга гусениц стоит на такой клетке,
+остаток полный; после съезда он линейно спадает за `slickTime` секунд. Пока остаток `t = slickLeft / slickTime > 0`,
+смешанные коэффициенты шага подтягиваются к параметрам той поверхности:
+`grip = min(grip, lerp(1, p.grip, t))`, `brake = min(brake, lerp(1, p.brake, t))`,
+`accel_l/r = min(accel, lerp(1, p.accel, t))`, `turn = p.turn ≥ 1 ? max(turn, lerp(1, p.turn, t)) : min(turn, lerp(1, p.turn, t))`,
+`angular_drag = min(angular_drag, lerp(0, p.angularDrag, t))`. `max_speed`, `drag`, лента — не трогаются.
+В полёте остаток спадает, но не применяется (в полёте `tank_mix` нейтрален).
+
+### Шаги
+
+1. **Конфиг ядра** `core/src/config.rs`, `SurfaceType`: `pub slick_time: Option<f32>` (camelCase `slickTime`; `None` — след
+   не оставляет). Проверка при разборе правил: `slickTime > 0`, конечное. Тест разбора в `config.rs`.
+2. `src/config/game.js`, `surfaces.types.oil`: `slickTime: 1.5` + комментарий в блоке `surfaces` (что это и почему по
+   умолчанию нет у других типов).
+3. **Состояние** `core/src/level.rs`, `LevelState`: `pub slick_left: f32`, `pub slick_type: u8` (индекс типа + 1, `0` —
+   нет), оба `#[serde(default)]`, в `Default` — нули. `LevelState` — `Copy` и пишется в историю предиктора каждый шаг
+   (`push_level_snapshot`, `rewind_level_state`), поэтому откат при реконсиляции бесплатный. Проверить, что на респауне
+   (`Tank::change_player_data`, `tank.rs` ≈623) и при смене карты состояние сбрасывается в `Default`; иначе сбросить поля
+   явно.
+4. **Функция** `core/src/surface.rs`:
+   ```rust
+   /// Остаток скользкой поверхности: обновляет таймер состояния уровня и
+   /// подтягивает `mix` к параметрам следа. Без следа — `mix` как есть
+   /// (нейтральный путь бит-в-бит).
+   pub fn apply_slick(map: &SurfaceMap, rules: &SurfaceRules, level_state: &mut LevelState,
+                      x: f32, y: f32, angle: f32, half_w: f32, half_h: f32, mix: SurfaceMix, dt: f32) -> SurfaceMix
+   ```
+   - в полёте: `slick_left = (slick_left − dt).max(0)`, вернуть `mix`;
+   - 4 точки `track_points`; если хоть одна на типе с `slick_time` (через `SurfaceMap::cell` и `types[k−1]`) — взять
+     тип с наибольшим `slick_time`, `slick_left = slick_time`, `slick_type = k`, вернуть `mix` (на самом масле `mix` уже
+     масляный);
+   - иначе, если `slick_left > 0` и `slick_type != 0`: применить формулы из «Модели» с `t = slick_left / slick_time`,
+     затем `slick_left = (slick_left − dt).max(0)`; при нуле `slick_type = 0`;
+   - иначе вернуть `mix`.
+   Юнит-тесты в `surface.rs`: на масле таймер полный; через `slickTime/2` после съезда `grip` ≈ `lerp(1, 0.08, 0.5)`; после
+   `slickTime` — `mix == NEUTRAL`; тип без `slickTime` следа не оставляет; в полёте не применяется.
+5. **Хост** `core/src/tank.rs`, `Tank::update`: сразу после вычисления `mix` (≈508–519) —
+   `let mix = surfaces.map_or(mix, |map| surface::apply_slick(map, surface_rules, &mut self.level_state, …, mix, dt));`
+   (заимствования: `position`/угол снять до вызова). Важно: блок `if self.level_state.input_locked() { return }` стоит
+   раньше — в полёте таймер обязан спадать и там: вызвать спад (`apply_slick` с `airborne`) до раннего возврата на **обеих**
+   сторонах в одинаковом месте.
+6. **Реплика** `core/src/client/predictor.rs`, `step_inner` (≈1024): тот же вызов в той же позиции, до ветки
+   `input_locked` — спад, после `tank_mix` — применение. Порядок операций хоста и реплики должен совпадать дословно.
+7. **Паритет и сценарии**:
+   - `mod parity` в `predictor.rs`: сценарий «проезд через масло и поворот после съезда» на карте с масляной полосой
+     (по образцу `oil_hard_turn_slides` ≈4082 и фикстуры с `"44": "oil"` ≈3913) — сходится с хостом в порогах
+     `expect_scenario_thresholds`;
+   - реконсиляция: откат на шаг после съезда воспроизводит тот же остаток (тест на `rewind_level_state`);
+   - `core/tests/sim.rs`: `oil_residue_keeps_sliding_after_leaving_patch` (боковая скорость в повороте через 0.3 с после
+     съезда больше, чем у танка, не заезжавшего на масло; по образцу `oil_turn_keeps_more_sideways_speed_than_asphalt`
+     ≈2808) и `oil_residue_expires` (через `slickTime + ε` — как на асфальте).
+8. **Визуал (небольшой, клиент)**: `src/client/parts/tracks/Tracks.js` рисует масляные следы только на клетке масла. Добавить
+   `surfaceFx.tracks.oil.trail: 1.5` (с) в `render.js`: после съезда с масла часть ещё `trail` секунд оставляет масляные
+   следы с линейно спадающей альфой — свой таймер части (удалённым танкам остаток ядра не виден). Тест в
+   `tests/client/parts/Tracks.test.js`.
+9. Проверки: `npm run core:test`, `npm run core:build`, `npm test -- --silent`, `npm run build`, `npm run sim:scenarios`
+   (`tests/scenarios/downtown_surfaces.json`). Вручную: съезд с масла на перекрёстке с поворотом — танк ещё ~1.5 с заносит,
+   без рывков предсказания.
+10. Документация: `core.md` («Surfaces»: остаток, поля `LevelState`), `configuration.md` (`slickTime`,
+    `surfaceFx.tracks.oil.trail`), `gameplay.md` («Surfaces»). CHANGELOG `### Added`: «Oil leaves the tracks slick for
+    `slickTime` seconds after the tank drives off it».
+
+---
+
+## Этап 7. Бустер: импульс + удержание (проблема 7)
+
+### Причина
+
+`boost_dv` (`core/src/surface.rs` ≈493) даёт `min(boostDv, boostMaxSpeed − v·dir)`. При въезде на 260 (максимум танка,
+`src/data/models.js` `maxForwardSpeed`) прибавка лишь `340 − 260 = 80`. Дальше скорость выше потолка `drive_accel_on`
+не поддерживается тягой и гаснет демпфированием Rapier `linear: 3` (`v *= 1/(1 + 3·dt)` — примерно −95 % за секунду).
+
+### Модель
+
+При срабатывании импульса запускается удержание на `boostTime` секунд: потолок скорости умножается на `boostSpeedFactor`,
+а линейное демпфирование компенсируется Δv-импульсом `+v·linear·dt` (после демпфирования `(v + v·l·dt)/(1 + l·dt) = v`).
+Тяга на газу продолжает разгонять до поднятого потолка. В полёте удержание спадает, но не применяется.
+
+### Шаги
+
+1. **Конфиг** `core/src/config.rs`: `SurfaceType` — `boost_time: Option<f32>`, `boost_speed_factor: Option<f32>`;
+   `SurfaceKind::Boost` — поля `hold: f32` (0 — без удержания), `speed_factor: f32` (1 — без подъёма). `kind()` выводит их из
+   `Option` с дефолтами 0/1; валидация `boostTime ≥ 0`, `boostSpeedFactor ≥ 1`. Тесты разбора.
+2. `src/config/game.js`, `surfaces.types.boost` — стартовые значения:
+   `{ boostDv: 220, boostMaxSpeed: 480, minEntrySpeed: 20, boostTime: 1.2, boostSpeedFactor: 1.8 }` (комментарий: итоговые
+   числа подбираются вручную в `npm run dev`). Синхронизировать копии: `src/config/render.js` → `surfaceFx.boost.boostMinSpeed`
+   (если меняется `minEntrySpeed`), фикстуры тестов с `"boost": {...}` (`core/tests/sim.rs` ≈103, `surface.rs` ≈555) —
+   старые фикстуры можно оставить без новых полей (проверка обратной совместимости).
+3. **Состояние** `LevelState` (`core/src/level.rs`): `pub boost_left: f32`, `pub boost_factor: f32` (`#[serde(default)]`,
+   `Default`: 0 и 1). Сброс на респауне — как в этапе 6.
+4. **Функции** (`core/src/surface.rs` / `motion.rs`):
+   - `boost_dv` возвращает ещё и параметры удержания (например, `Option<(f32 /*hold*/, f32 /*factor*/)>` третьим полем
+     или отдельная `boost_hold(map, …)`) — выбрать вариант, не ломающий существующие тесты `boost_*` без необходимости;
+   - `pub fn boost_hold_mix(mix: SurfaceMix, level_state: &LevelState) -> SurfaceMix` — при `boost_left > 0`:
+     `mix.max_speed *= boost_factor`;
+   - `pub fn boost_damping_dv(v: (f32, f32), linear: f32, level_state: &LevelState, dt: f32) -> (f32, f32)` — при
+     `boost_left > 0`: `(v.0·linear·dt, v.1·linear·dt)`, иначе нули;
+   - таймер: `boost_left = (boost_left − dt).max(0)` один раз за шаг, в одном и том же месте на обеих сторонах (до ветки
+     `input_locked`, как спад масла в этапе 6); при нуле `boost_factor = 1`.
+   Юнит-тесты: без удержания — `boost_dv` прежний бит-в-бит; с удержанием — потолок поднят, компенсация точно гасит
+   демпфирование одной итерации `integrate`.
+5. **Хост** `Tank::update` (`tank.rs` ≈503–607): спад таймера до `input_locked`; `mix = boost_hold_mix(mix, …)` после
+   `tank_mix`/`apply_slick`; при срабатывании импульса (`boost_x != 0 || boost_y != 0`) — записать `boost_left = hold`,
+   `boost_factor = factor`; Δv компенсации от `start_velocity` и `model.damping.linear` — `apply_impulse(… · self.mass)`
+   сразу после импульса бустера.
+6. **Реплика** `step_inner` (`predictor.rs` ≈1071–1090): те же шаги в том же порядке; компенсация прибавляется к
+   `state.vx/vy` до `pre_step_sets`/`resolve_world`/`integrate` (параметр `damping.0` уже есть в функции).
+7. **Паритет и сценарии**:
+   - `mod parity`: «въезд на бустер на полной скорости и 1.5 с после» — сходится; реконсиляция посреди удержания;
+   - `core/tests/sim.rs`: `boost_hold_keeps_speed_above_max` (через `boostTime/2` скорость > `maxForwardSpeed`),
+     `boost_hold_expires`; существующие `boost_fires_once_per_entry` и соседние остаются зелёными;
+   - **прыжок на крышу-парковку** (`downtown.js`: бустер 18–19, рампа 20–23, парковка 24–36 × 30–40, перила по периметру):
+     удержание увеличивает дальность прыжка. Найти тест/сценарий прыжка (`grep -n "parking\|jump" core/tests/sim.rs
+     tests/scenarios/*.json`) и убедиться, что танк приземляется на плиту парковки, а не за перилами; иначе уменьшить
+     `boostTime`/`boostSpeedFactor` или сдвинуть бустер прыжка — и зафиксировать тестом.
+8. Проверки: `npm run core:test`, `npm run core:build`, `npm test -- --silent`, `npm run build`, `npm run sim:scenarios`.
+   Вручную: бустеры брода и прыжка — заметный разгон, держится ~1 с, предсказание без рывков.
+9. Документация: `core.md` («Surfaces»: удержание бустера, поля `LevelState`), `configuration.md` (`boostTime`,
+   `boostSpeedFactor`, новые значения), `gameplay.md` («Surfaces»). CHANGELOG `### Added`: «Boost plates keep the speed
+   boost for `boostTime` seconds»; `### Changed`: новые значения бустера.
+
+---
+
+## Этап 8. Звук воды (проблема 6)
+
+### Звук (скачивает пользователь)
+
+Рекомендуемые варианты с бесплатной лицензией:
+
+| Вариант | Лицензия | Что взять |
+| --- | --- | --- |
+| [40 CC0 water / splash / slime SFX](https://opengameart.org/content/40-cc0-water-splash-slime-sfx) (OpenGameArt, архив `water-splash-slime-sfx.zip`) | CC0, без атрибуции | Одна из петель воды или звуков вброд — основа петли; один всплеск — для въезда |
+| [Water Wading.wav — Motion_S](https://freesound.org/people/Motion_S/sounds/221764/) (Freesound, 15 с, WAV) | CC BY 4.0 — нужна атрибуция (ссылка в `sounds.js`) | Отрезок ходьбы вброд, закольцевать |
+| [Water Splash 1 — qubodup](https://freesound.org/people/qubodup/sounds/210428/) (Freesound, 2.4 с) | CC0 | Разовый всплеск при въезде (необязательно) |
+
+Петлю перед добавлением обрезать и склеить без щелчка на стыке (Audacity: кроссфейд 50–100 мс), длина 2–4 с.
+Файл положить в `assets/audio-raw/tank-water.wav` (всплеск — `water-splash.wav`).
+
+### Шаги
+
+1. Прочитать `scripts/process-audio.js` и `scripts/copy-game-sounds.js`: берут ли они все файлы из `assets/audio-raw/` или
+   список. При списке — добавить `tank-water` (и `water-splash`). `npm run audio:process`, `npm run audio:check` — громкость в
+   норме.
+2. `src/config/sounds.js`: `tankWater: { file: 'tank-water', priority: 55, loop: true, volume: 0.4 }` со ссылкой-источником в
+   комментарии (для CC BY — автор и лицензия); при всплеске — `waterSplash: { file: 'water-splash', priority: 60, volume: 0.5 }`.
+   Проверить `tests/config/*` на список звуков и `scripts/check-pack.js`.
+3. `src/config/render.js`, `surfaceFx.water.sound`: `{ minVolume: 0.25, fullSpeed: 120, rate: { min: 0.9, max: 1.1 } }` —
+   громкость от скорости (стоящий в воде танк еле слышно плещет), скорость воспроизведения чуть растёт с ходом.
+4. `src/client/parts/Tank.js` (у части уже есть зависимости `soundManager` и `surfaces`, см.
+   `componentDependencies` в `src/config/client.js`; сохранить `dependencies.surfaces` в конструкторе, если ещё не сохранено):
+   - `_updateWaterSound()` из `update()` после `_updateLights()`: условие `this._condition > 0 && this._vz === 0 &&
+     this._surfaces?.kindAt(this._worldX, this._worldY, this._physLevel) === 'water'`;
+   - скорость — `Math.hypot(data[M1_VX], data[M1_VY])` (проверить имена полей в `src/client/snapshotFields.js`);
+     `factor = clamp(speed / fullSpeed, 0, 1)`, `volume = baseVolume · (minVolume + (1 − minVolume)·factor)`,
+     `rate = lerp(rate.min, rate.max, factor)`; данные звука — как у двигателя: `position` мировая точка, `spatial:
+     !this._isLocal()`;
+   - вход в воду → `registerSound('tankWater', …)` (id в `this._waterSoundId`), в воде → `updateSoundData`, выход / смерть
+     (`create()` ветка `condition === 0`, `destroySounds`) / `destroy` → `unregisterSound`;
+   - всплеск (если добавлен): разово при входе в воду со скоростью ≥ `surfaceFx.water.entryMinSpeed`. Брызги уже рисует
+     `Dust.js` — звук кладётся только в `Tank`, чтобы не дублировался.
+5. Тесты `tests/client/parts/Tank.test.js` (мок `soundManager` и `surfaces`): регистрация при въезде, обновление
+   громкости от скорости, снятие при выезде, смерти и `destroy`; в полёте (`vz ≠ 0`) звука нет; без сервиса `surfaces` — ничего.
+6. Проверки: `npx eslint .`, `npm test -- --silent`, `npm run build` (звук попал в `dist/sounds/`). Вручную: канал `downtown`
+   (брод 45–50, мосты) — плеск слышен, стихает на выезде, чужой танк в воде слышен пространственно.
+7. Документация: `configuration.md` (`sounds.js`: `tankWater`; `surfaceFx.water.sound`), `extending.md` («New sound» — если
+   процесс отличался), `gameplay.md` («Surfaces»: звук воды). CHANGELOG `### Added`: «Water splashing sound under the tracks».
+
+---
+
+## Итоговая проверка (после всех этапов)
+
+```bash
+npx eslint .
+npm run core:test
+npm run core:build
+npm test -- --silent
+npm run build
+npx vimp-contract
+npm run sim:scenarios
+```
+
+Ручной прогон `npm run dev` на `downtown` по всем 8 пунктам исходного отчёта о тестировании, за обе команды, с ресайзом
+окна. Затем — перенос этого файла в `plan/done/` (`git mv`, без коммита).
+
+## Риски
+
+1. **Паритет** (этапы 6, 7): порядок вызовов в `Tank::update` и `Predictor::step_inner` обязан совпадать дословно;
+   неудача паритета блокирует этап.
+2. **Прыжок с бустера** (этап 7): удержание увеличивает дальность прыжка на парковку — проверяется тестом.
+3. **Производительность граней** (этап 3): порядок индексов переписывается раз в кадр; при просадке FPS — только при смене
+   знака видимости граней (кешировать признак по квадам).
+4. **Этап 4** начинается с диагностики: если гипотезы H1–H3 не подтвердятся, сначала записать фактическую причину сюда и
+   только потом исправлять.
+5. **Поле `game.roofs`** (этап 2): если разбор `game` на хосте строгий, его нужно добавить в `MapGame`, иначе карта не
+   загрузится.

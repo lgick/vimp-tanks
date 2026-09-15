@@ -7,6 +7,7 @@ import {
   flicker,
   fnv1a,
   isOnScreen,
+  lightLevels,
   mapKeyOf,
   projectLight,
 } from '../../../src/client/lighting/lightMath.js';
@@ -163,5 +164,21 @@ describe('lightMath: клетки', () => {
       { col: 5, row: 0, length: 1 },
       { col: 0, row: 2, length: 1 },
     ]);
+  });
+});
+
+describe('lightMath: уровни источника на рампе', () => {
+  it('на рампе — оба соседних уровня', () => {
+    expect(lightLevels(0, 0.3, false)).toEqual([0, 1]);
+    expect(lightLevels(1, 0.7, false)).toEqual([0, 1]);
+  });
+
+  it('на целой высоте — один уровень', () => {
+    expect(lightLevels(1, 1, false)).toEqual([1]);
+    expect(lightLevels(0, 0, false)).toEqual([0]);
+  });
+
+  it('в полёте — уровень отрисовки', () => {
+    expect(lightLevels(1, 0.4, true)).toEqual([0]);
   });
 });

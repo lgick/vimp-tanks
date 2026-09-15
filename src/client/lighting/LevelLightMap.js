@@ -29,13 +29,22 @@ const WHITE = 0xffffff;
 //   L >= 1  фон БЕЛЫЙ (умножение на белый картинку не меняет), поверх —
 //           маска этажа цвета `ambient` в проекции уровня, затем источники.
 //           Вне этажа карта остаётся белой, и уровень 0 не темнеет дважды.
+//
+// Поверх источников — вершины объёмов уровня (`setTops`): прямоугольники
+// клеток цвета `ambient` в проекции `(L + volume) · shear`. Боковые грани
+// остаются освещёнными, верх стены фары наземного танка не ловит.
+//
+// `roof: true` — карта крыш уровня (`game.roofs`): та же маска и те же
+// источники, но своя дыра — она открывается, только когда крыша закрывает
+// танк (ведёт сервис).
 export default class LevelLightMap {
-  constructor({ level, ambient, resolution }) {
+  constructor({ level, ambient, resolution, roof = false }) {
     this.level = level;
     this.ambient = ambient;
+    this.roof = roof;
 
     this.overlay = new Container();
-    this.overlay.label = `lighting-${level}`;
+    this.overlay.label = roof ? `lighting-roof-${level}` : `lighting-${level}`;
     this.overlay.zIndex = levelZ(LIGHT_OVERLAY_BASE_Z, level);
     this.overlay.eventMode = 'none';
     // границы фильтра — ровно экран: без них Pixi считал бы их по всем
@@ -60,6 +69,11 @@ export default class LevelLightMap {
 
     this.lights = new Container();
     this.world.addChild(this.lights);
+
+    // вершины объёмов: по графике на высоту объёма, `{ graphics, volume }`
+    this.tops = new Container();
+    this.world.addChild(this.tops);
+    this.topGroups = [];
 
     // спрайты источников переиспользуются между кадрами: число видимых
     // источников меняется, объекты — нет
@@ -104,6 +118,37 @@ export default class LevelLightMap {
     }
   }
 
+  // вершины объёмов: `groups` — `[{ volume, runs }]`, прогоны клеток в
+  // мировых единицах, как у маски. Проекцию высоты даёт трансформ графики
+  setTops(groups, step, scale) {
+    for (const group of this.topGroups) {
+      group.graphics.destroy();
+    }
+
+    this.topGroups = [];
+
+    for (const { volume, runs } of groups) {
+      if (!runs.length) {
+        continue;
+      }
+
+      const graphics = new Graphics();
+
+      for (const run of runs) {
+        graphics.rect(
+          run.col * step * scale.x,
+          run.row * step * scale.y,
+          run.length * step * scale.x,
+          step * scale.y,
+        );
+      }
+
+      graphics.fill(this.ambient);
+      this.tops.addChild(graphics);
+      this.topGroups.push({ graphics, volume });
+    }
+  }
+
   // контр-трансформ сцены: оверлей растянут ровно на экран, а мир внутри —
   // в координатах сцены
   place(stage, screen, camera, shear) {
@@ -122,6 +167,10 @@ export default class LevelLightMap {
 
     if (this.mask) {
       applyParallax(this.mask, camera, this.level * shear, 1);
+    }
+
+    for (const { graphics, volume } of this.topGroups) {
+      applyParallax(graphics, camera, (this.level + volume) * shear, 1);
     }
   }
 
@@ -172,6 +221,7 @@ export default class LevelLightMap {
     }
 
     this.pool = [];
+    this.topGroups = [];
 
     overlay.destroy({ children: true, texture: false, textureSource: false });
   }

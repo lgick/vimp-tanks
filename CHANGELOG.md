@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `game.roofs` map field: per level, the tiles that are roofs. A roof needs its
+  own render layer; it stays opaque (and keeps its level's light) until it
+  actually covers the local tank. Render config `seeThrough.roofMargin`.
 - The `downtown` map: a night city on two levels and the reference for the
   `game` map fields — sand, mud, water, oil, conveyors and boost plates,
   destructible fences, crates and barrels, night lighting with lamps,
@@ -168,6 +171,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Volumes are drawn as solid side walls plus a top instead of stacked
+  copies (`volume.faces`; `false` restores the old slices). A side wall is
+  textured from a strip of `volume.faceTileRepeats` copies of its own tile —
+  one across and as many down as the wall takes on screen — so a brick tile
+  reads as brick of an even size on every wall, and it overlaps the top by
+  `volume.faceBleedPx` screen pixels so the seam does not flicker while the
+  camera zooms out with speed.
 - **The turret and firing now work while airborne**; only driving is locked.
   A tank thrown off a ramp can aim and shoot through the whole arc, while it
   stays invulnerable to rays and blasts as before.
@@ -211,6 +221,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Roofs no longer turn see-through (and lose neon light) whenever the player
+  is on a lower level; headlights no longer light building tops.
+- Headlights now light the whole ramp while climbing or descending: on a
+  ramp a tank's headlights and glow go into the light maps of both adjacent
+  levels, so the upper half of the wedge is no longer dark.
 - An explosion measured the distance to a map body, and applied its push, at
   the body's corner instead of its centre, so crates were spun and caught or
   missed depending on their orientation. Blasts now use the collider centre:

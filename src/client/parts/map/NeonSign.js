@@ -84,8 +84,11 @@ export default class NeonSign {
   }
 
   // `t` — время анимаций (секунды) или null, когда анимации выключены;
-  // `camera` — центр камеры кадра; `levelView` — прозрачность эмиссива
-  update(t, camera, levelView) {
+  // `camera` — центр камеры кадра; `levelView` — прозрачность эмиссива;
+  // `roofAlpha` — прозрачность крыши под вывеской (null — не на крыше):
+  // крыша непрозрачна, пока не закрывает танк, и вывеска обязана гаснуть
+  // вместе с ней, а не по кругу вокруг игрока
+  update(t, camera, levelView, roofAlpha = null) {
     const light = t === null ? { core: 1, glow: 1 } : brightness(t, this._seed, this._sign.flicker);
 
     if (!this.emissive) {
@@ -97,7 +100,13 @@ export default class NeonSign {
 
     const k = this._level * parallaxConfig.shear;
     const point = offsetPoint(this._worldX, this._worldY, camera, k);
-    const see = levelView ? levelView.alphaFor(this._level, point.x, point.y, 0) : 1;
+    let see = 1;
+
+    if (roofAlpha !== null) {
+      see = roofAlpha;
+    } else if (levelView) {
+      see = levelView.alphaFor(this._level, point.x, point.y, 0);
+    }
 
     for (const sprite of [this.glow, this.core]) {
       sprite.position.set(point.x, point.y);

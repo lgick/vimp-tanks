@@ -5,6 +5,7 @@ import { cameraCenter } from '../camera.js';
 import { offsetPoint } from '../parallax.js';
 import { tiltCorners, tiltShade, scaleTint } from '../tilt.js';
 import { landingImpact } from '../landing.js';
+import { lightLevels } from '../lighting/lightMath.js';
 import {
   parallax as parallaxConfig,
   shadow as shadowConfig,
@@ -514,6 +515,9 @@ export default class Tank extends Container {
 
     const level = this._level;
     const z = this._z;
+    // на рампе (`vz` кадра — точный флаг полёта, на рампе он 0) свет идёт в
+    // оба соседних уровня: клин затемняет оверлей нижнего, плиту — верхнего
+    const levels = lightLevels(this._physLevel, z, this._vz !== 0);
     const points = this._headlightPoints();
 
     for (let i = 0; i < 2; i += 1) {
@@ -522,6 +526,7 @@ export default class Tank extends Container {
         y: points[i].y,
         z,
         level,
+        levels,
         rotation: this.rotation,
       });
     }
@@ -531,6 +536,7 @@ export default class Tank extends Container {
       y: this._worldY,
       z,
       level,
+      levels,
     });
 
     // смена отрисовочного уровня: блик переезжает в эмиссив нового уровня

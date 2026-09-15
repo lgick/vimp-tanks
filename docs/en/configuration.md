@@ -214,6 +214,7 @@ it changes both sides at once.
 | `minAlpha` | Opacity at the centre of the hole |
 | `layerAlpha` | `'layer'` mode: opacity of the whole slab |
 | `fadeRate` | Per second: how fast the transition is smoothed — an instant jump reads as blinking every time you drive under an edge |
+| `roofMargin` | World units: the margin with which a roof (`game.roofs`) counts as covering the tank. `0` by default, the same rule as for walls: a larger margin reaches the roof cell while the tank merely stands next to the building, and the roof opens (its neon dims) without covering anything |
 | `lowerTint` | Tint for levels **below** the player: "darker means lower" |
 
 | `parallax` | Meaning |
@@ -224,9 +225,12 @@ it changes both sides at once.
 | `volume` | Meaning |
 | --- | --- |
 | `enabled` | `false` switches layer extrusion and the ramp wedge off entirely — the fallback path on a weak machine |
-| `slices` | Extrusion slices per layer: the whole effect costs `slices` draw calls regardless of how many walls there are. Layer VOLUMES only (buildings, railings) — their side face is vertical |
+| `faces` | `true` (default) draws a volume as one solid piece: the side walls as a mesh (one quad per exposed cell side, inner edges skipped) plus a single copy of the layer at the top height. A wall does NOT sample the layer's baked picture — every tile gets its own side texture, a strip of `faceTileRepeats` copies of its image stacked vertically. The tile spans the wall once across and as many copies down as the wall's depth from the camera calls for (measured along the face's normal, so the courses of brick stay parallel along a straight wall instead of fanning out), so bricks come out the same size on every wall. `false` falls back to the stack of `slices` copies, whose steps show at the screen edge and with the camera zoomed out |
+| `faceTileRepeats` | Copies of the tile in a side texture's strip. A wall takes as many of them as it covers on screen, which is what keeps the brick size even; the strip is finite, so the longest walls stretch its last copy. Hardware texture repeat is not used — a batched mesh clamps the coordinates instead, which smeared the tile's edge column into horizontal stripes. Costs one `step × step·N` texture per volume tile |
+| `faceBleedPx` | How far, in SCREEN pixels, a side wall reaches above the volume's top. The top is a sprite and the wall is a mesh, so at a fractional stage scale a one-pixel crack opens between the two rasterisations and the seam flickers; the overlap hides under the top, which is drawn later. Screen pixels rather than world units because the engine zooms the camera out with speed — a world-sized margin stopped covering the crack once the camera pulled back. `0` brings the flicker back |
+| `slices` | With `faces: true` — only the density of the "the volume covers the tank" check (`layerSeeThrough.js`); with `faces: false` — also the number of layer copies, i.e. `slices` draw calls per layer. Layer VOLUMES only (buildings, railings) |
 | `rampSegments` | Ramp-wedge segments per run cell. The wedge is a slope (one mesh per run); this is its vertex density: the shift along the run grows quadratically, and at 4 segments per cell the polyline is indistinguishable from it |
-| `sideTint` | Tint of the lower slices — the side faces of the block, and of the ramp wedge's skirt |
+| `sideTint` | Tint of the side walls of a volume (or its lower slices) and of the ramp wedge's skirt |
 
 | `shadow` | Meaning |
 | --- | --- |
@@ -288,10 +292,28 @@ service receives them through the parts (`registerTextures` merges a partial
 set) and gives `Tank` the head texture for its glares
 (`lighting.texture('head')`).
 
+A source lands only in the light map of its `level`. A source may also carry
+`levels: number[]`, which puts it into every listed level's map, with a single
+projection by `z`. `maxLights` counts each placed sprite. `Tank` uses this on
+a ramp: while the ground under it is fractional (`0 < z`, not a whole level,
+`vz = 0`), its headlights and glow light both `floor(z)` and `ceil(z)`. The
+ramp wedge is darkened by the lower level's overlay, and the slab the beam
+reaches by the upper one. Otherwise the level is the render level
+(`lightLevels` in `lightMath.js`).
+
+Roofs (`game.roofs`, [below](#roofs-gameroofs)) get a light map of their own
+per level, with the same sources as the level's ordinary map; the ordinary
+floor mask leaves roof cells out. Its hole opens only while a roof covers the
+drawn point of the local tank, not whenever the player is lower. A level's
+map also covers the tops of its volumes: over the sources it draws the cells
+of every volume tile in the projection `(L + volume) · shear` in `ambient`.
+Headlights of a tank on the ground still light the side walls, but not the
+top of a building.
+
 The service (`componentDependencies.lighting`: `Map`, `Tank`,
 `ExplosionEffect`, `ShotEffect`) exposes `enabled`, `attachStage`,
 `acquireMap`/`releaseMap` (per-key counter, owner-bound mask),
-`setLevelMask`, `registerTextures`, `texture`,
+`setLevelMask` (with `{ roof }`), `setVolumeTops`, `registerTextures`, `texture`,
 `addLight`/`updateLight`/`removeLight`, `flash`,
 `addEmissive`/`removeEmissive`, `isNight` and `render`.
 
@@ -656,6 +678,25 @@ Only the client reads it; the core ignores the key.
 On a night map no render layer of any level may have a base `zIndex` of 40
 or more: the light map lies at 40 and the emissive layer at 45
 (`tests/config/game.test.js` checks it together with the lamp cells).
+
+#### Roofs (`game.roofs`)
+
+```js
+game: {
+  roofs: { 1: [T.ROOF] },
+},
+```
+
+Only the client reads it; the core ignores the key. Level → the tiles that
+are roofs of that level (the key is a level number). A roof render layer is
+not see-through while the player is lower: its hole — and the hole of its
+light map — opens only when the roof covers the drawn point of the tank
+(with `seeThrough.roofMargin`). Bridges and overpasses keep the old rule.
+
+A roof needs its own render layer (`levels[L].layers`) holding roof tiles
+only; a layer that mixes roofs with other tiles logs a warning and behaves
+like an ordinary slab. Signs and decals standing on a roof go on the roof's
+layer: they fade together with it.
 
 #### Animated elements (`game.animatedTiles`, `game.signs`, `game.decals`)
 

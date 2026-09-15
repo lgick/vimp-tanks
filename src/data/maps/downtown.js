@@ -342,9 +342,11 @@ export default {
       map: level1,
       floor: [T.SLAB, T.RAILING, T.ROOF, T.OIL],
       walls: [T.RAILING],
-      // вывески и вентиляторы стоят на слое 1 (крыши), а не на перилах
+      // крыши — свой слой 2 (`game.roofs`): они непрозрачны, пока не
+      // закрывают танк; вывески и вентиляторы стоят на нём, а не на перилах
       layers: {
-        1: [T.SLAB, T.ROOF, T.OIL],
+        1: [T.SLAB, T.OIL],
+        2: [T.ROOF],
         4: [T.RAILING],
       },
       volumes: {
@@ -490,11 +492,14 @@ export default {
       [T.BOOST_E]: { kind: 'frames', frames: [T.BOOST_E, T.BOOST_E_2], fps: 2 },
     },
 
+    // крыши уровня 1: отдельный рендер-слой, см. `levels[1].layers`
+    roofs: { 1: [T.ROOF] },
+
     signs: [
       {
         cell: [40, 30],
         level: 1,
-        layer: 1,
+        layer: 2,
         text: 'HOTEL',
         color: 0xff3ad0,
         size: 18,
@@ -504,7 +509,7 @@ export default {
       {
         cell: [55, 30],
         level: 1,
-        layer: 1,
+        layer: 2,
         text: 'BAR',
         color: 0x3ae0ff,
         size: 20,
@@ -514,7 +519,7 @@ export default {
       {
         cell: [40, 41],
         level: 1,
-        layer: 1,
+        layer: 2,
         text: 'CLUB',
         color: 0x9a5aff,
         size: 18,
@@ -525,7 +530,7 @@ export default {
       {
         cell: [55, 41],
         level: 1,
-        layer: 1,
+        layer: 2,
         text: 'MOTEL',
         color: 0xff5a3a,
         size: 16,
@@ -535,7 +540,7 @@ export default {
       {
         cell: [5, 47],
         level: 1,
-        layer: 1,
+        layer: 2,
         text: 'GUNS',
         color: 0x5aff7a,
         size: 16,
@@ -545,7 +550,7 @@ export default {
       {
         cell: [90, 47],
         level: 1,
-        layer: 1,
+        layer: 2,
         text: 'GUNS',
         color: 0x5aff7a,
         size: 16,
@@ -556,10 +561,10 @@ export default {
 
     // вентиляторы на крышах промзоны
     decals: [
-      { cell: [6, 5], level: 1, layer: 1, frame: T.FAN, kind: 'rotate', rps: 1.5 },
-      { cell: [8, 5], level: 1, layer: 1, frame: T.FAN, kind: 'rotate', rps: 1.1 },
-      { cell: [27, 5], level: 1, layer: 1, frame: T.FAN, kind: 'rotate', rps: 1.8 },
-      { cell: [29, 5], level: 1, layer: 1, frame: T.FAN, kind: 'rotate', rps: 0.9 },
+      { cell: [6, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 1.5 },
+      { cell: [8, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 1.1 },
+      { cell: [27, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 1.8 },
+      { cell: [29, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 0.9 },
     ],
   },
 

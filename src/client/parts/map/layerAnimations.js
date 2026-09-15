@@ -114,8 +114,12 @@ function onScreen(screen) {
 
 // Каждая отрисовка слоя. Кадры тайлов и декалей — один раз на тик (и
 // проверка экрана тоже); позиции эмиссивных вывесок — каждую отрисовку:
-// они едут за камерой
-export function updateLayerAnimations(state, { camera, levelView, screen }) {
+// они едут за камерой. `roofAlpha` — прозрачность слоя-крыши (или null):
+// вывеска на крыше гаснет вместе с ней
+export function updateLayerAnimations(
+  state,
+  { camera, levelView, screen, roofAlpha = null },
+) {
   const enabled = animationsConfig.enabled;
   const t = enabled
     ? quantizeTime(animationClock.now(), animationsConfig.maxFps)
@@ -133,7 +137,7 @@ export function updateLayerAnimations(state, { camera, levelView, screen }) {
   }
 
   for (let i = 0; i < state.signs.length; i += 1) {
-    state.signs[i].update(t, camera, levelView);
+    state.signs[i].update(t, camera, levelView, roofAlpha);
   }
 }
 

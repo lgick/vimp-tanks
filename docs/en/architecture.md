@@ -252,10 +252,17 @@ The consequences the parts implement themselves:
   transform.
 - **Volumes shift with the camera and occlude.** A render layer with a
   height (`volumes` in the map, `data.volume` in the part) is extruded by
-  `Map` itself: `slices` sprites of the layer's own baked picture, each at a
-  larger `k` than the last, so walls open up as the player moves. Slices
-  rather than blocks: the effect costs `slices` draw calls no matter how
-  many walls the map has. They live in an **occluder container** — a sibling
+  `Map` itself: side walls as a mesh (`buildVolumeWalls` — one quad per
+  exposed cell side, textured from a strip of `volume.faceTileRepeats`
+  copies of that cell's tile — its own side texture per tile, so bricks keep
+  one size — the lower edge at
+  `level`, the upper one at `level + volume` plus `volume.faceBleedPx`
+  screen pixels of overlap, every vertex and its vertical UV recomputed per
+  frame (`updateWallMesh`) like the ramp wedge) plus one sprite of the layer's own baked picture at the top
+  height, so walls open up as the player moves and read as one solid block.
+  Faces turned away from the camera are drawn first (`orderWallMesh`
+  rewrites the index order only when a face changes side). `volume.faces =
+  false` falls back to `slices` stacked sprites. They live in an **occluder container** — a sibling
   of the part on the stage whose `zIndex` sits ABOVE the dynamics of its own
   level (`OCCLUDER_BASE_Z`, still far below `parallax.levelZStride`), so a
   tank standing behind a wall is drawn behind it instead of climbing onto
@@ -438,7 +445,7 @@ knows nothing about them.
   `img`, never unloaded; the texture is applied only if the part is not
   destroyed and the body is still in that state after the `await`. Alpha,
   tint and parallax are unchanged.
-- **A layer is baked once.** The volume slices are sprites over the SAME
+- **A layer is baked once.** The volume walls and top are drawn with the SAME
   baked texture as the flat layer, and only its owner (`mapSprite`) frees
   it. The ramp wedge has a second baked texture of its own (ramp tiles
   only), shared by every run's mesh, so `destroy()` releases the source

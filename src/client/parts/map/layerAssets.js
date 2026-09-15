@@ -4,7 +4,11 @@ import { applyParallax } from '../../parallax.js';
 import { bakeTileLayer } from '../bakeTileLayer.js';
 import { buildRampLanes } from '../rampLanes.js';
 import { cellOfEdge } from './tileGrid.js';
-import { buildVolumeSlices, buildRampMeshes } from './extrusion.js';
+import {
+  buildVolumeSlices,
+  buildVolumeWalls,
+  buildRampMeshes,
+} from './extrusion.js';
 import {
   parallax as parallaxConfig,
   volume as volumeConfig,
@@ -52,6 +56,7 @@ const NOTHING = {
   occluder: null,
   slices: [],
   rampTexture: null,
+  wallTextures: [],
 };
 
 // Освобождение всего, что успела собрать сборка уничтоженному парту.
@@ -64,6 +69,7 @@ function disposeAssets({
   occluder,
   slices,
   rampTexture,
+  wallTextures,
 }) {
   for (const slice of slices) {
     slice.target.parent?.removeChild(slice.target);
@@ -74,6 +80,10 @@ function disposeAssets({
 
   if (rampTexture) {
     rampTexture.destroy(true);
+  }
+
+  for (const texture of wallTextures ?? []) {
+    texture.destroy(true);
   }
 
   // запечённая текстура отдаётся ОТДЕЛЬНО от спрайта, а не через
@@ -152,8 +162,9 @@ export async function buildLayerAssets(spec) {
   }
 }
 
-// Экструзия слоя: объём (`volume`) — K копий ТОЙ ЖЕ запечённой картинки,
-// каждая следующая сдвинута от центра камеры сильнее предыдущей; клин
+// Экструзия слоя: объём (`volume`) — боковые грани мешем и одна копия ТОЙ
+// ЖЕ запечённой картинки на высоте верха (`volume.faces`), либо, путём
+// отхода, K копий со ступенчатым сдвигом; клин
 // рампы — по мешу на прогон, наклонная плоскость с непрерывно растущей
 // высотой (`buildRampMeshes`, src/client/parts/map/extrusion.js).
 //
@@ -168,6 +179,7 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
   const count = volumeConfig.slices;
   const shear = parallaxConfig.shear;
   const built = [];
+  const wallTextures = [];
   let occluder = null;
   let rampTexture = null;
 
@@ -178,16 +190,51 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
       spec.level,
     );
 
-    built.push(
-      ...buildVolumeSlices({
-        bakedTexture,
-        level: spec.level,
-        volume: spec.volume,
-        shear,
-        count,
-        sideTint: volumeConfig.sideTint,
-      }),
-    );
+    if (volumeConfig.faces) {
+      const textures = await bakeWallTextures(spec, baseTexture, wallTextures);
+
+      // выпечка боковых текстур — это ещё await на тайл: парт мог уйти
+      if (spec.isAborted()) {
+        return { occluder, slices: built, rampTexture, wallTextures };
+      }
+
+      built.push(
+        ...buildVolumeWalls({
+          map: spec.map,
+          tiles: spec.tiles,
+          step: spec.step,
+          baseScale: spec.baseScale,
+          level: spec.level,
+          volume: spec.volume,
+          shear,
+          sideTint: volumeConfig.sideTint,
+          textures,
+          tileRepeats: volumeConfig.faceTileRepeats,
+        }),
+      );
+
+      // верх объёма — сам слой на полной высоте; грани лягут под него
+      // сортировкой по k ниже
+      const top = new Sprite(bakedTexture);
+
+      top.tint = 0xffffff;
+      built.push({
+        target: top,
+        k: (spec.level + spec.volume) * shear,
+        occluder: true,
+      });
+    } else {
+      built.push(
+        ...buildVolumeSlices({
+          bakedTexture,
+          level: spec.level,
+          volume: spec.volume,
+          shear,
+          count,
+          sideTint: volumeConfig.sideTint,
+        }),
+      );
+    }
   }
 
   const runs = rampLanes(spec);
@@ -206,7 +253,7 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
     // бросается, а освобождение уходит одним местом наверх
     // (`disposeAssets` в `buildLayerAssets`)
     if (spec.isAborted()) {
-      return { occluder, slices: built, rampTexture };
+      return { occluder, slices: built, rampTexture, wallTextures };
     }
 
     built.push(
@@ -223,7 +270,7 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
   }
 
   if (spec.isAborted()) {
-    return { occluder, slices: built, rampTexture };
+    return { occluder, slices: built, rampTexture, wallTextures };
   }
 
   // порядок отрисовки — по высоте: выше срез, позже он нарисован. Плоский
@@ -240,7 +287,39 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
     (slice.occluder ? occluder : spec.container).addChild(slice.target);
   }
 
-  return { occluder, slices: built, rampTexture };
+  return { occluder, slices: built, rampTexture, wallTextures };
+}
+
+// Боковая текстура на КАЖДЫЙ тайл слоя: ПОЛОСА из `faceTileRepeats` копий
+// его картинки по вертикали. Общая запечённая картинка слоя для граней не
+// годится — по ней тайл не повторяется, и кирпич растягивался бы тем
+// сильнее, чем длиннее и выше грань (`extrusion.js`, `updateWallMesh`).
+// Аппаратный повтор координат тоже не годится: на батченом меше он не
+// действует, координаты зажимаются, и грань размазывает крайний столбец
+// тайла.
+//
+// Собранные текстуры складываются в `sink`: владеет ими слой и отдаёт их
+// в своём `destroy` (как текстуру клина рампы)
+async function bakeWallTextures(spec, baseTexture, sink) {
+  const textures = new Map();
+
+  const repeats = Math.max(1, Math.round(volumeConfig.faceTileRepeats) || 1);
+
+  for (const tile of spec.tiles) {
+    const texture = await bakeTileLayer({
+      baseTexture,
+      spriteSheetData: spec.spriteSheetData,
+      map: Array.from({ length: repeats }, () => [tile]),
+      tiles: [tile],
+      step: spec.step,
+      renderer: spec.renderer,
+    });
+
+    sink.push(texture);
+    textures.set(tile, texture);
+  }
+
+  return textures;
 }
 
 // Полосы рамп ЭТОГО слоя в клетках его грида. Прогоны приходят из ядра

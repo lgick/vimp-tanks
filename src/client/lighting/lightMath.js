@@ -1,4 +1,5 @@
 import { offsetPoint } from '../parallax.js';
+import { renderLevel } from '../levelZ.js';
 import { baseScale } from '../parts/map/tileGrid.js';
 
 // Чистые функции освещения: ключ карты, клетки → мир, проекция источника,
@@ -116,6 +117,18 @@ export function projectLight(x, y, z, camera, stage, shear) {
     screenX: point.x * stage.scale.x + stage.position.x,
     screenY: point.y * stage.scale.y + stage.position.y,
   };
+}
+
+// уровни, в карты освещённости которых светит источник на высоте z:
+// на рампе — оба соседних, иначе — один уровень отрисовки. Клин рампы
+// нарисован в уровне `from` и затемняется его оверлеем, а плита, на которую
+// выезжает луч, — оверлеем верхнего уровня: свет нужен обоим
+export function lightLevels(level, z, airborne) {
+  if (!airborne && Math.abs(z - Math.round(z)) > 1e-3) {
+    return [Math.floor(z), Math.ceil(z)];
+  }
+
+  return [renderLevel(level, z)];
 }
 
 // попадает ли круг охвата `reach` (экранные пиксели) в прямоугольник экрана

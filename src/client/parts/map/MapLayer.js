@@ -6,7 +6,11 @@ import { baseScale, tileGrid } from './tileGrid.js';
 import { createHole, dispose as disposeHole } from './holeOverlay.js';
 import { buildLayerAssets } from './layerAssets.js';
 import { updateSeeThrough } from './layerSeeThrough.js';
-import { updateRampMesh } from './extrusion.js';
+import {
+  updateHeightMesh,
+  updateWallMesh,
+  orderWallMesh,
+} from './extrusion.js';
 import { cellsOfTiles, mapKeyOf } from '../../lighting/lightMath.js';
 import {
   buildLayerAnimations,
@@ -61,6 +65,8 @@ export default class MapLayer {
     // (или спрайт) и его высота в долях сдвига
     this._slices = [];
     this._rampTexture = null;
+    // боковые текстуры объёма: по одной на тайл слоя, с повтором
+    this._wallTextures = [];
     this.mapSprite = null; // спрайт для "запеченной" карты
 
     this._assetUrl = `${imageBase}${data.spriteSheet.img}`;
@@ -83,6 +89,12 @@ export default class MapLayer {
     // массиву зовётся до `volume.slices` раз на слой в кадр
     this._tileSet = new Set(this._tiles);
     this._floorSet = new Set(this._floor);
+
+    // крыша (`game.roofs`): слой, ВСЕ тайлы которого — крыши его уровня. Она
+    // не прозрачна и не снимает затемнение, пока не закрывает сам танк.
+    // Крыше нужен свой рендер-слой: в смеси с плитой прозрачность решалась
+    // бы одним правилом на обе
+    this._roof = isRoofLayer(data.game, this._level, this._tiles);
     this._spriteSheetData = data.spriteSheet;
     this._step = data.step;
     this._layer = Number(data.layer) || 1;
@@ -159,11 +171,24 @@ export default class MapLayer {
       );
 
       // вклад слоя в маску этажа: клетки его тайлов пола (перила уже в
-      // `floor`); вклады слоёв одного уровня сервис объединяет
+      // `floor`); вклады слоёв одного уровня сервис объединяет. Крыша
+      // вкладывает только свои клетки — в отдельную карту крыш
       if (this._level >= 1) {
         this._lighting.setLevelMask(
           this._level,
-          cellsOfTiles(this._map, this._floor),
+          cellsOfTiles(this._map, this._roof ? this._tiles : this._floor),
+          this,
+          { roof: this._roof },
+        );
+      }
+
+      // вершины объёмов: карта освещённости уровня закрывает их полумраком,
+      // иначе верхний срез стены ловит фары танка на земле
+      if (this._volume > 0) {
+        this._lighting.setVolumeTops(
+          this._level,
+          cellsOfTiles(this._map, this._tiles),
+          this._volume,
           this,
         );
       }
@@ -212,6 +237,7 @@ export default class MapLayer {
     this._occluder = assets.occluder;
     this._slices = assets.slices;
     this._rampTexture = assets.rampTexture;
+    this._wallTextures = assets.wallTextures ?? [];
 
     // Анимации — после запекания (тайл-лист уже загружен) и после
     // синхронного `acquireMap` конструктора: вывеска спрашивает у сервиса
@@ -258,6 +284,7 @@ export default class MapLayer {
       grid: this._grid,
       tileSet: this._tileSet,
       floorSet: this._floorSet,
+      roof: this._roof,
     };
   }
 
@@ -288,10 +315,17 @@ export default class MapLayer {
     }
 
     if (this._animations) {
+      // вывески на крыше гаснут вместе с ней, а не по кругу вокруг игрока
+      const roofAlpha =
+        this._roof && this._levelView
+          ? 1 + (this._levelView.cfg.minAlpha - 1) * this._hole.strength
+          : null;
+
       updateLayerAnimations(this._animations, {
         camera,
         levelView: this._levelView,
         screen: this._renderer?.screen,
+        roofAlpha,
       });
     }
 
@@ -314,8 +348,11 @@ export default class MapLayer {
     for (let i = 0; i < this._slices.length; i += 1) {
       const slice = this._slices[i];
 
-      if (slice.base) {
-        updateRampMesh(slice, camera);
+      if (slice.walls) {
+        updateWallMesh(slice, camera, volumeConfig.faceBleedPx);
+        orderWallMesh(slice, camera);
+      } else if (slice.base) {
+        updateHeightMesh(slice, camera);
       } else {
         applyParallax(slice.target, camera, slice.k, this._baseScale);
       }
@@ -384,10 +421,12 @@ export default class MapLayer {
     // `texture: true` упал бы на `null.destroy()`
     const mapSprite = this.mapSprite;
     const rampTexture = this._rampTexture;
+    const wallTextures = this._wallTextures;
     const slices = this._slices;
 
     this.mapSprite = null;
     this._rampTexture = null;
+    this._wallTextures = [];
     this._slices = [];
 
     // ссылки на общие источники снимаются ДО их освобождения: даже если
@@ -429,6 +468,11 @@ export default class MapLayer {
         rampTexture.destroy(true);
       }
 
+      // боковые текстуры объёма: своя на тайл, делят их только меши граней
+      for (const texture of wallTextures) {
+        texture.destroy(true);
+      }
+
       if (mapSprite) {
         mapSprite.destroy({
           children: true,
@@ -446,4 +490,28 @@ export default class MapLayer {
       // поэтому здесь не выгружается ничего.
     };
   }
+}
+
+// Все ли тайлы слоя — крыши его уровня (`game.roofs`, ключ — уровень
+// строкой или числом). Слой, где крыши смешаны с другими тайлами, крышей не
+// считается: предупреждение и обычное поведение
+function isRoofLayer(game, level, tiles) {
+  const roofs = game?.roofs?.[level] ?? game?.roofs?.[String(level)];
+
+  if (!Array.isArray(roofs) || roofs.length === 0 || !tiles?.length) {
+    return false;
+  }
+
+  const set = new Set(roofs);
+  const count = tiles.filter(tile => set.has(tile)).length;
+
+  if (count > 0 && count < tiles.length) {
+    console.warn(
+      `MapLayer: level ${level} layer mixes roof tiles with others; a roof needs its own layer`,
+    );
+
+    return false;
+  }
+
+  return count === tiles.length;
 }

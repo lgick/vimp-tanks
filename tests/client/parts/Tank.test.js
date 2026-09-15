@@ -1008,6 +1008,24 @@ describe('Tank: фары (lighting)', () => {
     expect(tank._headlights.cones[0].level).toBe(1);
   });
 
+  it('на рампе свет идёт в оба уровня, на плите — в один', () => {
+    const service = nightService();
+    const tank = makeLitTank(service);
+    const onRamp = row(100, 1);
+
+    // z = 0.6, vz = 0 (ряд без хвоста): танк на верхней половине рампы
+    onRamp[11] = 0.6;
+    tank.update(onRamp);
+
+    expect(tank._headlights.cones[0].levels).toEqual([0, 1]);
+    expect(tank._headlights.cones[1].levels).toEqual([0, 1]);
+    expect(tank._headlights.glow.levels).toEqual([0, 1]);
+
+    tank.update(row(100, 1));
+
+    expect(tank._headlights.cones[0].levels).toEqual([1]);
+  });
+
   it('колбэк onRender по-прежнему зарегистрирован', () => {
     const tank = makeLitTank(nightService());
 

@@ -153,6 +153,21 @@ describe('NeonSign', () => {
     expect(neon.core.alpha).toBeLessThanOrEqual(1);
     expect(neon.core.alpha).toBeGreaterThanOrEqual(0);
   });
+
+  // вывеска на крыше гаснет вместе с крышей, а не по кругу вокруг игрока
+  it('roofAlpha заменяет прозрачность levelView', () => {
+    const neon = makeSign(nightLighting());
+    const levelView = { alphaFor: vi.fn(() => 0.1) };
+
+    neon.update(null, { x: 0, y: 0 }, levelView, 0.5);
+
+    expect(levelView.alphaFor).not.toHaveBeenCalled();
+    expect(neon.core.alpha).toBeCloseTo(0.5);
+
+    neon.update(null, { x: 0, y: 0 }, levelView);
+
+    expect(neon.core.alpha).toBeCloseTo(0.1);
+  });
 });
 
 describe('decals', () => {
