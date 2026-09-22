@@ -18,6 +18,7 @@ import { offsetPoint } from '../parallax.js';
 import LevelLightMap from './LevelLightMap.js';
 import {
   EMISSIVE_BASE_Z,
+  LAMP_HEAD_BASE_Z,
   cellCenter,
   cellRuns,
   flashFactor,
@@ -94,19 +95,26 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
   // --- эмиссив ---
 
-  const emissiveContainer = level => {
-    let container = map.emissive.get(level);
+  // контейнер уровня `level` в наборе `store` (level -> Container)
+  const levelContainer = (store, base, name, level) => {
+    let container = store.get(level);
 
     if (!container) {
       container = new Container();
-      container.label = `emissive-${level}`;
-      container.zIndex = levelZ(EMISSIVE_BASE_Z, level);
+      container.label = `${name}-${level}`;
+      container.zIndex = levelZ(base, level);
       container.eventMode = 'none';
-      map.emissive.set(level, container);
+      store.set(level, container);
     }
 
     return container;
   };
+
+  const emissiveContainer = level =>
+    levelContainer(map.emissive, EMISSIVE_BASE_Z, 'emissive', level);
+
+  const lampHeadContainer = level =>
+    levelContainer(map.lampHeads, LAMP_HEAD_BASE_Z, 'lamp-heads', level);
 
   // головы фонарей: создаются, когда есть и карта, и текстура `head`
   const ensureLampHeads = () => {
@@ -127,7 +135,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       sprite.blendMode = 'add';
       sprite.tint = lamp.color;
       lamp.headSprite = sprite;
-      emissiveContainer(lamp.level).addChild(sprite);
+      lampHeadContainer(lamp.level).addChild(sprite);
     }
   };
 
@@ -150,6 +158,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       // level -> LevelLightMap крыш уровня
       roofLevels: new Map(),
       emissive: new Map(),
+      // level -> контейнер голов фонарей (под танком, см. LAMP_HEAD_BASE_Z)
+      lampHeads: new Map(),
       // level -> Set('col,row') — для режима 'layer' дыры
       maskCells: new Map(),
       // level -> Set('col,row') — клетки крыш: дыра их карты открывается,
@@ -201,7 +211,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       return;
     }
 
-    for (const container of map.emissive.values()) {
+    for (const container of [
+      ...map.emissive.values(),
+      ...map.lampHeads.values(),
+    ]) {
       container.parent?.removeChild(container);
     }
 
@@ -224,7 +237,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
     }
 
-    for (const container of map.emissive.values()) {
+    for (const container of [
+      ...map.emissive.values(),
+      ...map.lampHeads.values(),
+    ]) {
       container.destroy({ children: true });
     }
 
@@ -375,7 +391,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
     }
 
-    for (const container of map.emissive.values()) {
+    for (const container of [
+      ...map.emissive.values(),
+      ...map.lampHeads.values(),
+    ]) {
       if (container.parent !== stage) {
         stage.addChild(container);
       }

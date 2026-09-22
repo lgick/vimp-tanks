@@ -1,9 +1,9 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin from './blurMargin.js';
+import blurMargin, { blurPadding } from './blurMargin.js';
 import { drawRadialRings } from './lightRadialTexture.js';
 
-// Голова фонаря (и блик фары): маленький яркий диск с ореолом. Эмиссив —
-// рисуется поверх затемнения аддитивно, цвет даёт tint.
+// Голова фонаря: маленький яркий диск с ореолом. Рисуется аддитивно под
+// танком (светильник в асфальте), цвет даёт tint.
 // params.core - радиус яркого диска, params.halo - радиус ореола,
 // params.rings - колец ореола, params.blur - мягкость
 // возвращает { texture, contentSize } — contentSize: диаметр ореола
@@ -22,7 +22,8 @@ export default function lampHeadTexture(params, renderer) {
 
   const filter = new BlurFilter({ strength: blur, quality });
 
-  filter.padding = margin;
+  // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
+  filter.padding = blurPadding(blur);
   graphics.filters = [filter];
 
   const texture = renderer.generateTexture({

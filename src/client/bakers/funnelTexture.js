@@ -1,6 +1,6 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
 import { randomRange } from 'vimp-engine/lib/math.js';
-import blurMargin from './blurMargin.js';
+import blurMargin, { blurPadding } from './blurMargin.js';
 
 // создаёт набор процедурных текстур воронки: тёмная выемка со светлым бортиком
 // двухтоновая заливка нужна, чтобы след читался и на светлых, и на тёмных картах
@@ -54,8 +54,8 @@ export default function funnelTexture(params, renderer) {
 
     const filter = new BlurFilter({ strength: blur, quality: 10 });
 
-    // без явного padding Pixi обрежет размытие раньше рамки холста
-    filter.padding = blurMargin(blur);
+    // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
+    filter.padding = blurPadding(blur);
     graphics.filters = [filter];
 
     textures.push(

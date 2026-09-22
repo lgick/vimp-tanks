@@ -354,10 +354,14 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   the hole is attached, its filter is the last in the chain and carries the
   `multiply` blend itself.
 - **Emissive layer.** Per level a container at `levelZ(45, L)` with additive
-  sprites drawn over the darkness: lamp heads (created by the service),
-  headlight glares (`Tank`), neon signs (`parts/map/NeonSign.js`). Their transparency is
-  `levelView.alphaFor`. Without night `addEmissive` returns `false`, and the
-  caller keeps its sprite — or, for glares, does not create one.
+  sprites drawn over the darkness: neon signs (`parts/map/NeonSign.js`).
+  Their transparency is `levelView.alphaFor`. Without night `addEmissive`
+  returns `false`, and the caller keeps its sprite.
+- **Lamp heads.** Lights set into the road: per level a container at
+  `levelZ(1.5, L)` (`LAMP_HEAD_BASE_Z`) — above the road and the track marks,
+  below the effects and the tank, so a tank driving over a lamp covers it.
+  They sit under the light map and glow through their own lamp's light
+  spot. The service creates them.
 - **Map state and session state.** The engine destroys every part of the old
   map before it creates the new ones, so the service counts parts per map
   key (`lightMath.mapKeyOf`: grid size plus a hash of `game.lighting` — the

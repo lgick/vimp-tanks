@@ -209,16 +209,13 @@ export default class Tank extends Container {
     this._levelView = dependencies.levelView || null;
 
     // Ночь (сервис игры, src/client/lighting/): два конуса фар и слабый
-    // свет под корпусом — источники сессии, переживают смену карты; блики
-    // фар — эмиссивные спрайты в контейнере сервиса. Без ночи
-    // (`addEmissive → false`) блики не создаются вовсе
+    // свет под корпусом — источники сессии, переживают смену карты. Блика
+    // на самой фаре нет: аддитивный спрайт засвечивал полкорпуса
     this._lighting = dependencies.lighting?.enabled
       ? dependencies.lighting
       : null;
     // { cones: [левая, правая], glow }; null — фары выключены
     this._headlights = null;
-    this._glares = [];
-    this._glareLevel = null;
 
     if (this._lighting && assets.headlightConeTexture) {
       this._lighting.registerTextures({ cone: assets.headlightConeTexture });
@@ -462,50 +459,7 @@ export default class Tank extends Container {
       }),
     };
 
-    this._createGlares();
     this._updateLights();
-  }
-
-  // блики фар: только на ночной карте и только с текстурой `head`
-  _createGlares() {
-    const head = this._lighting.texture('head');
-
-    if (!head || this._glares.length > 0) {
-      return;
-    }
-
-    const { headlights } = lightingConfig;
-
-    this._glareScale = (headlights.glareSize * 2) / head.contentSize;
-
-    for (let i = 0; i < 2; i += 1) {
-      const glare = new Sprite(head.texture);
-
-      glare.anchor.set(0.5);
-      glare.blendMode = 'add';
-      glare.tint = headlights.color;
-
-      if (!this._lighting.addEmissive(glare, this._level)) {
-        glare.destroy({ texture: false, textureSource: false });
-        this._destroyGlares();
-
-        return;
-      }
-
-      this._glares.push(glare);
-    }
-
-    this._glareLevel = this._level;
-  }
-
-  _destroyGlares() {
-    for (const glare of this._glares) {
-      this._lighting?.removeEmissive(glare);
-      glare.destroy({ texture: false, textureSource: false });
-    }
-
-    this._glares = [];
-    this._glareLevel = null;
   }
 
   _updateLights() {
@@ -538,38 +492,6 @@ export default class Tank extends Container {
       level,
       levels,
     });
-
-    // смена отрисовочного уровня: блик переезжает в эмиссив нового уровня
-    if (this._glares.length > 0 && this._glareLevel !== level) {
-      for (const glare of this._glares) {
-        this._lighting.removeEmissive(glare);
-
-        if (!this._lighting.addEmissive(glare, level)) {
-          this._destroyGlares();
-
-          return;
-        }
-      }
-
-      this._glareLevel = level;
-    }
-  }
-
-  // блики рисуются в нарисованных координатах: та же проекция, что корпус
-  _updateGlares(camera) {
-    if (this._glares.length === 0) {
-      return;
-    }
-
-    const k = this._z * parallaxConfig.shear;
-    const points = this._headlightPoints();
-
-    for (let i = 0; i < this._glares.length; i += 1) {
-      const view = offsetPoint(points[i].x, points[i].y, camera, k);
-
-      this._glares[i].position.set(view.x, view.y);
-      this._glares[i].scale.set(this._glareScale * (1 + k));
-    }
   }
 
   _removeLights() {
@@ -579,8 +501,6 @@ export default class Tank extends Container {
       this._lighting.removeLight(this._headlights.glow);
       this._headlights = null;
     }
-
-    this._destroyGlares();
   }
 
   // углы квада одного меша: масштаб высоты, просадка приземления и наклон
@@ -661,7 +581,6 @@ export default class Tank extends Container {
     if (this._lighting) {
       this._lighting.attachStage(this.parent, this._renderer);
       this._lighting.render();
-      this._updateGlares(camera);
     }
 
     // тинт УРОВНЯ — база светотени наклона: она множитель поверх него, и
@@ -809,7 +728,7 @@ export default class Tank extends Container {
   destroy(options) {
     this.destroySounds();
 
-    // источники и блики — состояние сессии сервиса: снимает их владелец
+    // источники света — состояние сессии сервиса: снимает их владелец
     this._removeLights();
 
     // тень движок не создавал и не уберёт: она сиблинг на сцене

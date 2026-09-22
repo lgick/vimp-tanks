@@ -1,6 +1,6 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
 import { randomRange } from 'vimp-engine/lib/math.js';
-import blurMargin from './blurMargin.js';
+import blurMargin, { blurPadding } from './blurMargin.js';
 
 // создаёт набор процедурных текстур копоти: размытое тёмное пятно с ещё
 // более тёмной серединой — след разрушенного пропа (бочки), у которого нет
@@ -61,8 +61,8 @@ export default function scorchTexture(params, renderer) {
 
     const filter = new BlurFilter({ strength: blur, quality: 10 });
 
-    // без явного padding Pixi обрежет размытие раньше рамки холста
-    filter.padding = blurMargin(blur);
+    // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
+    filter.padding = blurPadding(blur);
     graphics.filters = [filter];
 
     textures.push(

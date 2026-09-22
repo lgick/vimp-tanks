@@ -281,7 +281,7 @@ is drawn — [architecture.md](architecture.md#lighting-night).
 | `enabled` | `false` switches the system off entirely, night maps included: no overlays, no sources, `addEmissive` returns `false` |
 | `resolution` | Resolution of a level's light map relative to the screen (`0.5` by default). The map itself covers the map area plus a margin of its longer side and is clipped to the screen, so a window resize or a camera far from the map origin does not change it |
 | `maxLights` | Cap on visible sources per frame, after screen culling |
-| `headlights` | Two cones per live tank: `length` (world units), `spread` (half-width at the far end as a share of the length), `intensity`, `color`, `offset` (headlight offset from the hull axis as a share of the hull half-width), `glareSize` (radius of the emissive glare) |
+| `headlights` | Two cones per live tank: `length` (world units), `spread` (half-width at the far end as a share of the length), `intensity`, `color`, `offset` (headlight offset from the hull axis as a share of the hull half-width). The headlights have no glare sprite of their own |
 | `tankGlow` | A faint light under every live tank so enemies stay readable: `radius`, `intensity`, `color` |
 | `flash.explosion`, `flash.shot` | Short flashes: `radius`, `intensity`, `duration` (ms), `color` |
 
@@ -289,8 +289,7 @@ Baked textures (`parts.bakedAssets.vimp`): `lightRadialTexture` and
 `lampHeadTexture` (component `Map`), `headlightConeTexture` (component
 `Tank`). The engine hands a baked asset to one component only, so the
 service receives them through the parts (`registerTextures` merges a partial
-set) and gives `Tank` the head texture for its glares
-(`lighting.texture('head')`).
+set); the head texture draws the lamp heads.
 
 A source lands only in the light map of its `level`. A source may also carry
 `levels: number[]`, which puts it into every listed level's map, with a single
@@ -672,7 +671,7 @@ Only the client reads it; the core ignores the key.
 | `lamps[].cell` | `[col, row]` of the grid; the lamp stands in the cell centre (`(col + 0.5) · step · scale`) |
 | `lamps[].level` | The level the lamp lights (`0` by default); it has to exist |
 | `lamps[].radius`, `color`, `intensity` | The light spot: world units, colour, strength |
-| `lamps[].head` | `true` — draw a glowing lamp head over the darkness |
+| `lamps[].head` | `true` — draw a glowing lamp head set into the road: a tank driving over it covers it |
 | `lamps[].flicker` | `0..1`, flicker strength (deterministic, the same on every client) |
 
 On a night map no render layer of any level may have a base `zIndex` of 40

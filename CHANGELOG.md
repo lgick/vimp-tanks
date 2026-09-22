@@ -67,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Night maps: `game.lighting` (`night`, `ambient`, `lamps`) darkens the
   scene with a multiply light map per level — lamps light only their own
   level, a bridge is not darkened twice — plus two headlight cones and a
-  faint glow on every live tank, emissive lamp heads and headlight glares,
-  and short explosion and shot flashes. Atmosphere only: enemies stay
+  faint glow on every live tank, glowing lamp heads set into the road (a
+  tank driving over one covers it) and short explosion and shot flashes. Atmosphere only: enemies stay
   readable and the radar is unchanged.
 - `src/config/render.js → lighting` (`enabled`, `resolution`, `maxLights`,
   `headlights`, `tankGlow`, `flash`), the client service `lighting` and the
@@ -221,6 +221,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- No square outline around the crater of an exploded barrel, and no stray
+  edge on any other blurred texture (smoke, lamp light and heads, headlight
+  cones, the tank's shadow, neon glow): the bakers' blur area now extends
+  past the texture frame (`blurPadding`), so stale pixels of PixiJS's pooled
+  filter texture no longer bleed into the texture's edge.
 - The night overlay no longer disappears (or turns the screen white) after a
   window resize or when the camera is far from the map origin, e.g. at the
   eastern spawn.

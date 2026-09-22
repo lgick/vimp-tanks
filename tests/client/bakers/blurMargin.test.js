@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import blurMargin from '../../../src/client/bakers/blurMargin.js';
+import blurMargin, {
+  blurPadding,
+} from '../../../src/client/bakers/blurMargin.js';
 
 // сигма размытия Pixi (ядро 5, несколько проходов)
 const SIGMA_PER_STRENGTH = 1.29;
@@ -23,5 +25,11 @@ describe('blurMargin', () => {
 
   it('растёт линейно по силе размытия', () => {
     expect(blurMargin(20)).toBe(blurMargin(10) * 2);
+  });
+
+  it('padding вдвое шире запаса: край области фильтра за рамкой на носитель ядра', () => {
+    for (const strength of [0, 1, 2.5, 4]) {
+      expect(blurPadding(strength)).toBe(blurMargin(strength) * 2);
+    }
   });
 });

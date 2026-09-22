@@ -41,12 +41,10 @@ vi.mock('pixi.js', () => {
   return { Graphics, BlurFilter, Rectangle };
 });
 
-const { default: blurredCircleTexture } = await import(
-  '../../../src/client/bakers/blurredCircleTexture.js'
-);
-const { default: blurMargin } = await import(
-  '../../../src/client/bakers/blurMargin.js'
-);
+const { default: blurredCircleTexture } =
+  await import('../../../src/client/bakers/blurredCircleTexture.js');
+const { default: blurMargin, blurPadding } =
+  await import('../../../src/client/bakers/blurMargin.js');
 
 const bake = params => {
   const baked = [];
@@ -75,10 +73,10 @@ describe('blurredCircleTexture', () => {
     expect(result.texture.width).toBe((3 + blurMargin(1)) * 2);
   });
 
-  it('padding фильтра равен запасу: иначе Pixi обрежет размытие', () => {
+  it('padding фильтра — область шире запаса: без него Pixi обрежет размытие, а край потянет мусор пула', () => {
     const { baked } = bake({ radius: 4, blur: 3, color: 0xffffff });
 
-    expect(baked[0].target.filters[0].padding).toBe(blurMargin(3));
+    expect(baked[0].target.filters[0].padding).toBe(blurPadding(3));
   });
 
   it('quality берётся из params, по умолчанию 40', () => {

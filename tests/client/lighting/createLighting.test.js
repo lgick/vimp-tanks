@@ -17,6 +17,7 @@ import { levelZ } from '../../../src/client/levelZ.js';
 import {
   LIGHT_OVERLAY_BASE_Z,
   EMISSIVE_BASE_Z,
+  LAMP_HEAD_BASE_Z,
 } from '../../../src/client/lighting/lightMath.js';
 import { lighting, parallax } from '../../../src/config/render.js';
 
@@ -75,6 +76,8 @@ const overlayOf = (stage, level) =>
   stage.children.find(child => child.label === `lighting-${level}`);
 const emissiveOf = (stage, level) =>
   stage.children.find(child => child.label === `emissive-${level}`);
+const lampHeadsOf = (stage, level) =>
+  stage.children.find(child => child.label === `lamp-heads-${level}`);
 
 // Имитация частей карты: каждая статическая часть берёт ключ и, если она
 // уровня >= 1, вносит вклад в маску
@@ -350,7 +353,7 @@ describe('lighting: registerTextures', () => {
     expect(service.texture('cone')).toBe(first.cone);
   });
 
-  it('свежая head заменяет текстуру у бликов со старой', () => {
+  it('свежая head заменяет текстуру у эмиссива со старой', () => {
     const { service } = setup();
     const first = textures();
     const second = textures();
@@ -383,10 +386,27 @@ describe('lighting: registerTextures', () => {
       frame(service);
 
       expect(lastItems(layout, 0)).toHaveLength(1);
-      expect(emissiveOf(stage, 0).children).toHaveLength(1);
+      expect(lampHeadsOf(stage, 0).children).toHaveLength(1);
 
       vi.restoreAllMocks();
     }
+  });
+
+  it('голова фонаря — светильник в асфальте: над дорогой, под танком', () => {
+    const { service, stage } = setup();
+
+    service.registerTextures({ radial: textures().radial, head: textures().head });
+    makeParts(service, 'a', nightLighting());
+    frame(service);
+
+    const heads = lampHeadsOf(stage, 0);
+
+    // дорога и следы — база 1, эффекты — 2, танк — 3
+    expect(heads.zIndex).toBe(levelZ(LAMP_HEAD_BASE_Z, 0));
+    expect(heads.zIndex).toBeGreaterThan(levelZ(1, 0));
+    expect(heads.zIndex).toBeLessThan(levelZ(2, 0));
+    expect(heads.children).toHaveLength(1);
+    expect(emissiveOf(stage, 0)?.children ?? []).toHaveLength(0);
   });
 
   it('flash без radial и конус без cone — no-op без ошибки', () => {

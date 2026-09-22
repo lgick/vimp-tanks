@@ -1,5 +1,5 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin from './blurMargin.js';
+import blurMargin, { blurPadding } from './blurMargin.js';
 
 // создаёт текстуру размытого круга (взрыв, дым, частицы попаданий)
 // params.radius - Радиус круга
@@ -24,8 +24,9 @@ export default function blurredCircleTexture(params, renderer) {
   const filter = new BlurFilter({ strength: blur, quality });
 
   // без явного padding Pixi рендерит размытие лишь на 2 * strength вокруг
-  // фигуры и обрезает его раньше рамки, каким бы большим ни был холст
-  filter.padding = blurMargin(blur);
+  // фигуры и обрезает его раньше рамки, каким бы большим ни был холст;
+  // область шире рамки — чтобы мусор пула с края не попал в текстуру
+  filter.padding = blurPadding(blur);
   graphics.filters = [filter];
 
   const texture = renderer.generateTexture({

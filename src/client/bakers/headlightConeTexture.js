@@ -1,5 +1,5 @@
 import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin from './blurMargin.js';
+import blurMargin, { blurPadding } from './blurMargin.js';
 
 // Конус фары: клин от вершины к широкому концу, яркость спадает по длине,
 // края мягкие (размытие). Вершина — в точке (margin, середина высоты), то
@@ -42,7 +42,8 @@ export default function headlightConeTexture(params, renderer) {
 
   const filter = new BlurFilter({ strength: blur, quality });
 
-  filter.padding = margin;
+  // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
+  filter.padding = blurPadding(blur);
   graphics.filters = [filter];
 
   const texture = renderer.generateTexture({

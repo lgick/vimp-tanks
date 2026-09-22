@@ -1,5 +1,5 @@
 import { BlurFilter, Container, Rectangle, Text } from 'pixi.js';
-import blurMargin from '../../bakers/blurMargin.js';
+import blurMargin, { blurPadding } from '../../bakers/blurMargin.js';
 
 // Кэш текстур неоновых вывесок. Бейкер здесь не годится: текстов много, и
 // приходят они из карты. Текстуры белые — цвет вывеска задаёт `tint`,
@@ -52,8 +52,9 @@ function bake(renderer, { text, size }) {
   const core = renderer.generateTexture({ target: wrapper, frame });
   const filter = new BlurFilter({ strength: blur, quality: 6 });
 
-  // запас работает только в паре с padding (см. blurMargin)
-  filter.padding = margin;
+  // запас работает только в паре с padding (см. blurMargin), а область
+  // шире рамки — чтобы мусор пула с края не попал в текстуру
+  filter.padding = blurPadding(blur);
   label.filters = [filter];
 
   const glow = renderer.generateTexture({ target: wrapper, frame });
