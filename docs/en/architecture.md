@@ -267,11 +267,12 @@ The consequences the parts implement themselves:
   level (`OCCLUDER_BASE_Z`, still far below `parallax.levelZStride`), so a
   tank standing behind a wall is drawn behind it instead of climbing onto
   it. The extrusion goes away from the camera centre, that is, it covers the
-  area BEHIND the wall — where the tank is. The occluder keeps the wall solid: the
-  hole around the player opens only when the volume actually covers the
-  tank on screen (`MapLayer._volumeHidesPlayer` computes, back through the
-  projection, the source cell of the slice that lands on the player), while
-  a volume ABOVE the player fades together with its own layer, as the slab
+  area BEHIND the wall — where the tank is. A volume of the player's own
+  level never fades, even when it covers the tank: at speed the camera
+  look-ahead carries the camera past the wall face, the wall top overhangs
+  the tank, and a hole there used to flatten the wall. The tank may be
+  partly hidden by the wall top for a moment, until the camera catches up.
+  A volume ABOVE the player fades together with its own layer, as the slab
   does.
 - **A ramp is a slope, not a flat sprite.** `Map` takes the ramp runs FROM
   THE CORE — the `rampRuns` service (`src/client/index.js` over
@@ -319,10 +320,20 @@ live tank carries a faint `tankGlow`), the radar does not change, and
 
 - **One light map per level.** Level `L` gets an overlay container on the
   stage at `zIndex = levelZ(40, L)` — above every dynamic part of its level
-  (`Tank` 3, smoke 4, volume occluder 5) and below the level stride. Inside:
-  a full-screen base, the floor mask and the light sources drawn additively.
-  A pass-through filter at `lighting.resolution` renders that into a pooled
-  texture and lays it onto the scene with `blendMode: 'multiply'`.
+  (`Tank` 3, smoke 4, volume occluder 5) and below the level stride. The
+  overlay lives in world coordinates with no transform of its own. Inside:
+  a base covering the map plus a margin of its longer side on every edge
+  (so a zoomed-out camera past the edge still sees dusk), the floor mask and
+  the light sources drawn additively. A pass-through filter at
+  `lighting.resolution` renders that into a pooled texture and lays it onto
+  the scene with `blendMode: 'multiply'`.
+- **`filterArea`, not `boundsArea`.** The filter region is the same world
+  rectangle, set once as `filterArea`; PixiJS clips it to the screen. For a
+  container with `boundsArea`, PixiJS 8.19 (`getFastGlobalBounds`) applies
+  the stage transform twice, so the region followed the camera off-screen,
+  the filter was skipped and the overlay was drawn without `multiply` — a
+  white screen or no night at all after a resize or far from the map
+  origin.
 - **A filter, not a `RenderTexture`.** Parts drive the service from
   `onRender`, and PixiJS calls it INSIDE a frame, after the screen target is
   bound (`renderStart`). A nested `renderer.render({ target })` there resets

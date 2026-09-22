@@ -637,7 +637,7 @@ describe('Map: параллакс и объём слоя', () => {
         return map;
       };
 
-      it('стена своего уровня не гаснет, пока не закрывает танк', async () => {
+      it('стена своего уровня не гаснет, когда танк в центре камеры', async () => {
         const view = createLevelView(seeThrough);
 
         // игрок в самом центре камеры: экструзия уводит стены ОТ него
@@ -649,7 +649,10 @@ describe('Map: параллакс и объём слоя', () => {
         expect(map._mode._occluderHole.strength).toBeLessThan(0.01);
       });
 
-      it('стена своего уровня гаснет, когда накрывает танк', async () => {
+      // на скорости упреждение камеры уводит её за грань стены, верх
+      // нависает над танком — и дыра гасила объём, стена становилась
+      // плоской. Объём своего уровня не гаснет, даже накрывая танк
+      it('стена своего уровня не гаснет, даже когда накрывает танк', async () => {
         const view = createLevelView(seeThrough);
 
         // игрок у начала карты: срез стены между ним и центром камеры
@@ -658,8 +661,8 @@ describe('Map: параллакс и объём слоя', () => {
 
         const map = await run(walls, view);
 
-        expect(map._mode._occluderHole.attached).toBe(true);
-        expect(map._mode._occluderHole.strength).toBeGreaterThan(0.9);
+        expect(map._mode._occluderHole.attached).toBe(false);
+        expect(map._mode._occluderHole.strength).toBeLessThan(0.01);
       });
 
       // перила моста обязаны исчезать вместе с плитой, под которой стоит
@@ -1092,6 +1095,7 @@ describe('MapLayer: освещение', () => {
       nightGame.lighting,
       10,
       1,
+      { cols: 2, rows: 2 },
     );
     expect(setLevelMask).toHaveBeenCalledWith(
       1,

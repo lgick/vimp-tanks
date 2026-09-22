@@ -43,6 +43,22 @@ const TEXTURE_KEYS = ['radial', 'cone', 'head'];
 // - состояние СЕССИИ — зарегистрированные текстуры, источники `addLight`,
 //   записи эмиссива. Переживает смену карты: танки и эффекты — не части
 //   карты, движок уничтожает их отдельно, и снимают своё они сами.
+// Область карт освещённости в мировых единицах: карта плюс запас на
+// каждую сторону, равный её большей стороне, — при максимальном отдалении
+// камеры за краем карты тоже полумрак
+export function lightArea(size, step, scale) {
+  const width = (size?.cols ?? 0) * step * scale.x;
+  const height = (size?.rows ?? 0) * step * scale.y;
+  const margin = Math.max(width, height);
+
+  return {
+    x: -margin,
+    y: -margin,
+    width: width + margin * 2,
+    height: height + margin * 2,
+  };
+}
+
 export function createLighting(cfg = lightingConfig, deps = {}) {
   const enabled = Boolean(cfg.enabled);
   const levelView = deps.levelView || null;
@@ -117,7 +133,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
   // --- жизненный цикл карты ---
 
-  const initMap = (lightingCfg, step, scale) => {
+  const initMap = (lightingCfg, step, scale, size) => {
     const source = lightingCfg || {};
     const night = Boolean(source.night);
     const mapScale = baseScale(scale ?? 1);
@@ -127,6 +143,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       ambient: source.ambient ?? DEFAULT_AMBIENT,
       step,
       scale: mapScale,
+      area: lightArea(size, step, mapScale),
       lamps: [],
       headsReady: false,
       levels: new Map(),
@@ -273,6 +290,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         level,
         ambient: map.ambient,
         resolution: cfg.resolution,
+        area: map.area,
         roof,
       });
       registry.set(level, levelMap);
@@ -337,6 +355,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
           level: 0,
           ambient: map.ambient,
           resolution: cfg.resolution,
+          area: map.area,
         }),
       );
     }
@@ -478,7 +497,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
     // карта крыш уровня получает те же источники, что и обычная
     for (const levelMap of allLevelMaps()) {
-      levelMap.place(stage, screen, camera, shear);
+      levelMap.place(camera, shear);
       levelMap.layout(perLevel.get(levelMap.level) || []);
     }
   };
@@ -595,8 +614,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     },
 
     // Каждая статическая часть. Первый вызов НОВОГО ключа инициализирует
-    // карту (или переключает на неё), остальные только считают
-    acquireMap(key, lightingCfg, step, scale) {
+    // карту (или переключает на неё), остальные только считают.
+    // `size` — `{ cols, rows }` сетки карты: из него область карт
+    // освещённости (`lightArea`)
+    acquireMap(key, lightingCfg, step, scale, size) {
       if (!enabled) {
         return;
       }
@@ -611,7 +632,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       // карта, вклады масок остаются у своих частей
       releaseMapResources();
       mapKey = key;
-      initMap(lightingCfg, step, scale);
+      initMap(lightingCfg, step, scale, size);
     },
 
     // Из destroy() части: снимает её вклад в маски; на нуле счётчика

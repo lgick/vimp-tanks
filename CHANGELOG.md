@@ -221,6 +221,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The night overlay no longer disappears (or turns the screen white) after a
+  window resize or when the camera is far from the map origin, e.g. at the
+  eastern spawn.
+- A wall no longer turns flat when the tank rams it at speed: a volume of
+  the player's own level no longer fades when it covers the tank (the camera
+  look-ahead used to put the wall top over the tank and open a see-through
+  hole across most of the screen). Volumes above the player still fade with
+  their slab.
 - Roofs no longer turn see-through (and lose neon light) whenever the player
   is on a lower level; headlights no longer light building tops.
 - Headlights now light the whole ramp while climbing or descending: on a

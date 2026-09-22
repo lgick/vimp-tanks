@@ -15,14 +15,22 @@ const WHITE = 0xffffff;
 
 // Карта освещённости ОДНОГО уровня.
 //
-// Оверлей — контейнер на сцене (`zIndex = levelZ(40, L)`): фон, маска этажа
-// и аддитивные источники. Фильтр на нём рисует содержимое в пуловую
+// Оверлей — контейнер на сцене (`zIndex = levelZ(40, L)`) в МИРОВЫХ
+// координатах, без собственного трансформа: фон, маска этажа и аддитивные
+// источники. Фильтр на нём рисует содержимое в пуловую
 // текстуру пониженного разрешения и кладёт результат на сцену умножением
 // (`blendMode: 'multiply'`). Отдельной RenderTexture с `renderer.render`
 // здесь нет намеренно: `onRender` частей зовётся ВНУТРИ кадра, когда экран
 // уже привязан (`renderStart`), и вложенный рендер в текстуру сбросил бы
 // стек целей — весь кадр ушёл бы в карту освещённости. Фильтр Pixi рисует
 // через push/pop стека целей, в том же проходе.
+//
+// Область фильтра — `filterArea`: мировой прямоугольник карты с запасом
+// (`area`), задаётся один раз. НЕ `boundsArea`: для него Pixi 8.19
+// (`getFastGlobalBounds`) применяет трансформ сцены дважды, область уезжала
+// за экран вместе с камерой, фильтр пропускался (`skip`), и содержимое
+// ложилось на сцену без умножения — белый экран или пропавшая ночь. Путь
+// `filterArea` считается верно, обрезку по экрану делает сам Pixi.
 //
 // Содержимое:
 //   L = 0   фон цвета `ambient`, источники уровня 0 — аддитивно;
@@ -38,7 +46,9 @@ const WHITE = 0xffffff;
 // источники, но своя дыра — она открывается, только когда крыша закрывает
 // танк (ведёт сервис).
 export default class LevelLightMap {
-  constructor({ level, ambient, resolution, roof = false }) {
+  // `area` — `{ x, y, width, height }` в мировых единицах: карта с запасом
+  // на отдалённую камеру
+  constructor({ level, ambient, resolution, area, roof = false }) {
     this.level = level;
     this.ambient = ambient;
     this.roof = roof;
@@ -47,32 +57,27 @@ export default class LevelLightMap {
     this.overlay.label = roof ? `lighting-roof-${level}` : `lighting-${level}`;
     this.overlay.zIndex = levelZ(LIGHT_OVERLAY_BASE_Z, level);
     this.overlay.eventMode = 'none';
-    // границы фильтра — ровно экран: без них Pixi считал бы их по всем
-    // источникам, включая спрятанные
-    this.overlay.boundsArea = new Rectangle(0, 0, 1, 1);
 
-    // фон на весь экран: Texture.WHITE с tint
+    // фон на всю область: Texture.WHITE с tint
     this.base = new Sprite(Texture.WHITE);
     this.base.tint = level === 0 ? ambient : WHITE;
+    this.base.position.set(area.x, area.y);
+    this.base.width = area.width;
+    this.base.height = area.height;
     this.overlay.addChild(this.base);
-
-    // мир внутри оверлея: трансформ, обратный контр-трансформу оверлея, —
-    // то есть снова мировые координаты сцены
-    this.world = new Container();
-    this.overlay.addChild(this.world);
 
     this.mask = level >= 1 ? new Graphics() : null;
 
     if (this.mask) {
-      this.world.addChild(this.mask);
+      this.overlay.addChild(this.mask);
     }
 
     this.lights = new Container();
-    this.world.addChild(this.lights);
+    this.overlay.addChild(this.lights);
 
     // вершины объёмов: по графике на высоту объёма, `{ graphics, volume }`
     this.tops = new Container();
-    this.world.addChild(this.tops);
+    this.overlay.addChild(this.tops);
     this.topGroups = [];
 
     // спрайты источников переиспользуются между кадрами: число видимых
@@ -84,6 +89,14 @@ export default class LevelLightMap {
     this.filter.resolution = resolution;
     this.filter.blendMode = 'multiply';
     this.overlay.filters = [this.filter];
+    // область фильтра переживает смену цепочки (дыра заменяет `filters`):
+    // она живёт в том же FilterEffect контейнера
+    this.overlay.filterArea = new Rectangle(
+      area.x,
+      area.y,
+      area.width,
+      area.height,
+    );
 
     this.resolution = resolution;
 
@@ -149,22 +162,9 @@ export default class LevelLightMap {
     }
   }
 
-  // контр-трансформ сцены: оверлей растянут ровно на экран, а мир внутри —
-  // в координатах сцены
-  place(stage, screen, camera, shear) {
-    const { scale, position } = stage;
-
-    this.overlay.scale.set(1 / scale.x, 1 / scale.y);
-    this.overlay.position.set(-position.x / scale.x, -position.y / scale.y);
-    this.overlay.boundsArea.width = screen.width;
-    this.overlay.boundsArea.height = screen.height;
-
-    this.base.width = screen.width;
-    this.base.height = screen.height;
-
-    this.world.scale.set(scale.x, scale.y);
-    this.world.position.set(position.x, position.y);
-
+  // проекция уровня для маски и вершин объёмов; фон и область фильтра —
+  // мировые и от камеры не зависят
+  place(camera, shear) {
     if (this.mask) {
       applyParallax(this.mask, camera, this.level * shear, 1);
     }

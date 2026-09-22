@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { Container, Sprite, Texture, TextureSource, Ticker } from 'pixi.js';
-import { createLighting } from '../../../src/client/lighting/createLighting.js';
+import {
+  AlphaFilter,
+  Container,
+  Sprite,
+  Texture,
+  TextureSource,
+  Ticker,
+} from 'pixi.js';
+import {
+  createLighting,
+  lightArea,
+} from '../../../src/client/lighting/createLighting.js';
 import LevelLightMap from '../../../src/client/lighting/LevelLightMap.js';
 import { createLevelView } from '../../../src/client/levelView.js';
 import { levelZ } from '../../../src/client/levelZ.js';
@@ -659,5 +669,91 @@ describe('lighting: крыши и вершины объёмов', () => {
 
     expect(ground.topGroups).toHaveLength(0);
     expect(ground.tops.children).toHaveLength(0);
+  });
+});
+
+// Область фильтра оверлея — мировой прямоугольник карты (`filterArea`), а не
+// экран через `boundsArea`: для `boundsArea` Pixi 8.19 применяет трансформ
+// сцены дважды, и при камере вдали от начала карты фильтр пропускался —
+// белый экран или пропавшая ночь
+describe('lighting: область фильтра оверлея', () => {
+  const size = { cols: 10, rows: 5 };
+  const area = { x: -320, y: -320, width: 960, height: 800 };
+
+  it('lightArea — карта плюс запас в её большую сторону', () => {
+    expect(lightArea(size, STEP, { x: 1, y: 1 })).toEqual(area);
+    expect(lightArea(size, STEP, { x: 0.5, y: 0.5 })).toEqual({
+      x: -160,
+      y: -160,
+      width: 480,
+      height: 400,
+    });
+  });
+
+  it('оверлей мировой: filterArea и фон покрывают карту, boundsArea нет', () => {
+    const { service, stage } = setup();
+
+    service.acquireMap('k', nightLighting([]), STEP, 1, size);
+    frame(service);
+
+    const overlay = overlayOf(stage, 0);
+    const base = overlay.children[0];
+
+    expect(overlay.boundsArea).toBeFalsy();
+    expect(overlay.filterArea).toMatchObject(area);
+    expect(overlay.position.x).toBe(0);
+    expect(overlay.position.y).toBe(0);
+    expect(overlay.scale.x).toBe(1);
+    expect(base.x).toBe(area.x);
+    expect(base.y).toBe(area.y);
+    expect(base.width).toBe(area.width);
+    expect(base.height).toBe(area.height);
+  });
+
+  it('ресайз экрана и смена камеры не трогают область и трансформ оверлея', () => {
+    const levelView = createLevelView();
+    const service = createLighting(lighting, { levelView });
+    const stage = new Container();
+    const screenNow = { width: 800, height: 600 };
+
+    stage.sortableChildren = true;
+    service.attachStage(stage, { screen: screenNow });
+    service.acquireMap('k', nightLighting([]), STEP, 1, size);
+    service.setLevelMask(1, [[1, 1]], {});
+    frame(service);
+
+    // камера далеко на востоке, зум и окно другие
+    screenNow.width = 500;
+    screenNow.height = 900;
+    stage.scale.set(0.6);
+    stage.position.set(-2500, -900);
+    frame(service);
+
+    for (const level of [0, 1]) {
+      const overlay = overlayOf(stage, level);
+
+      expect(overlay.filterArea).toMatchObject(area);
+      expect(overlay.position.x).toBe(0);
+      expect(overlay.scale.x).toBe(1);
+    }
+  });
+
+  it('область фильтра переживает замену цепочки фильтров (дыра)', () => {
+    const map = new LevelLightMap({
+      level: 1,
+      ambient: 0x3a4260,
+      resolution: 0.5,
+      area,
+    });
+    const other = new AlphaFilter();
+
+    map.overlay.filters = [other];
+    map.overlay.filters = [];
+    map.overlay.filters = [map.filter];
+
+    expect(map.overlay.filterArea).toMatchObject(area);
+
+    other.destroy();
+    map.destroy();
   });
 });

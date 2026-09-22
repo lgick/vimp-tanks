@@ -1,10 +1,7 @@
 import { Ticker } from 'pixi.js';
 import { offsetPoint } from '../../parallax.js';
 import { advance as advanceHole, apply as applyHole } from './holeOverlay.js';
-import {
-  parallax as parallaxConfig,
-  volume as volumeConfig,
-} from '../../../config/render.js';
+import { parallax as parallaxConfig } from '../../../config/render.js';
 import { coversPoint, tileAt } from './tileGrid.js';
 
 // See-through статического слоя: плита моста и её перекрыватель уступают
@@ -25,7 +22,7 @@ import { coversPoint, tileAt } from './tileGrid.js';
 //   stage       сцена: в её координатах фильтр считает центр дыры
 //   hasSprite   запечён ли уже слой (ассеты грузятся асинхронно)
 //   hole, occluderHole  состояния «дыры» (`holeOverlay`)
-//   level, volume       уровень слоя и его высота в уровнях
+//   level               уровень слоя
 //   grid                грид тайлов (`tileGrid`)
 //   tileSet, floorSet   наборы тайлов слоя и тайлов пола
 //   roof                слой — крыша (`game.roofs`)
@@ -96,12 +93,12 @@ function updateLayerSeeThrough(view, cfg, rate, camera) {
   applyHole(container, view.hole, cfg, levelView, view.stage, camera);
 }
 
-// Перекрыватель: гаснет ДВУМЯ путями. Объём чужого уровня НАД игроком —
-// как и раньше, вместе со своим слоем (перила моста обязаны исчезать
-// вместе с плитой). Объём СВОЕГО уровня — только когда он реально
-// закрывает танк: экструзия уходит от центра камеры и накрывает область
-// за стеной, поэтому «дыра всегда» превращала стены в полупрозрачные
-// пятна и объём переставал читаться.
+// Перекрыватель гаснет, только когда его уровень НАД игроком — вместе со
+// своим слоем (перила моста обязаны исчезать вместе с плитой). Объём
+// СВОЕГО уровня не гаснет никогда: на скорости упреждение камеры уводит
+// её за грань стены, верх стены нависает над танком, и дыра гасила объём —
+// стена становилась плоской. Танк у стены на секунду-другую может быть
+// частично закрыт её верхом, пока камера его не догонит.
 function updateOccluderSeeThrough(view, cfg, rate, camera) {
   const { levelView, occluder } = view;
   const above = view.level > levelView.level;
@@ -115,9 +112,7 @@ function updateOccluderSeeThrough(view, cfg, rate, camera) {
     return;
   }
 
-  const hides = above || volumeHidesPlayer(view, camera);
-
-  advanceHole(view.occluderHole, hides, rate);
+  advanceHole(view.occluderHole, above, rate);
   applyHole(occluder, view.occluderHole, cfg, levelView, view.stage, camera);
 }
 
@@ -142,33 +137,5 @@ function roofHidesPlayer(view, cfg, camera) {
     camera,
     [view.level * parallaxConfig.shear],
     cfg.roofMargin ?? 0,
-  );
-}
-
-// Накрывает ли объём этого слоя нарисованную точку игрока.
-//
-// Срез объёма на высоте k рисует тайл из мировой точки w в точке
-// `w + (w - cam) * k`; обратную проекцию считает `coversPoint`. Проверяются
-// те же k, что и рисуются, — ни одного лишнего среза.
-function volumeHidesPlayer(view, camera) {
-  if (!camera || !view.grid.map) {
-    return false;
-  }
-
-  const shear = parallaxConfig.shear;
-  const count = volumeConfig.slices;
-  const ks = [];
-
-  for (let i = 1; i <= count; i += 1) {
-    ks.push((view.level + (view.volume * i) / count) * shear);
-  }
-
-  return coversPoint(
-    view.grid,
-    view.tileSet,
-    playerPoint(view, camera),
-    camera,
-    ks,
-    0,
   );
 }

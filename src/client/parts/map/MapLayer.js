@@ -168,6 +168,10 @@ export default class MapLayer {
         data.game?.lighting,
         this._step,
         data.scale,
+        {
+          cols: Math.max(0, ...this._map.map(row => row.length)),
+          rows: this._map.length,
+        },
       );
 
       // вклад слоя в маску этажа: клетки его тайлов пола (перила уже в
@@ -280,7 +284,6 @@ export default class MapLayer {
       hole: this._hole,
       occluderHole: this._occluderHole,
       level: this._level,
-      volume: this._volume,
       grid: this._grid,
       tileSet: this._tileSet,
       floorSet: this._floorSet,
