@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Migration
 
-- Requires `vimp-engine >= 0.34.1` and `vimp-engine-core 0.21.0`. Rebuild the
+- Requires `vimp-engine >= 0.34.1` and `vimp-engine-core 0.22.1`. Rebuild the
   core (`npm run core:build`) and release host and client together — the
   `c1`/`c2` row layout changed.
 - Rebuild the core (`npm run core:build`) and republish host and client
@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Visual reaction of tanks to explosions (`blastJolt` in
+  `src/config/render.js`): tanks on the blast's level inside its radius tilt
+  away from it, rock and shake; a blast right under the hull tosses it up
+  over its shadow and lands it with a squash. Render only — the physical
+  push is unchanged. A new client service `blasts` carries the explosion
+  from the effect to the tanks.
 - Visual recoil after a hitscan shot (`recoil` in `src/config/render.js`):
   the turret and hull kick back along the gun and the hull rocks, then
   settle. Render only — physics are unchanged. A new client service `shots`
@@ -190,6 +196,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A live tank is a low-poly 3D model instead of a flat picture (`tankModel`
+  in `src/config/render.js`, `src/client/tank3d/`): tracks, sloped hull with
+  a front plate, octagonal turret, barrel with a muzzle brake. Tilt, turret
+  rotation, recoil (the barrel alone kicks back), the blast jolt and the
+  landing squash move it as a rigid body; faces are lit by their normals
+  and textured from a new `tankModelTexture` atlas. The lean away from the
+  screen centre is one per tank and capped. `enabled: false` restores the
+  flat hull.
+- The tank model casts a shadow by its silhouette along the light — the
+  turret and barrel included, following tilt and lift (`tankModel.shadowBlur`);
+  the wreck is the same model with a burnt atlas and a knocked-askew turret.
+- The model's lean away from the screen centre is much weaker and smoothly
+  capped (`tankModel.leanGain`, `maxLean`): the turret no longer slides when
+  the camera leads a speeding tank.
+- The hull deck is steel grey instead of near-white, so the model's face
+  light on a slope no longer blows it out to pure white; the turret and
+  barrel outline is thin and a dark shade of the team colour instead of a
+  wide light-grey line.
 - The hitscan tracer leaves the barrel directly (the 30-unit gap is gone)
   and is a thin film-like line — a white-hot core over a narrow warm glow,
   fading quadratically towards the muzzle — instead of a pulsing dotted
@@ -204,7 +228,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   configured in `src/config/render.js` (`tracer`, `muzzleFlash`).
 - The `m1` tank is 1.5 times larger: `size` 2 → 3 in `src/data/models.js`
   (hull 12 × 9 world units instead of 8 × 6), with the collider, mass and
-  hitbox growing with it.
+  hitbox growing with it. The spatial sound's `innerRadius` follows the hull:
+  5 → 7.5.
 - New tank art: tracks with treads, a bevelled deck with a sloped front plate
   and an engine grille, a bevelled turret with a hatch and a muzzle brake.
   Every tank texture now comes with a baked normal map (`bodyNormal`,
@@ -265,6 +290,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The client prediction no longer jerks on every head-on hit of a wall or a
+  ramp's end guard: the replica resolves contacts with the engine's
+  `rigid_body::step_bodies` (a port of the host's Rapier solver, with contact
+  memory rolled back on reconciliation) instead of its own impulse loop, which
+  kept the gap-closing speed where the host bounced off. Requires
+  `vimp-engine-core 0.22.1`, which also drops a phantom corner-to-corner
+  contact that stopped the replica in a doorway.
 - The hull tilts along its heading on a ramp instead of sideways, and the
   raised edge rises up the screen whatever the heading.
 - The client prediction no longer falls one step behind now and then: float

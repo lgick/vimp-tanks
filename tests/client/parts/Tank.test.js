@@ -13,10 +13,13 @@ import {
   tilt,
   tankLight,
   recoil,
+  blastJolt,
 } from '../../../src/config/render.js';
 import { createLevelView } from '../../../src/client/levelView.js';
 import { createLighting } from '../../../src/client/lighting/createLighting.js';
 import { createShotEvents } from '../../../src/client/shotEvents.js';
+import { createBlastEvents } from '../../../src/client/blastEvents.js';
+import { createTankModel } from '../../../src/client/tank3d/model.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
 // (регистрация/обновление/снятие) — визуал рендером не трогаем.
@@ -1162,6 +1165,332 @@ describe('Tank: отдача после выстрела', () => {
     shots.fired(1);
 
     expect(onFired).not.toHaveBeenCalled();
+  });
+});
+
+// Визуальная реакция на взрыв: событие приходит через сервис `blasts`,
+// танк сам решает, задел ли его взрыв; анимация — по общему тикеру
+describe('Tank: реакция на взрыв', () => {
+  // m1: [x, y, angle, gun, vx, vy, load, condition, size, team, angvel, z,
+  // level]; size 3 — корпус 12 × 9
+  const row = (condition = 100) => [
+    100,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0,
+    condition,
+    3,
+    1,
+    0,
+    0,
+    0,
+  ];
+  const renderer = { screen: { width: 800, height: 600 } };
+
+  const make = (condition = 100) => {
+    const blasts = createBlastEvents();
+    const tank = new Tank(
+      row(condition),
+      assets,
+      { soundManager: makeSoundManager(), blasts, renderer },
+      { id: '1' },
+    );
+
+    new Container().addChild(tank);
+
+    return { tank, blasts };
+  };
+
+  const frame = (tank, ms) => {
+    Ticker.shared.deltaMS = ms;
+    tank.onRender();
+  };
+
+  afterEach(() => {
+    Ticker.shared.deltaMS = 1000 / 60;
+  });
+
+  it('взрыв спереди поднимает нос, качка затухает', () => {
+    const { tank, blasts } = make();
+
+    blasts.exploded({ x: 120, y: 100, radius: 50, level: 0 });
+    frame(tank, 1);
+
+    expect(tank._blastTilt.pitch).toBeGreaterThan(0);
+    expect(Math.abs(tank._blastTilt.roll)).toBeLessThan(1e-6);
+
+    frame(tank, blastJolt.duration);
+
+    expect(tank._blastTilt.pitch).toBe(0);
+    expect(tank._blastKick).toBe(null);
+  });
+
+  it('взрыв вне радиуса и на другом уровне не трогает', () => {
+    const { tank, blasts } = make();
+
+    blasts.exploded({ x: 300, y: 100, radius: 50, level: 0 });
+    blasts.exploded({ x: 110, y: 100, radius: 50, level: 1 });
+    frame(tank, 1);
+
+    expect(tank._blastKick).toBe(null);
+  });
+
+  it('взрыв под корпусом подбрасывает, на конце — просадка', () => {
+    const { tank, blasts } = make();
+
+    frame(tank, 1);
+
+    const groundX = tank.x;
+    const groundWidth =
+      tank.body.geometry.positions[2] - tank.body.geometry.positions[0];
+
+    blasts.exploded({ x: 101, y: 100, radius: 50, level: 0 });
+    frame(tank, blastJolt.hopDuration / 2);
+
+    expect(tank._blastLift).toBeGreaterThan(0);
+    // видимая высота — в проекции (танк левее центра камеры уезжает влево)
+    // и в масштабе корпуса
+    expect(tank.x).toBeLessThan(groundX);
+    expect(
+      tank.body.geometry.positions[2] - tank.body.geometry.positions[0],
+    ).toBeGreaterThan(groundWidth);
+
+    frame(tank, blastJolt.hopDuration / 2);
+
+    expect(tank._blastLift).toBe(0);
+    expect(tank._landTimer).toBeGreaterThan(0);
+  });
+
+  it('слабый дальний взрыв не гасит качку от близкого', () => {
+    const { tank, blasts } = make();
+
+    blasts.exploded({ x: 110, y: 100, radius: 50, level: 0 });
+    frame(tank, 1);
+
+    const strong = tank._blastKick;
+
+    blasts.exploded({ x: 145, y: 100, radius: 50, level: 0 });
+
+    expect(tank._blastKick).toBe(strong);
+  });
+
+  it('blastJolt.enabled = false выключает реакцию', () => {
+    blastJolt.enabled = false;
+
+    try {
+      const { tank, blasts } = make();
+
+      blasts.exploded({ x: 110, y: 100, radius: 50, level: 0 });
+
+      expect(tank._blastKick).toBe(null);
+    } finally {
+      blastJolt.enabled = true;
+    }
+  });
+
+  it('destroy отписывает танк от взрывов', () => {
+    const { tank, blasts } = make();
+    const onBlast = vi.spyOn(tank, '_onBlast');
+
+    tank.destroy();
+    blasts.exploded({ x: 110, y: 100, radius: 50, level: 0 });
+
+    expect(onBlast).not.toHaveBeenCalled();
+  });
+});
+
+// 3D-модель живого танка (plan/tank-3d/): вместо плоских корпуса и башни,
+// когда в ассетах есть атлас; остов остаётся плоским
+describe('Tank: 3D-модель', () => {
+  const atlas = () => ({
+    texture: sized(100, 50),
+    width: 100,
+    height: 50,
+    regions: {
+      body: { x: 2, y: 2, w: 40, h: 30, originX: 22, originY: 17 },
+      gun: { x: 44, y: 2, w: 40, h: 22, originX: 58.5, originY: 13 },
+      trackSide: { x: 2, y: 34, w: 40, h: 5 },
+      barrelSide: { x: 44, y: 34, w: 22, h: 3 },
+      brakeSide: { x: 68, y: 34, w: 8, h: 4 },
+      bottom: { x: 78, y: 34, w: 4, h: 4 },
+    },
+  });
+  const modelAssets = {
+    ...assets,
+    tankModelTexture: { liveTeamId1: atlas(), liveTeamId2: atlas() },
+  };
+  const renderer = { screen: { width: 800, height: 600 } };
+
+  const make = (textures = modelAssets, condition = 100, extra = {}) => {
+    const tank = new Tank(
+      data(condition),
+      textures,
+      { soundManager: makeSoundManager(), renderer, ...extra },
+      { id: '1' },
+    );
+
+    new Container().addChild(tank);
+
+    return tank;
+  };
+
+  it('живой танк рисуется моделью, плоские корпус и башня скрыты', () => {
+    const tank = make();
+
+    expect(tank._model.mesh.visible).toBe(true);
+    expect(tank._model.mesh.parent).toBe(tank);
+    expect(tank.body.visible).toBe(false);
+    expect(tank.gun.visible).toBe(false);
+  });
+
+  it('без атласа — прежний плоский путь', () => {
+    const tank = make(assets);
+
+    expect(tank._model).toBe(null);
+    expect(tank.body.visible).toBe(true);
+  });
+
+  it('остов — плоский', () => {
+    const tank = make(modelAssets, 0);
+
+    expect(tank._model).toBe(null);
+    expect(tank.wreck.visible).toBe(true);
+  });
+
+  it('каждый кадр модель получает проекцию, свет и порядок граней', () => {
+    const tank = make();
+    const update = vi.spyOn(tank._model, 'update');
+
+    tank.onRender();
+
+    const [projected, shades, order] = update.mock.calls[0];
+    const model = createTankModel();
+
+    expect(projected).toHaveLength(model.vertices.length);
+    expect(shades).toHaveLength(model.faces.length);
+    expect(order.length).toBeGreaterThan(0);
+    // ровный танк: верх палубы — яркость ровно 1
+    const deck = model.faces.findIndex(f => f.material === 'hullTop');
+
+    expect(shades[deck]).toBeCloseTo(1, 6);
+  });
+
+  it('отдача откатывает ствол модели, башня стоит', () => {
+    const shots = createShotEvents();
+    const tank = make(modelAssets, 100, { shots });
+    const update = vi.spyOn(tank._model, 'update');
+    const model = createTankModel();
+    const brake = model.faces.find(f => f.material === 'brake').indices[0];
+    const turret = model.faces.find(f => f.material === 'turretTop').indices[0];
+
+    Ticker.shared.deltaMS = 0;
+    tank.onRender();
+
+    const before = update.mock.calls.at(-1)[0];
+
+    shots.fired(1);
+    Ticker.shared.deltaMS = recoil.attack * recoil.duration;
+    tank.onRender();
+    Ticker.shared.deltaMS = 1000 / 60;
+
+    const after = update.mock.calls.at(-1)[0];
+
+    // ствол откатился назад (−u), башня — только вместе с корпусом
+    const barrelShift = after[brake][0] - before[brake][0];
+    const turretShift = after[turret][0] - before[turret][0];
+
+    expect(barrelShift).toBeLessThan(turretShift);
+  });
+
+  it('с атласом остова остов — та же модель со сбитой башней', () => {
+    const tank = make(
+      {
+        ...modelAssets,
+        tankModelTexture: {
+          ...modelAssets.tankModelTexture,
+          destroyed: atlas(),
+        },
+      },
+      0,
+    );
+
+    expect(tank._model.mesh.visible).toBe(true);
+    expect(tank.wreck.visible).toBe(false);
+    expect(Math.abs(tank._wreckSkew)).toBeLessThanOrEqual(0.6);
+  });
+
+  // наклон модели уже в свете граней: светотень корпуса `tiltShade` поверх
+  // неё затемнила бы наклон дважды — и при выключенном `tankLight`
+  it('наклон модели не затемняет тинт танка', () => {
+    tankLight.enabled = false;
+
+    try {
+      const view = createLevelView(seeThrough);
+      const tank = make(modelAssets, 100, {
+        levelView: {
+          set() {},
+          attachStage: (stage, viewRenderer) =>
+            view.attachStage(stage, viewRenderer),
+          camera: () => view.camera(),
+          alphaFor: () => 1,
+          tintFor: () => 0xffffff,
+        },
+      });
+
+      // [x, y, …, z, level, vz, pitch, roll]: нос опущен от света
+      tank.update([100, 100, 0, 0, 0, 0, 0, 100, 10, 1, 0, 0, 0, 0, -0.5, 0]);
+      tank.onRender();
+
+      expect(tank._model.mesh.visible).toBe(true);
+      expect(tank.tint).toBe(0xffffff);
+    } finally {
+      tankLight.enabled = true;
+    }
+  });
+
+  // тень по силуэту: сиблинг на сцене, по полигону на часть, прозрачность
+  // фильтром — перекрытия частей не темнеют дважды
+  it('тень по силуэту модели заменяет спрайт тени', () => {
+    const tank = make({
+      ...modelAssets,
+      tankShadowTexture: { texture: Texture.EMPTY, contentSize: 24 },
+    });
+
+    tank.onRender();
+
+    expect(tank._modelShadow.parent).toBe(tank.parent);
+    expect(tank._modelShadow.visible).toBe(true);
+    expect(tank._modelShadowAlpha.alpha).toBeCloseTo(shadow.groundAlpha, 6);
+    expect(tank._shadow === null || tank._shadow.visible === false).toBe(true);
+  });
+
+  it('у остова тени нет, destroy убирает тень модели', () => {
+    const tank = make();
+
+    tank.onRender();
+
+    const modelShadow = tank._modelShadow;
+
+    tank.update([0, 0, 0, 0, 0, 0, 0, 0, 10, 1]);
+    tank.onRender();
+
+    expect(modelShadow.visible).toBe(false);
+
+    tank.destroy();
+
+    expect(modelShadow.destroyed).toBe(true);
+  });
+
+  it('destroy уничтожает меш модели', () => {
+    const tank = make();
+    const destroy = vi.spyOn(tank._model, 'destroy');
+
+    tank.destroy();
+
+    expect(destroy).toHaveBeenCalled();
   });
 });
 

@@ -20,9 +20,10 @@ let soundManager;
 const created = [];
 
 // формат серверной строки: [x, y, radius]
-const makeController = (data = [100, 200, 50]) => {
+const makeController = (data = [100, 200, 50], dependencies = {}) => {
   const controller = new ExplosionEffectController(data, assets, {
     soundManager,
+    ...dependencies,
   });
   const stage = new Container();
 
@@ -251,5 +252,25 @@ describe('ExplosionEffectController: порядок эффектов', () => {
 
     expect(controller.destroyed).toBe(true);
     expect(soundManager.unregisterSound).toHaveBeenCalledTimes(1);
+  });
+});
+
+// танки в радиусе играют визуальную реакцию: эффект сообщает о взрыве
+describe('ExplosionEffectController: оповещение танков', () => {
+  it('сообщает blasts точку, радиус и уровень', () => {
+    const blasts = { exploded: vi.fn() };
+
+    makeController([100, 200, 50, 1], { blasts });
+
+    expect(blasts.exploded).toHaveBeenCalledWith({
+      x: 100,
+      y: 200,
+      radius: 50,
+      level: 1,
+    });
+  });
+
+  it('без сервиса blasts эффект создаётся как прежде', () => {
+    expect(() => makeController()).not.toThrow();
   });
 });

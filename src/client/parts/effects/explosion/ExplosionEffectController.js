@@ -40,6 +40,15 @@ export default class ExplosionEffectController extends Container {
     // ночь: вспышка кратко подсвечивает окрестность (no-op днём)
     this._lighting = dependencies.lighting || null;
 
+    // танки в радиусе играют визуальную реакцию (src/client/blastJolt.js).
+    // Эффект создаётся раз на взрыв, радиус — физический, из ядра
+    dependencies.blasts?.exploded({
+      x: this.originX,
+      y: this.originY,
+      radius: this.radius,
+      level: this._level,
+    });
+
     // вспышка и воронка живут СИБЛИНГАМИ на сцене (у них свои zIndex),
     // поэтому прозрачность ставится им, а не контроллеру.
     // `onRender` — аксессор Container, назначается свойством

@@ -248,13 +248,28 @@ it changes both sides at once.
 | `shading` | The light-and-shade of the tilt: how far the hull's brightness swings at the maximum tilt. `0` — no shading, the picture as before |
 | `lightDir` | Light direction in SCREEN space (not the hull's): `[x, y]`, normalised on read. The default is light from the north-west — the same way the side faces of buildings are lit |
 
-The hull has NO extrusion of its own (there used to be `body`, `bodySlices`
-and `sideTint`). In this projection a side face shifts by
-`thickness · shear · distance to the screen centre`: on another player's
-tank at the edge of the screen it grew as long as the hull itself, broke
-into steps and always pointed at the local player — the camera centre. The
-volume of a tank comes from light instead: the normal-map light below (and
-`shading` when it is off).
+A live tank is a low-poly 3D model (`src/client/tank3d/`): tracks, a hull
+with sloped sides and a front plate, an octagonal turret, a barrel with a
+muzzle brake. Heading, `pitch`/`roll`, turret rotation, recoil, the blast
+jolt and the landing squash move it as a rigid body instead of skewing a
+flat picture; every face is lit by its own normal (`faceShade`, the
+`tankLight` formula). It is drawn almost from above: the map projection
+(`shear` per level) would stretch the sides at the screen edge longer than
+the hull — that is why the old slice extrusion (`body`, `bodySlices`,
+`sideTint`) was removed — so the lean away from the screen centre is ONE for
+the whole tank, weakened and smoothly capped (`leanGain`, `maxLean`). The
+wreck is the same model with a burnt atlas and a knocked-askew turret.
+
+| `tankModel` | Meaning |
+| --- | --- |
+| `enabled` | `false` — the flat hull (`PerspectiveMesh` with normal maps and `tilt.lift`) as before |
+| `trackHeight`, `hullBase`, `hullTop`, `turretBase`, `turretTop`, `barrelHeight`, `barrelRadius`, `brakeRadius` | Part heights in pixels of the hull art (40 × 30 at base size 10); the plan shape comes from the art itself (`tankTexture.js`), everything scales by `size / 10` |
+| `levelHeight`, `leanGain`, `maxLean` | World units per level for the lean away from the screen centre, the share of the map's lean the model takes (weak on purpose: the camera leads the tank at speed, and a building-like lean made the turret slide at every acceleration), and a smooth cap on how far the model's top point moves, world units |
+| `shadowBlur` | Softness of the silhouette shadow (blur strength, `0` — sharp). The shadow is the model's silhouette cast along the light (`tilt.lightDir`, `tankLight.lightZ`): every part casts its own, the turret and barrel included, and tilt and lift show in it. Opacity — `shadow.groundAlpha` on the ground, `shadow.baseAlpha`/`alphaFalloff` in the air; the wreck casts none. Without the model the rectangular shadow sprite is used |
+
+Faces are textured from the `tankModelTexture` atlas: tops and slopes map the
+same art as the flat texture by (u, v), vertical sides of the tracks, barrel
+and brake have their own strips.
 
 | `tankLight` | Value |
 | --- | --- |
@@ -278,6 +293,13 @@ volume of a tank comes from light instead: the normal-map light below (and
 | `layers` | Soft edge without textures: the same tongues drawn in layers `{ scale, alpha, core }` — wider and dimmer outside, narrower and brighter inside; `core` — the layer in `coreColor` |
 | `shrink` | The flash fades rather than shrinks: brightness falls quadratically, the size only by this share |
 | `color`, `coreColor` | Flame and core colours, the same as the tracer's (additive) |
+
+| `blastJolt` | Meaning |
+| --- | --- |
+| `enabled` | Visual reaction of a tank to a bomb or barrel explosion (`src/client/blastJolt.js`): render only, the push itself is the core's. Tanks on the same level inside the blast radius react with strength `1 − d / radius`, like the damage; a wreck reacts too. `false` — explosions do not visibly touch tanks |
+| `rock`, `wobbleHz`, `decay`, `duration` | The side facing the blast rises by `rock` rad (at strength 1), then the hull rocks at `wobbleHz` and settles within ~`decay` ms; `duration` — when the reaction ends. A weaker blast does not cancel the rocking of a stronger one |
+| `hop`, `hopDuration`, `underShare` | A blast under the hull (closer than `underShare` of the hull length to its centre): the hull is tossed up by `hop` levels over `hopDuration` ms — over its shadow, larger by the height projection — with a random tilt, then lands with the `landing` squash |
+| `shake`, `shakeDuration` | A short shake of the hull by up to `shake` world units, fading over `shakeDuration` ms |
 
 | `recoil` | Meaning |
 | --- | --- |
@@ -497,7 +519,7 @@ engine. The spray itself is drawn by `Dust`, the sound lives only in `Tank`.
 
 The `spatial` block overrides the engine's spatial-sound geometry, and only
 what this game has to override: `mode: 'topDown'`, `virtualElevation: 108`,
-`innerRadius: 5`. The engine's own defaults (`180` / `40`) are calculated
+`innerRadius: 7.5`. The engine's own defaults (`180` / `40`) are calculated
 for a 1:1 scale, and here a **world unit is not a screen pixel**:
 `mapScale: 0.3` (`src/config/game.js`) with `baseScale: '5:1'`
 (`src/config/client.js`) makes one world unit five screen pixels, so the
@@ -505,8 +527,8 @@ defaults would spread the stereo base over five screen widths and treat a
 radius of five tank hulls as "inside the player". `108` is half the visible
 screen height in world units (`1080 / 2 / 5`); at the edge of the screen
 (`192` units sideways) that is an angle of about 60°, next to the hull — a
-few degrees. `5` is the half-diagonal of the `m1` hull, which is `8 x 6`
-world units (`size * 4 x size * 3` at `size: 2` in `src/data/models.js`), so
+few degrees. `7.5` is the half-diagonal of the `m1` hull, which is `12 x 9`
+world units (`size * 4 x size * 3` at `size: 3` in `src/data/models.js`), so
 an explosion inside the hull is split evenly between both ears.
 `refDistance` / `maxDistance` / `rolloffFactor` are deliberately left to the
 engine.

@@ -63,6 +63,101 @@ function bevelRing(g, points, inner, fill) {
   }
 }
 
+// фиксированный размер
+const _size = 10;
+const _width = _size * 4;
+const _height = _size * 3;
+
+// палуба — стальной серый, а не почти белый: свет граней 3D-модели на
+// наклоне поднимает яркость до ~1.1, и при 0xeeeeee палуба упиралась в чистый
+// белый («выгорала» на горке). Запас яркости ≈ 1.27
+const baseColor = 0xc8c9c4;
+
+// корпус: гусеницы по бортам, между ними палуба с фаской (у носа — пологий
+// лобовой лист) и решётка моторного отсека в корме. Габарит — ровно
+// 40 × 30, как у прежнего корпуса: по нему считаются размер меша и тень
+const hullRect = { x: -_width / 2, y: -_height / 2, w: _width, h: _height };
+const deck = { x: -18, y: -9, w: 36, h: 18 };
+const deckBevel = { l: 2, r: 4, t: 2, b: 2 };
+const tracks = [
+  { x: -19, y: -14, w: 38, h: 5 },
+  { x: -19, y: 9, w: 38, h: 5 },
+];
+
+// башня: восьмигранник с фаской, люк, ствол с дульным тормозом
+const turret = [
+  1.33, -0.42, 0.42, -1, -0.42, -1, -1.33, -0.42, -1.33, 0.42, -0.42, 1, 0.42,
+  1, 1.33, 0.42,
+].map(value => value * _size);
+const turretInner = 0.6;
+const barrel = { x: 0.25 * _size, y: -0.25 * _size, w: 2.08 * _size };
+const brake = {
+  x: 2.1 * _size,
+  y: -0.36 * _size,
+  w: 0.35 * _size,
+  h: 0.72 * _size,
+};
+const hatch = { x: -0.45 * _size, y: 0.35 * _size, r: 0.28 * _size };
+// обводка башни и ствола: тонкая и в тон цвету команды (см. drawTankGun) —
+// светлая широкая читалась мультяшным контуром
+const outline = { width: 0.08 * _size };
+const OUTLINE_SHADE = 0.55;
+
+// корпус сверху: общий для плоской текстуры и атласа 3D-модели
+// (`tankModelTexture.js`), поэтому верх модели совпадает с рисунком
+export function drawTankBody(g) {
+  g.rect(hullRect.x, hullRect.y, hullRect.w, hullRect.h).fill(0x555555);
+
+  for (const track of tracks) {
+    g.rect(track.x, track.y, track.w, track.h).fill(0x3c3c3c);
+
+    // траки поперёк хода
+    for (let x = track.x + 1; x < track.x + track.w; x += 3) {
+      g.rect(x, track.y, 1, track.h).fill(0x2a2a2a);
+    }
+  }
+
+  g.rect(deck.x, deck.y, deck.w, deck.h).fill(baseColor);
+  bevelFrame(g, deck, deckBevel, {
+    l: 0xa9aaa5,
+    r: 0xb6b7b2,
+    t: 0xa9aaa5,
+    b: 0xa9aaa5,
+  });
+
+  // решётка моторного отсека
+  for (let y = -6; y <= 5; y += 3) {
+    g.rect(-15, y, 4, 1).fill(0x777873);
+  }
+}
+
+// башня со стволом сверху, цвет команды — на башне и стволе
+export function drawTankGun(g, color) {
+  const edge = { ...outline, color: scaleTint(color, OUTLINE_SHADE) };
+  const thinEdge = { width: 0.06 * _size, color: edge.color };
+
+  g.poly(turret).fill(color).stroke(edge);
+  bevelRing(g, turret, turretInner, () => scaleTint(color, 0.8));
+  g.circle(hatch.x, hatch.y, hatch.r)
+    .fill(scaleTint(color, 0.65))
+    .stroke(thinEdge);
+  g.rect(barrel.x, barrel.y, barrel.w, -barrel.y * 2)
+    .fill(color)
+    .stroke(edge);
+  g.rect(brake.x, brake.y, brake.w, brake.h)
+    .fill(scaleTint(color, 0.7))
+    .stroke(thinEdge);
+}
+
+// геометрия рисунка для атласа модели
+export const TANK_ART = {
+  width: _width,
+  height: _height,
+  turret,
+  barrel,
+  brake,
+};
+
 // создает набор текстур для танка
 // (нормальное состояние для команд и уничтоженное)
 // params.colors - Объект с цветами для команд
@@ -78,49 +173,8 @@ export default function tankTexture(params, renderer) {
   const { colors } = params;
   const textures = {};
 
-  // фиксированный размер
-  const _size = 10;
-  const _width = _size * 4;
-  const _height = _size * 3;
-
-  const baseColor = 0xeeeeee;
-
-  // корпус: гусеницы по бортам, между ними палуба с фаской (у носа — пологий
-  // лобовой лист) и решётка моторного отсека в корме. Габарит — ровно
-  // 40 × 30, как у прежнего корпуса: по нему считаются размер меша и тень
-  const hullRect = { x: -_width / 2, y: -_height / 2, w: _width, h: _height };
-  const deck = { x: -18, y: -9, w: 36, h: 18 };
-  const deckBevel = { l: 2, r: 4, t: 2, b: 2 };
-  const tracks = [
-    { x: -19, y: -14, w: 38, h: 5 },
-    { x: -19, y: 9, w: 38, h: 5 },
-  ];
-
-  const drawBody = g => {
-    g.rect(hullRect.x, hullRect.y, hullRect.w, hullRect.h).fill(0x555555);
-
-    for (const track of tracks) {
-      g.rect(track.x, track.y, track.w, track.h).fill(0x3c3c3c);
-
-      // траки поперёк хода
-      for (let x = track.x + 1; x < track.x + track.w; x += 3) {
-        g.rect(x, track.y, 1, track.h).fill(0x2a2a2a);
-      }
-    }
-
-    g.rect(deck.x, deck.y, deck.w, deck.h).fill(baseColor);
-    bevelFrame(g, deck, deckBevel, {
-      l: 0xc4c4c4,
-      r: 0xd4d4d4,
-      t: 0xc4c4c4,
-      b: 0xc4c4c4,
-    });
-
-    // решётка моторного отсека
-    for (let y = -6; y <= 5; y += 3) {
-      g.rect(-15, y, 4, 1).fill(0x8a8a8a);
-    }
-  };
+  const drawBody = drawTankBody;
+  const drawGun = drawTankGun;
 
   const drawBodyNormal = g => {
     g.rect(hullRect.x, hullRect.y, hullRect.w, hullRect.h).fill(FLAT_NORMAL);
@@ -146,36 +200,6 @@ export default function tankTexture(params, renderer) {
     });
   };
 
-  // башня: восьмигранник с фаской, люк, ствол с дульным тормозом
-  const turret = [
-    1.33, -0.42, 0.42, -1, -0.42, -1, -1.33, -0.42, -1.33, 0.42, -0.42, 1, 0.42,
-    1, 1.33, 0.42,
-  ].map(value => value * _size);
-  const turretInner = 0.6;
-  const barrel = { x: 0.25 * _size, y: -0.25 * _size, w: 2.08 * _size };
-  const brake = {
-    x: 2.1 * _size,
-    y: -0.36 * _size,
-    w: 0.35 * _size,
-    h: 0.72 * _size,
-  };
-  const hatch = { x: -0.45 * _size, y: 0.35 * _size, r: 0.28 * _size };
-  const outline = { width: 0.17 * _size, color: 0xaaaaaa };
-
-  const drawGun = (g, color) => {
-    g.poly(turret).fill(color).stroke(outline);
-    bevelRing(g, turret, turretInner, () => scaleTint(color, 0.8));
-    g.circle(hatch.x, hatch.y, hatch.r)
-      .fill(scaleTint(color, 0.65))
-      .stroke({ width: 0.08 * _size, color: 0xaaaaaa });
-    g.rect(barrel.x, barrel.y, barrel.w, -barrel.y * 2)
-      .fill(color)
-      .stroke(outline);
-    g.rect(brake.x, brake.y, brake.w, brake.h)
-      .fill(scaleTint(color, 0.7))
-      .stroke({ width: 0.1 * _size, color: 0xaaaaaa });
-  };
-
   const drawGunNormal = g => {
     // подложка — тот же силуэт с той же обводкой: кромка цветной текстуры
     // тоже получает нормаль, а не пустоту
@@ -195,7 +219,7 @@ export default function tankTexture(params, renderer) {
     };
 
     cylinder({ ...barrel, h: -barrel.y * 2 }, outline);
-    cylinder(brake, { width: 0.1 * _size });
+    cylinder(brake, { width: 0.06 * _size });
   };
 
   // карта нормалей запекается в КАДР цветной текстуры: так их пиксели

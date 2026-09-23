@@ -147,8 +147,17 @@ created per shot — the local one is predicted and the authoritative echo is
 filtered by the core — so every shot kicks exactly once. Ids are compared as
 strings: the part context and the tracer row may carry different types.
 
+`blasts` (`src/client/blastEvents.js`) is the same kind of bus for
+explosions: `ExplosionEffect` (bomb or barrel) reports `{ x, y, radius,
+level }` once per explosion, and every `Tank` decides itself whether it was
+caught (`src/client/blastJolt.js`: same level, inside the physical radius,
+strength `1 − d / radius` like the core's damage) and plays a visual jolt —
+the side facing the blast rises and the hull rocks, a blast right under the
+hull tosses it up over its shadow and lands it with the landing squash.
+Render only: the push itself stays the core's.
+
 The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`,
-`lighting`, `shots`)
+`lighting`, `shots`, `blasts`)
 are repeated in `ClientPlugin.serviceNames`. The hook
 needs a live core, so the contract checker cannot read what it returns; the
 list is what lets rule `C4` tell a game service from a typo in
@@ -496,7 +505,12 @@ knows nothing about them.
   mode is stated, not inferred. The tank's `PerspectiveMesh`
   (`parts/Tank.js`) states it for the same reason and as a guard only: at
   the shipped `tilt.vertices` (6×6) it batches on its own, and would cross
-  the threshold above 10. With `tankLight.enabled` the tank meshes carry
+  the threshold above 10. The live tank's 3D model (`src/client/tank3d/modelMesh.js`) is an
+  unbatched `Mesh` with its own shader too: fixed-size buffers, positions and
+  face brightness rewritten once per frame, the index buffer rewritten with
+  the visible faces in draw order (the tail is degenerate triangles).
+  `Tank.destroy` destroys its mesh, shader and geometry. With
+  `tankLight.enabled` the tank meshes carry
   their OWN shader (`src/client/tankLight.js`) and are unbatched, but never
   touch the shared `GlMeshAdaptor` shader; `Tank.destroy` destroys these
   shaders (a mesh does not) and leaves the shared textures alone.

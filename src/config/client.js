@@ -101,6 +101,18 @@ export default {
           },
         },
         {
+          // атлас граней 3D-модели танка (src/client/tank3d/): те же цвета
+          // команд, что у плоской текстуры
+          name: 'tankModelTexture',
+          component: 'Tank',
+          params: {
+            colors: {
+              teamId1: 0x552222,
+              teamId2: 0x225522,
+            },
+          },
+        },
+        {
           name: 'bombTexture',
           component: 'Bomb',
           params: {
@@ -269,6 +281,9 @@ export default {
       // «танк выстрелил»: эффект выстрела сообщает id стрелка, танк играет
       // визуальную отдачу (src/client/recoil.js)
       shots: ['ShotEffect', 'Tank'],
+      // «взрыв»: эффект взрыва сообщает точку, радиус и уровень, танки в
+      // радиусе играют визуальную реакцию (src/client/blastJolt.js)
+      blasts: ['ExplosionEffect', 'Tank'],
       // 2.5D: где локальный игрок и на каком он уровне. Пишет Tank, читают
       // все, кто уступает ему видимость: плита моста и ящики на ней, чужие
       // танки, дым, бомбы, эффекты и следы — по одной формуле
@@ -413,7 +428,13 @@ export default {
       // схема DOM панели: PanelView генерирует ячейки в порядке fields;
       // семантику задаёт type ('bar'|'value'|'time'|'weapon'), не имя поля
       fields: [
-        { name: 'health', elem: 'panel-health', type: 'bar', max: 100, blocks: 30 },
+        {
+          name: 'health',
+          elem: 'panel-health',
+          type: 'bar',
+          max: 100,
+          blocks: 30,
+        },
         { name: 'bullet', elem: 'panel-bullet', type: 'weapon' },
         { name: 'bomb', elem: 'panel-bomb', type: 'weapon' },
         { name: 'time', elem: 'panel-time', type: 'time' },

@@ -20,7 +20,8 @@
 //! разъедутся по поведению при первой же правке.
 //!
 //! Часов симуляции у подсистемы нет: шагает её [`crate::client::predictor`]
-//! (`integrate_predicted`, `decay_error`), поэтому контакт со своим танком
+//! (шаг решателя в `resolve_world`, `after_solved_step`, `decay_error`),
+//! поэтому контакт со своим танком
 //! разрешается в одном шаге, а replay реконсиляции переигрывает и её тела.
 
 use std::any::Any;
@@ -323,6 +324,18 @@ impl PredictedSet {
             .collect()
     }
 
+    /// Предсказанные тела вместе с их id: решатель предиктора помнит
+    /// контакты между шагами по устойчивому имени тела, а порядковый номер
+    /// тела в шаге сдвигается, когда соседнее тело входит в предсказание
+    /// или выходит из него.
+    pub fn predicted_named_mut(&mut self) -> Vec<(&str, &mut PredictedBody)> {
+        self.bodies
+            .iter_mut()
+            .filter(|(_, body)| body.is_predicted())
+            .map(|(id, body)| (id.as_str(), body))
+            .collect()
+    }
+
     /// Принимает авторитетное состояние тел кадра перед replay предиктора
     /// (`snapshot_bodies` подсистемы): запоминает серверное состояние, а
     /// предсказанным подменяет состояние авторитетным, сохранив копию для
@@ -521,6 +534,11 @@ pub trait PredictedBodies {
         self.set_mut().integrate_predicted(dt);
     }
 
+    /// Правила шага сверх интеграции — после того, как предиктор сам
+    /// провёл тела шагом решателя (`rigid_body::step_bodies`): интегрировать
+    /// их второй раз нельзя. По умолчанию правил нет.
+    fn after_solved_step(&mut self, _dt: f32) {}
+
     fn decay_error(&mut self, elapsed: f64) {
         self.set_mut().decay_error(elapsed);
     }
@@ -535,6 +553,10 @@ pub trait PredictedBodies {
 
     fn predicted_bodies_mut(&mut self) -> Vec<&mut PredictedBody> {
         self.set_mut().predicted_bodies_mut()
+    }
+
+    fn predicted_named_mut(&mut self) -> Vec<(&str, &mut PredictedBody)> {
+        self.set_mut().predicted_named_mut()
     }
 }
 

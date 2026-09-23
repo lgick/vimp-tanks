@@ -1,6 +1,7 @@
 import blurredCircleTexture from './blurredCircleTexture.js';
 import funnelTexture from './funnelTexture.js';
 import tankTexture from './tankTexture.js';
+import tankModelTexture from './tankModelTexture.js';
 import tankRadarTexture from './tankRadarTexture.js';
 import bombTexture from './bombTexture.js';
 import trackMarkTexture from './trackMarkTexture.js';
@@ -20,6 +21,8 @@ export default {
   tankShadowTexture,
   funnelTexture,
   tankTexture,
+  // атлас граней 3D-модели танка (plan/tank-3d/)
+  tankModelTexture,
   tankRadarTexture,
   bombTexture,
   trackMarkTexture,

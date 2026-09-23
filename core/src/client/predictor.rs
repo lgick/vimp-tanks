@@ -1,8 +1,8 @@
 //! Client-side prediction своего танка — порт src/client/TankPredictor.js
-//! (срез 2.6). Реплика авторитетной модели движения без Rapier-коллизий:
-//! формулы тика — общие с Tank::update (crate::motion), интеграция —
-//! эмпирический порядок Rapier (позиция скоростью ДО демпфирования,
-//! затем damping v·= 1/(1+dt·d)), закреплённый паритет-тестом.
+//! (срез 2.6). Реплика авторитетной модели движения: формулы тика — общие
+//! с Tank::update (crate::motion), контакты и интеграция — шаг решателя
+//! движка `rigid_body::step_bodies`, порт TGS-решателя Rapier хоста
+//! (подшаги, демпфирование раз за шаг), закреплённый паритет-тестами.
 //!
 //! Поток: apply_input пишет изменения клавиш в историю; update() шагает
 //! симуляцию фикс-шагом; on_server_state() — reconciliation: состояние
@@ -20,13 +20,11 @@ use crate::config::{KeyConfig, LevelRules, ModelConfig, SurfaceRules};
 use crate::level::{self, Footprint, LevelState, Transit, LEVEL_EPSILON};
 use crate::motion::{self, TurretInput};
 use crate::surface::{self, SurfaceMap, SurfaceMix};
-use vimp_engine_core::client::collision::{
-    BlockContact, Contact, Manifold, collect_block_contacts_into, obb_manifold,
-};
+use vimp_engine_core::client::collision::{BlockContact, collect_block_contacts_into, obb_manifold};
 use vimp_engine_core::client::raycast::Box2;
 use vimp_engine_core::client::rigid_body::{
-    Body, ContactImpulses, MAP_SURFACE, Surface, apply_contact_impulse, box_mass_properties,
-    combine_surfaces, separate_bodies,
+    Body, ContactCache, ContactKey, ContactRow, MAP_SURFACE, Surface, box_mass_properties,
+    combine_surfaces, step_bodies,
 };
 use vimp_engine_core::config::PLAYER_STATE_LEN;
 use vimp_engine_core::map::{MapLevels, RampGuard, STATIC_LEVEL_GROUP, level_group, ramp_guards};
@@ -61,8 +59,33 @@ const STEP_EPSILON_MS: f64 = 1e-6;
 // Много больше квантования и много меньше шага (8.3 мс)
 const FRAME_TIME_EPSILON_MS: f64 = 0.01;
 
-// проходов решателя по собранным контактам за один шаг (sequential impulse)
-const SOLVER_ITERATIONS: usize = 4;
+// Устойчивые имена тел для памяти контактов решателя (`ContactKey`): по
+// ним `step_bodies` находит точку прошлого шага (warmstart, `is_new`).
+// Индекс в срезе шага не годится — срез пересобирается каждый шаг. Два
+// старших бита — вид тела, остальные — его имя внутри вида
+const NAME_TANK: u32 = 0;
+const NAME_BLOCK: u32 = 1 << 30;
+const NAME_GUARD: u32 = 2 << 30;
+const NAME_BODY: u32 = 3 << 30;
+const NAME_MASK: u32 = (1 << 30) - 1;
+
+// блок стены: уровень и номер в `MapLevels::static_blocks(level)`
+fn block_name(level: u8, index: usize) -> u32 {
+    NAME_BLOCK | (((level as u32) << 24 | index as u32) & NAME_MASK)
+}
+
+// предсказанное тело подсистемы: FNV-1a от номера подсистемы и id тела.
+// Тело живёт в подсистеме под строковым id, и имя не сдвигается, когда
+// соседнее тело входит в предсказание или выходит из него
+fn body_name(set: usize, id: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+
+    for byte in (set as u32).to_le_bytes().iter().chain(id.as_bytes()) {
+        hash = (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
+    }
+
+    NAME_BODY | (hash & NAME_MASK)
+}
 
 // неподвижный партнёр контакта со стеной (обратные массы нулевые, поэтому
 // решатель его не двигает; координаты нужны только как плечо)
@@ -171,8 +194,8 @@ pub struct Predictor {
 
     // подсистемы предсказанного мира (динамика карты, чужие танки): часы у
     // них общие с этим предиктором, иначе контакт разрешался бы в разных
-    // шагах. Без подсистем и без set_map проход столкновений — полный no-op,
-    // а реплика движения остаётся бит-в-бит прежней (паритет с хостом)
+    // шагах. Без подсистем и без set_map шаг идёт тем же решателем без
+    // контактов — одна ветка интеграции на все случаи
     sets: Vec<Box<dyn PredictedBodies>>,
     levels: Option<Rc<MapLevels>>,
     /// Стражи прогонов рампы текущей карты: геометрия зависит только от неё,
@@ -188,9 +211,16 @@ pub struct Predictor {
     geometry: Vec<(f32, f32)>,
     surfaces: Vec<Surface>,
     masks: Vec<Group>,
-    contacts: Vec<(usize, usize, Contact, Surface, ContactImpulses)>,
-    separations: Vec<(usize, usize, Contact)>,
+    rows: Vec<ContactRow>,
+    names: Vec<u32>,
     block_hits: Vec<BlockContact>,
+    /// Память контактов решателя между шагами (`step_bodies`: warmstart,
+    /// отскок только у новой точки) и её снимки по шагам: реплей начинается
+    /// с памяти на момент авторитетного кадра, как и состояние уровня.
+    /// Без отката реплей у стены заново получал бы «новую» точку и ложный
+    /// отскок на каждом кадре сервера
+    contact_cache: ContactCache,
+    contact_history: VecDeque<(f64, ContactCache)>,
 
     /// Уровень/высота/переход своего танка. Считается теми же функциями
     /// `crate::level`, что и на хосте, — иначе реплика уедет от
@@ -303,9 +333,11 @@ impl Predictor {
             geometry: Vec::new(),
             surfaces: Vec::new(),
             masks: Vec::new(),
-            contacts: Vec::new(),
-            separations: Vec::new(),
+            rows: Vec::new(),
+            names: Vec::new(),
             block_hits: Vec::new(),
+            contact_cache: ContactCache::new(),
+            contact_history: VecDeque::new(),
             level_state: LevelState::default(),
             level_rules,
             surface_map: None,
@@ -365,7 +397,7 @@ impl Predictor {
     }
 
     /// Подсистема предсказанного мира. Её тела шагает этот предиктор
-    /// (`integrate_predicted`, `decay_error`), поэтому контакт со своим
+    /// (`resolve_world`, `after_solved_step`, `decay_error`), поэтому контакт со своим
     /// танком разрешается в одном шаге, а replay реконсиляции переигрывает
     /// и её тела.
     pub fn add_predicted_set(&mut self, set: Box<dyn PredictedBodies>) {
@@ -442,6 +474,8 @@ impl Predictor {
         // геометрии, обойдя ветку «истории нет, берём из кадра»
         self.level_state = LevelState::default();
         self.level_history.clear();
+        self.contact_cache.clear();
+        self.contact_history.clear();
         self.authoritative_level = None;
         self.level_disagreement = 0;
     }
@@ -553,6 +587,8 @@ impl Predictor {
         self.has_state = false;
         self.history.clear();
         self.level_history.clear();
+        self.contact_cache.clear();
+        self.contact_history.clear();
         self.base_keys_mask = 0;
         self.keys_mask = 0; // сервер сбрасывает клавиши при респауне (resetKeys)
         self.one_shot_pending = 0;
@@ -691,6 +727,7 @@ impl Predictor {
         // концу прошлого реплея — иначе на клетке входа в прогон гейт
         // щёлкает только у клиента
         self.rewind_level_state(server_time - offset);
+        self.rewind_contacts(server_time - offset);
 
         // фаза падения берётся из кадра (`z` ниже своего уровня = танк в
         // воздухе), а не из прошлой ветки предсказания: иначе высота своего
@@ -980,6 +1017,7 @@ impl Predictor {
         // снапшот пишется ВСЕГДА, включая ранние выходы шага (нет модели):
         // дыра в истории означала бы откат к состоянию другого шага
         self.push_level_snapshot();
+        self.push_contact_snapshot();
     }
 
     fn step_inner(&mut self, keys: u32) {
@@ -1042,7 +1080,7 @@ impl Predictor {
 
             self.pre_step_sets(dt);
             self.resolve_world(dt);
-            self.integrate(damping.0, damping.1, dt);
+            self.after_solved_step(dt);
 
             return;
         }
@@ -1178,8 +1216,7 @@ impl Predictor {
         // молча расходилось с сервером на касательных ударах
         self.pre_step_sets(dt);
         self.resolve_world(dt);
-
-        self.integrate(damping.0, damping.1, dt);
+        self.after_solved_step(dt);
     }
 
     // силы шага предсказанных подсистем до контактов (поверхности под телами
@@ -1220,21 +1257,11 @@ impl Predictor {
         )
     }
 
-    // интеграция и затухание (эмпирический порядок Rapier, зафиксирован
-    // паритет-тестом: позиция интегрируется скоростью до демпфирования,
-    // хранится задемпфированная скорость). Тела предсказанных подсистем
-    // едут тем же шагом и в том же порядке: импульсы уже решены выше
-    fn integrate(&mut self, linear: f32, angular: f32, dt: f32) {
-        self.state.x += self.state.vx * dt;
-        self.state.y += self.state.vy * dt;
-        self.state.angle = normalize_angle(self.state.angle + self.state.angvel * dt);
-
-        self.state.vx *= 1.0 / (1.0 + dt * linear);
-        self.state.vy *= 1.0 / (1.0 + dt * linear);
-        self.state.angvel *= 1.0 / (1.0 + dt * angular);
-
+    // позы и скорости шага уже посчитал `step_bodies` в `resolve_world`;
+    // подсистемам остаются их правила сверх интеграции (падение тел карты)
+    fn after_solved_step(&mut self, dt: f32) {
         for set in &mut self.sets {
-            set.integrate_predicted(dt);
+            set.after_solved_step(dt);
         }
     }
 
@@ -1248,6 +1275,35 @@ impl Predictor {
         }
 
         self.level_history.push_back((self.step_time, self.level_state));
+    }
+
+    // снимок памяти контактов после шага — парный `push_level_snapshot`
+    fn push_contact_snapshot(&mut self) {
+        let min_time = self.step_time - HISTORY_MAX_AGE;
+
+        while self.contact_history.front().is_some_and(|(t, _)| *t < min_time) {
+            self.contact_history.pop_front();
+        }
+
+        self.contact_history.push_back((self.step_time, self.contact_cache.clone()));
+    }
+
+    // память контактов на шаге кадра — парный `rewind_level_state`. Кадр
+    // вне истории: помнить нечего, и точки реплея будут новыми, как у
+    // хоста после respawn
+    fn rewind_contacts(&mut self, local_time: f64) {
+        while self
+            .contact_history
+            .back()
+            .is_some_and(|(t, _)| *t > local_time + FRAME_TIME_EPSILON_MS)
+        {
+            self.contact_history.pop_back();
+        }
+
+        match self.contact_history.back() {
+            Some((_, cache)) => self.contact_cache = cache.clone(),
+            None => self.contact_cache.clear(),
+        }
     }
 
     // откатывает состояние уровня к шагу, на котором снят кадр: всё, что
@@ -1313,22 +1369,22 @@ impl Predictor {
         );
     }
 
-    /// Столкновения одного шага: свой танк, предсказанные тела подсистем и
-    /// стены разрешаются в ОДНОЙ симуляции — потому нарисованный танк и
-    /// нарисованное тело не выдавливают друг друга.
-    /// Без карты и без подсистем — полный no-op (см. инвариант в структуре).
+    /// Шаг тел: свой танк, предсказанные тела подсистем и стены
+    /// разрешаются в ОДНОЙ симуляции — потому нарисованный танк и
+    /// нарисованное тело не выдавливают друг друга. Позы и скорости после
+    /// шага (с демпфированием) считает `step_bodies`; без карты и подсистем
+    /// — тот же шаг без контактов.
     fn resolve_world(&mut self, dt: f32) {
-        // заморожен — танком владеет сервер: уничтоженный корпус ничего не
-        // толкает, а захват тел в предсказание привязал бы их к нему
-        // (см. release_predicted). Проверка защитная: при `frozen` сюда не
-        // доходит `update`, второго пути вызова искать не нужно
-        if self.frozen || (self.levels.is_none() && self.sets.is_empty()) {
-            return;
-        }
-
         let (Some(model), Some(shape)) = (&self.model, &self.shape) else {
             return;
         };
+
+        // заморожен — танком владеет сервер: уничтоженный корпус ничего не
+        // толкает, а захват тел в предсказание привязал бы их к нему
+        // (см. release_predicted). Проверка защитная: при `frozen` сюда не
+        // доходит `update`. Шаг при этом тот же — одна ветка интеграции на
+        // все случаи, иначе на границе менялась бы линеаризация поворота
+        let world = !self.frozen;
 
         let local_now = self.local_now;
         // дистанция спекулятивного контакта — одна на все пары шага, как у
@@ -1348,16 +1404,17 @@ impl Predictor {
         let mut geometry = std::mem::take(&mut self.geometry);
         let mut surfaces = std::mem::take(&mut self.surfaces);
         let mut masks = std::mem::take(&mut self.masks);
-        let mut contacts = std::mem::take(&mut self.contacts);
-        let mut separations = std::mem::take(&mut self.separations);
+        let mut rows = std::mem::take(&mut self.rows);
+        let mut names = std::mem::take(&mut self.names);
+        let mut cache = std::mem::take(&mut self.contact_cache);
         let mut block_hits = std::mem::take(&mut self.block_hits);
 
         sim.clear();
         geometry.clear();
         surfaces.clear();
         masks.clear();
-        contacts.clear();
-        separations.clear();
+        rows.clear();
+        names.clear();
 
         // тела шага: индекс 0 — свой танк, дальше предсказанные тела
         // подсистем в порядке их регистрации, затем статические партнёры
@@ -1387,12 +1444,13 @@ impl Predictor {
             friction: model.fixture.friction,
             restitution: model.fixture.restitution,
         });
+        names.push(NAME_TANK);
 
         // захват и шаг предсказанных подсистем (ящики карты, чужие танки)
         let mut bodies = Vec::new();
         let map = self.levels.as_ref();
 
-        for set in &mut self.sets {
+        for (set_index, set) in self.sets.iter_mut().enumerate().filter(|_| world) {
             set.capture(&tank_obb, local_now);
 
             // стражей проходит насквозь только тело, ЗАКОННО едущее по
@@ -1400,7 +1458,7 @@ impl Predictor {
             // судится одной функцией на все стороны (`level::body_on_ramp`)
             let climbs = set.climbs_ramps();
 
-            for body in set.predicted_bodies_mut() {
+            for (id, body) in set.predicted_named_mut() {
                 body.on_ramp = climbs
                     && map.is_some_and(|levels| {
                         level::body_on_ramp(levels, body.body.x, body.body.y, body.z, body.level)
@@ -1408,14 +1466,12 @@ impl Predictor {
                 sim.push(body.body);
                 geometry.push((body.half_w, body.half_h));
                 surfaces.push(body.surface);
+                names.push(body_name(set_index, id));
                 bodies.push(body);
             }
         }
 
         let movable = sim.len();
-        // импульсы идут по КАЖДОЙ точке манифольда, а позиционная коррекция —
-        // по одной (самой глубокой) точке пары: развод по обеим точкам
-        // растолкал бы тела вдвое, поэтому списки разные
 
         // маска тела шага: индекс 0 — свой танк (переход по рампе даёт все
         // уровни прогона), остальные — правило движка
@@ -1437,7 +1493,7 @@ impl Predictor {
 
         // контакты со стенами (партнёр — статика в точке задетого тайла):
         // стены собираются по КАЖДОМУ уровню из маски тела
-        if let Some(levels) = &self.levels {
+        if let Some(levels) = self.levels.as_ref().filter(|_| world) {
             for index in 0..movable {
                 let mask = masks[index];
                 let obb = Box2 {
@@ -1472,18 +1528,25 @@ impl Predictor {
 
                     for hit in &block_hits {
                         let partner = sim.len();
+                        // `BlockContact` несёт центр блока, а не номер: номер
+                        // находится по центру в том же списке, из которого
+                        // блок собран
+                        let block = levels
+                            .static_blocks(level)
+                            .iter()
+                            .position(|b| b.x == hit.block_x && b.y == hit.block_y)
+                            .unwrap_or(usize::MAX);
 
                         sim.push(static_body(hit.block_x, hit.block_y));
                         geometry.push((0.0, 0.0));
                         surfaces.push(MAP_SURFACE);
-                        push_manifold(
-                            &mut contacts,
-                            &mut separations,
+                        rows.extend(ContactRow::from_manifold(
                             index,
                             partner,
                             &hit.manifold,
                             combine_surfaces(&surfaces[index], &MAP_SURFACE),
-                        );
+                            ContactKey::new(names[index], block_name(level, block), 0),
+                        ));
                     }
                 }
             }
@@ -1494,7 +1557,7 @@ impl Predictor {
             // берёт их у движка (`map::ramp_guards`, посчитаны на загрузке
             // карты): формула одна на обе стороны, иначе предсказание
             // въезжает на прогон сбоку там, где хост держит
-            for guard in &self.guards {
+            for (guard_index, guard) in self.guards.iter().enumerate() {
                 let box2 = Box2 {
                     x: guard.x,
                     y: guard.y,
@@ -1531,14 +1594,13 @@ impl Predictor {
                     sim.push(static_body(box2.x, box2.y));
                     geometry.push((0.0, 0.0));
                     surfaces.push(MAP_SURFACE);
-                    push_manifold(
-                        &mut contacts,
-                        &mut separations,
+                    rows.extend(ContactRow::from_manifold(
                         index,
                         partner,
                         &manifold,
                         combine_surfaces(&surfaces[index], &MAP_SURFACE),
-                    );
+                        ContactKey::new(names[index], NAME_GUARD | guard_index as u32, 0),
+                    ));
                 }
             }
         }
@@ -1567,56 +1629,41 @@ impl Predictor {
                 };
 
                 if let Some(manifold) = obb_manifold(&obb_a, &obb_b, prediction) {
-                    push_manifold(
-                        &mut contacts,
-                        &mut separations,
+                    rows.extend(ContactRow::from_manifold(
                         a,
                         b,
                         &manifold,
                         combine_surfaces(&surfaces[a], &surfaces[b]),
-                    );
+                        ContactKey::new(names[a], names[b], 0),
+                    ));
                 }
             }
         }
 
-        if !contacts.is_empty() {
-            // развод по глубине — ровно один раз на ПАРУ: повтор на каждой
-            // итерации (или на каждой точке манифольда) расталкивал бы тела
-            // кратно их числу. Глубина за шаг уходит не вся, а по закону
-            // контактной пружины хоста (`penetration_correction`)
-            for (a, b, contact) in &separations {
-                let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
+        // шаг тел как у хоста (TGS-решатель Rapier): подшаги, проход без
+        // смещения, пара точек манифольда — блоком, память точек прошлого
+        // шага. На выходе — позы и скорости после шага, включая
+        // демпфирование: интегрировать второй раз нельзя. Прежний решатель
+        // (`separate_bodies` + итерации `apply_contact_impulse` + своя
+        // интеграция) на лобовом ударе оставлял скорость «зазор / dt» там,
+        // где хост отдаёт отскок, — рывок при каждом ударе о стену
+        step_bodies(&mut sim[..], &rows, &mut cache, dt);
 
-                separate_bodies(body_a, body_b, contact, dt);
-            }
+        self.state.x = sim[0].x;
+        self.state.y = sim[0].y;
+        self.state.angle = normalize_angle(sim[0].angle);
+        self.state.vx = sim[0].vx;
+        self.state.vy = sim[0].vy;
+        self.state.angvel = sim[0].angvel;
 
-            // контакты собраны один раз, импульсы проходят по ним несколько
-            // раз — это же заменяет внутренние итерации выталкивания из
-            // тайловой сетки
-            for _ in 0..SOLVER_ITERATIONS {
-                for (a, b, contact, surface, acc) in &mut contacts {
-                    let (body_a, body_b) = pair_mut(&mut sim, *a, *b);
-
-                    apply_contact_impulse(body_a, body_b, contact, surface, dt, acc);
-                }
-            }
-
-            self.state.x = sim[0].x;
-            self.state.y = sim[0].y;
-            self.state.angle = normalize_angle(sim[0].angle);
-            self.state.vx = sim[0].vx;
-            self.state.vy = sim[0].vy;
-            self.state.angvel = sim[0].angvel;
-
-            for (offset, body) in bodies.iter_mut().enumerate() {
-                body.body = sim[offset + 1];
-            }
+        for (offset, body) in bodies.iter_mut().enumerate() {
+            body.body = sim[offset + 1];
         }
 
         // тела, реально участвовавшие в контакте, держатся предсказанными
         // дольше
-        for (a, b, ..) in &contacts {
-            for index in [*a, *b] {
+        for row in &rows {
+            for index in [row.a, row.b] {
                 if index > 0 && index < movable {
                     bodies[index - 1].note_contact(local_now);
                 }
@@ -1633,37 +1680,10 @@ impl Predictor {
         self.geometry = geometry;
         self.surfaces = surfaces;
         self.masks = masks;
-        self.contacts = contacts;
-        self.separations = separations;
+        self.rows = rows;
+        self.names = names;
+        self.contact_cache = cache;
         self.block_hits = block_hits;
-    }
-}
-
-// точки манифольда пары в списки шага: импульсы получает каждая точка,
-// позиционную коррекцию — только самая глубокая
-fn push_manifold(
-    contacts: &mut Vec<(usize, usize, Contact, Surface, ContactImpulses)>,
-    separations: &mut Vec<(usize, usize, Contact)>,
-    a: usize,
-    b: usize,
-    manifold: &Manifold,
-    surface: Surface,
-) {
-    separations.push((a, b, manifold.deepest()));
-
-    for point in manifold.as_slice() {
-        contacts.push((a, b, *point, surface, ContactImpulses::default()));
-    }
-}
-
-// две изменяемые ссылки на разные элементы среза
-fn pair_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut Body) {
-    let (left, right) = bodies.split_at_mut(a.max(b));
-
-    if a < b {
-        (&mut left[a], &mut right[0])
-    } else {
-        (&mut right[0], &mut left[b])
     }
 }
 
@@ -1752,6 +1772,19 @@ mod tests {
 
     pub fn core_config() -> TanksConfig {
         serde_json::from_value(config_json()).unwrap()
+    }
+
+    // тот же конфиг с другим размером модели: `src/data/models.js` держит
+    // `size: 3`, а зеркало `core/tests/sim.rs` — прежние 2
+    pub fn sized_config(size: u8) -> (TanksConfig, vimp_engine_core::config::EngineConfig) {
+        let mut json = config_json();
+
+        json["models"]["m1"]["size"] = serde_json::json!(size);
+
+        (
+            serde_json::from_value(json.clone()).unwrap(),
+            serde_json::from_value(json).unwrap(),
+        )
     }
 
     pub fn engine_config() -> vimp_engine_core::config::EngineConfig {
@@ -2310,6 +2343,57 @@ mod tests {
         // корпус не заходит за грань стены и не улетел сквозь неё
         assert!(p.state.x + 4.0 <= 80.001);
         assert!(p.state.vx < 1.0);
+    }
+
+    // Память контактов решателя откатывается вместе с кадром: реплей у
+    // стены начинается с памяти шага кадра. Без отката точка реплея была
+    // бы «новой» и отскакивала на каждом кадре сервера. Содержимое кэша
+    // закрыто — сравнивается его `Debug` у копий (копия несёт только память)
+    #[test]
+    fn contact_memory_rewinds_with_the_frame() {
+        let mut p = make_predictor();
+        let mut at_frame = String::new();
+
+        apply_map(&mut p, &wall_grid());
+        p.state.x = 74.0;
+        p.state.vx = 300.0;
+
+        for step in 1..=20 {
+            p.step_time = f64::from(step) * STEP_MS;
+            p.step(0);
+
+            if step == 10 {
+                at_frame = format!("{:?}", p.contact_cache.clone());
+            }
+        }
+
+        let empty = format!("{:?}", ContactCache::new());
+
+        assert_ne!(at_frame, empty, "условие теста: танк у стены помнит контакт");
+
+        p.rewind_contacts(10.0 * STEP_MS);
+
+        assert_eq!(format!("{:?}", p.contact_cache.clone()), at_frame);
+        assert_eq!(p.contact_history.len(), 10);
+
+        // кадр старше истории: помнить нечего, точки реплея новые
+        p.rewind_contacts(0.0);
+
+        assert_eq!(format!("{:?}", p.contact_cache.clone()), empty);
+    }
+
+    #[test]
+    fn reset_forgets_contact_memory() {
+        let mut p = make_predictor();
+
+        apply_map(&mut p, &wall_grid());
+        p.state.x = 74.0;
+        p.state.vx = 300.0;
+        p.step(0);
+        p.reset();
+
+        assert!(p.contact_history.is_empty());
+        assert_eq!(format!("{:?}", p.contact_cache.clone()), format!("{:?}", ContactCache::new()));
     }
 
     #[test]
@@ -3727,7 +3811,7 @@ mod tests {
 // (ручная против Rapier). Сценарии и допуски — из JS-оригинала.
 #[cfg(test)]
 mod parity {
-    use super::tests::{apply_map, core_config, engine_config};
+    use super::tests::{apply_map, core_config, engine_config, sized_config};
     use super::*;
     use crate::tanks::GameState;
     use rapier2d::prelude::*;
@@ -3962,6 +4046,138 @@ mod parity {
             replica.angvel,
             core[5]
         );
+    }
+
+    // покомпонентная проверка порогов сценариев (`divergence.thresholds`)
+    // без паники: прогону на много шагов нужен номер шага в сообщении
+    fn scenario_drift(core: [f32; PLAYER_STATE_LEN], replica: TankState) -> Option<String> {
+        let got = replica.to_array();
+        let names = ["x", "y", "angle", "vx", "vy", "angvel"];
+        let thresholds = [3.0, 3.0, 0.06, 25.0, 25.0, 1.5];
+        let broken: Vec<String> = thresholds
+            .iter()
+            .enumerate()
+            .filter(|(index, threshold)| (got[*index] - core[*index]).abs() > **threshold)
+            .map(|(index, _)| format!("{}: реплика {:.3}, хост {:.3}", names[index], got[index], core[index]))
+            .collect();
+
+        (!broken.is_empty()).then(|| broken.join("; "))
+    }
+
+    // Лобовой удар в грань стены на ходу. Хост (TGS-решатель Rapier) на шаге
+    // удара ставит корпус к грани и отдаёт отскок `−e·v`; прежняя реплика
+    // (`apply_contact_impulse`) оставляла скорость «зазор / dt» и
+    // разворачивала корпус двумя точками по очереди: замер — `vy` 43.3
+    // против −6.3 у хоста, ложные `vx` −1.6 и `ω` −0.2
+    #[test]
+    fn head_on_wall_hit_matches_the_host() {
+        for steps in 1..=8 {
+            let pose = Pose {
+                x: 345.6,
+                y: 389.0,
+                angle: std::f32::consts::FRAC_PI_2,
+                vx: 0.0,
+                vy: 140.0,
+                angvel: 0.0,
+            };
+            let (core, replica) = simulate_on_map(&long_wall_map(), pose, steps, &[]);
+
+            if let Some(drift) = scenario_drift(core, replica) {
+                panic!("шаг {steps}: {drift}");
+            }
+        }
+    }
+
+    const TERRACES: &str = include_str!("../../../tests/core/fixtures/terraces.json");
+
+    // Хост и реплика на карте `terraces` с газом вперёд: спавн — точка
+    // `respawns` карты (пиксели карты, угол в градусах). Уровень, если задан,
+    // объявляется явно, как хост делает с `respawns[i][3]` (геометрия под
+    // плитой отдала бы верхний). Возвращает пары состояний по шагам.
+    fn terraces_drive(
+        size: u8,
+        spawn: [f32; 3],
+        level: Option<u8>,
+        steps: usize,
+    ) -> Vec<([f32; PLAYER_STATE_LEN], TankState)> {
+        let (cfg, engine) = sized_config(size);
+        let mut game = GameState::new(engine, &cfg);
+        let scale = 0.4;
+
+        game.load_map(TERRACES).unwrap();
+        game.spawn_actor(1, "m1", 1, spawn[0] * scale, spawn[1] * scale, spawn[2])
+            .unwrap();
+        game.step(DT);
+        game.step(DT);
+
+        if let Some(level) = level {
+            game.set_actor_level(1, level);
+            game.step(DT);
+            game.step(DT);
+        }
+
+        let host_level = game.sim.tanks[&1].level_state;
+        let seed = {
+            let tank = &game.sim.tanks[&1];
+
+            tank.prediction_state(&game.world.bodies[tank.body]).0
+        };
+        let mut predictor =
+            Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
+
+        predictor.set_model("m1");
+        predictor.set_active(true);
+        apply_map(&mut predictor, TERRACES);
+        predictor.on_server_state(seed, false, 0.0, 0.0, 0.0);
+        predictor.adopt_level(host_level.z, host_level.level, 0.0);
+        game.apply_input(1, 1, "down", "forward");
+
+        let forward = key_bit(&cfg, "forward");
+
+        (0..steps)
+            .map(|_| {
+                game.step(DT);
+                predictor.step(forward);
+
+                let tank = &game.sim.tanks[&1];
+
+                (tank.prediction_state(&game.world.bodies[tank.body]).0, predictor.state)
+            })
+            .collect()
+    }
+
+    fn expect_drive_in_parity(trace: &[([f32; PLAYER_STATE_LEN], TankState)]) {
+        for (step, (core, replica)) in trace.iter().enumerate() {
+            if let Some(drift) = scenario_drift(*core, *replica) {
+                panic!("шаг {step}: {drift}");
+            }
+        }
+    }
+
+    // Сценарий `terraces_backside`: с земли под плитой (спавн `team2[0]`)
+    // танк въезжает в верхний торец прогона рампы — его держит страж
+    // `(313.6, 396.8)`. Удар в страж — тот же лобовой удар, что о стену;
+    // расхождение не зависит от размера: `size: 3` — `vy` 27.3 против −7.2 у
+    // хоста, `size: 2` — 120.8 против 34.1
+    #[test]
+    fn ramp_end_guard_hit_matches_the_host() {
+        for size in [2, 3] {
+            let trace = terraces_drive(size, [784.0, 912.0, 90.0], Some(0), 120);
+
+            expect_drive_in_parity(&trace);
+        }
+    }
+
+    // Сценарий `jump`: с плиты террасы (спавн `team1[0]`) танк 12 × 9 на
+    // полном ходу проезжает проём западной стены шириной 12.8 (x ≈ 192).
+    // Корпус и угол блока разведены по обеим осям, грани не перекрываются —
+    // у хоста контакта нет. Прежний откат `obb_manifold` давал здесь ложный
+    // контакт, и решатель с отскоком ставил реплику посреди проёма
+    #[test]
+    fn a_doorway_is_passed_without_a_phantom_contact() {
+        let trace = terraces_drive(3, [1872.0, 688.0, 180.0], None, 400);
+
+        expect_drive_in_parity(&trace);
     }
 
     fn expect_close(core: [f32; PLAYER_STATE_LEN], replica: TankState, tolerance: f32) {

@@ -10,6 +10,7 @@ import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 import { createLevelView } from './levelView.js';
 import { createLighting } from './lighting/createLighting.js';
 import { createShotEvents } from './shotEvents.js';
+import { createBlastEvents } from './blastEvents.js';
 
 // стрелка клетки по индексу `surface_dir_at`: север/юг/запад/восток, как у
 // рамп (north = −y, east = +x)
@@ -65,6 +66,7 @@ export default {
     'surfaces',
     'lighting',
     'shots',
+    'blasts',
   ],
 
   hooks: {
@@ -96,6 +98,8 @@ export default {
         lighting,
         // «танк выстрелил»: эффект выстрела будит отдачу у танка стрелка
         shots: createShotEvents(),
+        // «взрыв»: эффект взрыва будит реакцию танков в его радиусе
+        blasts: createBlastEvents(),
         mapDynamics: {
           // локальная точка тела → мировая в рендерном фрейме;
           // null — ключ неизвестен (карта сменилась, ящика больше нет)

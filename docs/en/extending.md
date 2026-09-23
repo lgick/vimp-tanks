@@ -388,6 +388,25 @@ Steps:
    engine, their own shot) is declared as
    `registerSound(name, { position, spatial: false })`.
 
+## Changing the tank model
+
+The live tank and its wreck are a low-poly model (`src/client/tank3d/`):
+
+1. **Shape in plan** comes from the hull art in `src/client/bakers/tankTexture.js`
+   (`drawTankBody`, `drawTankGun`, pixels at base size 10); `createTankModel`
+   (`src/client/tank3d/model.js`) builds prisms over it — change both
+   together, or the model top stops matching its texture.
+2. **Heights** are `tankModel` in `src/config/render.js` (pixels of the art).
+3. **A new part** is one more `prism(...)` with a `part` (`track`, `hull`,
+   `turret` — turns with the gun, `barrel` — also kicks back) and materials.
+   Tops and slopes take the art by (u, v); a vertical side needs its strip in
+   `src/client/bakers/tankModelTexture.js` and an entry in
+   `STRIP_BY_MATERIAL` (`src/client/tank3d/uv.js`).
+4. Draw order is by part (`PART_ORDER`): a part must sit on the ones before
+   it. Shadow, lighting and culling need no changes.
+5. Tests: `tests/client/tank3d/` (closed parts, outward normals, UVs inside
+   their regions).
+
 ## New client entity (part)
 
 1. Create a class in `src/client/parts/` following the existing ones

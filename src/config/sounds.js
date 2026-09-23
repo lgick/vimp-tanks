@@ -76,10 +76,10 @@ export default {
     // градусов
     virtualElevation: 108,
 
-    // полудиагональ корпуса m1: 8 x 6 мировых единиц (motion.rs: size*4 x
-    // size*3 при size: 2) -> hypot(8, 6) / 2 = 5. Взрыв внутри габарита
+    // полудиагональ корпуса m1: 12 x 9 мировых единиц (motion.rs: size*4 x
+    // size*3 при size: 3) -> hypot(12, 9) / 2 = 7.5. Взрыв внутри габарита
     // распределяется поровну в оба уха
-    innerRadius: 5,
+    innerRadius: 7.5,
   },
 
   sounds,

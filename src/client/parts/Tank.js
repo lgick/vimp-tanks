@@ -1,4 +1,12 @@
-import { Container, PerspectiveMesh, Sprite, Ticker } from 'pixi.js';
+import {
+  AlphaFilter,
+  BlurFilter,
+  Container,
+  Graphics,
+  PerspectiveMesh,
+  Sprite,
+  Ticker,
+} from 'pixi.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
 import { levelZ, renderLevel } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
@@ -6,6 +14,17 @@ import { offsetPoint } from '../parallax.js';
 import { tiltCorners, tiltShade, scaleTint } from '../tilt.js';
 import { landingImpact } from '../landing.js';
 import { recoilAmount, recoilOffsets } from '../recoil.js';
+import { blastKick, blastJoltState } from '../blastJolt.js';
+import { createTankModel } from '../tank3d/model.js';
+import { poseModel } from '../tank3d/transform.js';
+import {
+  modelLean,
+  projectModel,
+  visibleFaces,
+  faceShade,
+} from '../tank3d/project.js';
+import { createTankModelMesh } from '../tank3d/modelMesh.js';
+import { shadowDrift, shadowPolygons } from '../tank3d/shadow.js';
 import {
   createTankLightShader,
   setTankLightTextures,
@@ -19,6 +38,8 @@ import {
   tilt as tiltConfig,
   tankLight as tankLightConfig,
   recoil as recoilConfig,
+  blastJolt as blastJoltConfig,
+  tankModel as tankModelConfig,
   landing as landingConfig,
   lighting as lightingConfig,
   surfaceFx,
@@ -49,9 +70,35 @@ const SHADE_MAX = 1;
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
 
+// геометрия модели одна на все танки: поза и проекция — свои у каждого
+let sharedModel = null;
+
+const tankModelGeometry = () => {
+  sharedModel ||= createTankModel(tankModelConfig);
+
+  return sharedModel;
+};
+
+// свет граней модели — та же формула, что у шейдера карт нормалей, без
+// наклона и курса: их модель учитывает сама (поза, `faceShade`)
+const modelLight = () =>
+  tankLightUniforms({
+    heading: 0,
+    rotation: 0,
+    pitch: 0,
+    roll: 0,
+    lightDir: tiltConfig.lightDir,
+    lightZ: tankLightConfig.lightZ,
+    ambient: tankLightConfig.ambient,
+    diffuse: tankLightConfig.diffuse,
+  });
+
 // дуло — на 0.55 длины корпуса от центра по курсу башни (`Tank::
 // muzzle_position` в core/src/tank.rs)
 const MUZZLE_REACH = 0.55;
+
+// наибольший перекос башни остова модели, рад
+const WRECK_SKEW = 0.6;
 
 // потолок уровней карты: движок нумерует их 0..7 (бит 8 занят
 // STATIC_LEVEL_GROUP, vimp-engine core/src/map.rs). Копия, потому что
@@ -185,6 +232,19 @@ export default class Tank extends Container {
     this._lightShaders = new Map();
 
     this._textures = assets.tankTexture;
+
+    // 3D-модель живого танка (src/client/tank3d/, plan/tank-3d/): вместо
+    // плоских `body`/`gun`, когда включена и есть атлас. Меш заводится при
+    // первом оживлении, остов остаётся плоским
+    this._modelAtlases =
+      tankModelConfig.enabled && assets.tankModelTexture
+        ? assets.tankModelTexture
+        : null;
+    this._model = null;
+    // тень по силуэту модели — сиблинг на сцене, заводится по требованию
+    this._modelShadow = null;
+    // постоянный перекос башни остова модели (задаётся при гибели)
+    this._wreckSkew = 0;
     this._shadowAsset = assets.tankShadowTexture || null;
     this._renderer = dependencies.renderer || null;
 
@@ -250,6 +310,20 @@ export default class Tank extends Container {
     // сервис `shots` — его будит эффект выстрела с id стрелка
     this._recoilElapsed = Infinity;
     this._recoilTilt = { pitch: 0, roll: 0 };
+    // смещения мешей от отдачи в осях корпуса (мировые единицы, без
+    // проекции высоты): собираются с встряской взрыва в `_applyMeshOffsets`
+    this._recoilOffsets = { body: { x: 0, y: 0 }, gun: { x: 0, y: 0 } };
+
+    // реакция на взрыв (src/client/blastJolt.js): толчок, мс с него и
+    // текущие добавки — к наклону, к видимой высоте и сдвиг встряски
+    this._blastKick = null;
+    this._blastElapsed = 0;
+    this._blastTilt = { pitch: 0, roll: 0 };
+    this._blastLift = 0;
+    this._blastShake = { x: 0, y: 0 };
+    this._unsubscribeBlasts = dependencies.blasts
+      ? dependencies.blasts.subscribe(blast => this._onBlast(blast))
+      : null;
     this._unsubscribeShots =
       dependencies.shots && context?.id !== undefined
         ? dependencies.shots.subscribe(context.id, {
@@ -364,7 +438,22 @@ export default class Tank extends Container {
         this._textures.destroyed,
         this._textures.destroyedNormal,
       );
-      this.wreck.visible = true;
+
+      // остов — та же модель с обгоревшим атласом и сбитой башней; без
+      // модели — прежняя плоская картинка
+      const wreckAtlas = this._modelAtlases?.destroyed;
+
+      if (wreckAtlas) {
+        this._wreckSkew = (Math.random() * 2 - 1) * WRECK_SKEW;
+        this._showModel(wreckAtlas);
+        this.wreck.visible = false;
+      } else {
+        if (this._model) {
+          this._model.mesh.visible = false;
+        }
+
+        this.wreck.visible = true;
+      }
 
       // поворот башни, так как она теперь часть обломков
       this._gunRotation = 0;
@@ -392,8 +481,15 @@ export default class Tank extends Container {
 
       this._setTexture(this.body, liveTextures.body, liveTextures.bodyNormal);
       this._setTexture(this.gun, liveTextures.gun, liveTextures.gunNormal);
-      this.body.visible = true;
-      this.gun.visible = true;
+
+      const atlas = this._modelAtlas();
+
+      if (atlas) {
+        this._showModel(atlas);
+      } else {
+        this.body.visible = true;
+        this.gun.visible = true;
+      }
 
       this._initSounds();
       this._addLights();
@@ -660,8 +756,10 @@ export default class Tank extends Container {
     this._recoilElapsed = Infinity;
     this._recoilTilt.pitch = 0;
     this._recoilTilt.roll = 0;
-    this.body.position.set(0, 0);
-    this.gun.position.set(0, 0);
+    this._recoilOffsets.body.x = 0;
+    this._recoilOffsets.body.y = 0;
+    this._recoilOffsets.gun.x = 0;
+    this._recoilOffsets.gun.y = 0;
   }
 
   // шаг отдачи по ВРЕМЕНИ, как просадка приземления: смещения мешей внутри
@@ -686,21 +784,127 @@ export default class Tank extends Container {
       return;
     }
 
-    const zScale = 1 + this._z * parallaxConfig.shear;
     const offsets = recoilOffsets({
       amount,
       gunRotation: this._gunRotation,
       config: recoilConfig,
     });
 
-    this.body.position.set(offsets.body.x * zScale, offsets.body.y * zScale);
-    // башня едет вместе с корпусом и ещё откатывается сама
-    this.gun.position.set(
-      (offsets.body.x + offsets.gun.x) * zScale,
-      (offsets.body.y + offsets.gun.y) * zScale,
-    );
+    this._recoilOffsets.body = offsets.body;
+    this._recoilOffsets.gun = offsets.gun;
     this._recoilTilt.pitch = offsets.pitch;
     this._recoilTilt.roll = offsets.roll;
+  }
+
+  // взрыв рядом: танк сам решает, задел ли его взрыв. Новый толчок
+  // заменяет текущий, только если он сильнее его остатка — слабый дальний
+  // взрыв не гасит качку от близкого
+  _onBlast(blast) {
+    if (!blastJoltConfig.enabled || this.destroyed) {
+      return;
+    }
+
+    const kick = blastKick({
+      x: this._worldX,
+      y: this._worldY,
+      level: this._physLevel,
+      heading: this.rotation,
+      hullLength: this._size * 4,
+      blast,
+      config: blastJoltConfig,
+    });
+
+    if (!kick) {
+      return;
+    }
+
+    const current = this._blastKick
+      ? blastJoltState({
+          elapsed: this._blastElapsed,
+          kick: this._blastKick,
+          config: blastJoltConfig,
+        }).envelope
+      : 0;
+
+    if (kick.strength >= current) {
+      this._blastKick = kick;
+      this._blastElapsed = 0;
+    }
+  }
+
+  // шаг реакции на взрыв по времени; на конце подброса — просадка
+  // приземления той же силы
+  _stepBlast() {
+    if (!this._blastKick) {
+      return;
+    }
+
+    const wasHopping =
+      this._blastKick.hop && this._blastElapsed < blastJoltConfig.hopDuration;
+
+    this._blastElapsed += Ticker.shared.deltaMS;
+
+    const state = blastJoltState({
+      elapsed: this._blastElapsed,
+      kick: this._blastKick,
+      config: blastJoltConfig,
+    });
+
+    if (
+      wasHopping &&
+      this._blastElapsed >= blastJoltConfig.hopDuration &&
+      landingConfig.duration > 0
+    ) {
+      this._landImpact = this._blastKick.strength;
+      this._landTimer = landingConfig.duration;
+    }
+
+    if (state.done) {
+      this._resetBlast();
+
+      return;
+    }
+
+    this._blastTilt.pitch = state.pitch;
+    this._blastTilt.roll = state.roll;
+    this._blastLift = state.lift;
+    this._blastShake.x = state.shakeX;
+    this._blastShake.y = state.shakeY;
+  }
+
+  _resetBlast() {
+    this._blastKick = null;
+    this._blastElapsed = 0;
+    this._blastTilt.pitch = 0;
+    this._blastTilt.roll = 0;
+    this._blastLift = 0;
+    this._blastShake.x = 0;
+    this._blastShake.y = 0;
+  }
+
+  // видимая высота корпуса: физическая плюс подброс взрыва. По ней идут
+  // проекция и масштаб корпуса; тень остаётся на опоре — разъезд с ней и
+  // читается подбросом
+  _viewZ() {
+    return this._z + this._blastLift;
+  }
+
+  // смещения мешей внутри повёрнутого контейнера (оси корпуса): отдача и
+  // встряска взрыва. Длины — мировые единицы, растут с высотой по той же
+  // проекции, что и сам корпус
+  _applyMeshOffsets() {
+    const zScale = 1 + this._viewZ() * parallaxConfig.shear;
+    const { body, gun } = this._recoilOffsets;
+    const bodyX = body.x + this._blastShake.x;
+    const bodyY = body.y + this._blastShake.y;
+
+    this.body.position.set(bodyX * zScale, bodyY * zScale);
+    this.wreck.position.set(
+      this._blastShake.x * zScale,
+      this._blastShake.y * zScale,
+    );
+    // башня едет вместе с корпусом и ещё откатывается сама
+    this.gun.position.set((bodyX + gun.x) * zScale, (bodyY + gun.y) * zScale);
   }
 
   // текстура меша и, если есть карта нормалей, шейдер света. Без карты
@@ -738,8 +942,12 @@ export default class Tank extends Container {
         tankLightUniforms({
           heading: this.rotation,
           rotation: mesh === this.gun ? this._gunRotation : 0,
-          pitch: tiltConfig.enabled ? this._pitch + this._recoilTilt.pitch : 0,
-          roll: tiltConfig.enabled ? this._roll + this._recoilTilt.roll : 0,
+          pitch: tiltConfig.enabled
+            ? this._pitch + this._recoilTilt.pitch + this._blastTilt.pitch
+            : 0,
+          roll: tiltConfig.enabled
+            ? this._roll + this._recoilTilt.roll + this._blastTilt.roll
+            : 0,
           lightDir: tiltConfig.lightDir,
           lightZ: tankLightConfig.lightZ,
           ambient: tankLightConfig.ambient,
@@ -766,8 +974,12 @@ export default class Tank extends Container {
         heading: this.rotation,
         // выключенный наклон вырождает квад в обычный прямоугольник —
         // отдельной «плоской» ветки держать не нужно
-        pitch: tiltConfig.enabled ? this._pitch + this._recoilTilt.pitch : 0,
-        roll: tiltConfig.enabled ? this._roll + this._recoilTilt.roll : 0,
+        pitch: tiltConfig.enabled
+          ? this._pitch + this._recoilTilt.pitch + this._blastTilt.pitch
+          : 0,
+        roll: tiltConfig.enabled
+          ? this._roll + this._recoilTilt.roll + this._blastTilt.roll
+          : 0,
         shear: parallaxConfig.shear,
         lift: tiltConfig.lift,
       }),
@@ -791,7 +1003,7 @@ export default class Tank extends Container {
   // ровно настолько же, насколько крупнее сама плита под ним — это та же
   // проекция, что и сдвиг (`src/client/parallax.js`)
   _applyTilt() {
-    const zScale = 1 + this._z * parallaxConfig.shear;
+    const zScale = 1 + this._viewZ() * parallaxConfig.shear;
     const size = this._scaleFactor * zScale;
     const squashY = 1 - this._squash;
 
@@ -847,22 +1059,27 @@ export default class Tank extends Container {
       this.tint = baseTint;
     }
 
+    // реакция на взрыв — до проекции: подброс поднимает видимую высоту
+    this._stepBlast();
+
     const view = offsetPoint(
       this._worldX,
       this._worldY,
       camera,
-      this._z * parallaxConfig.shear,
+      this._viewZ() * parallaxConfig.shear,
     );
 
     this.position.set(view.x, view.y);
 
     // светотень наклона поверх тинта уровня: множитель, а не замена —
     // затемнение нижних ярусов обязано остаться. Со светом по карте
-    // нормалей наклон уже учтён в шейдере, и второй раз его не кладём
+    // нормалей наклон уже учтён в шейдере, у 3D-модели — в свете граней
+    // (`faceShade`), и второй раз его не кладём
     if (
       tiltConfig.enabled &&
       tiltConfig.shading &&
-      this._lightShaders.size === 0
+      this._lightShaders.size === 0 &&
+      !this._model?.mesh.visible
     ) {
       const shade = clamp(
         tiltShade({
@@ -893,10 +1110,177 @@ export default class Tank extends Container {
     }
 
     this._stepRecoil();
+    this._applyMeshOffsets();
     this._applyTilt();
     this._applyLight();
+    this._applyModel(camera);
 
     this._updateShadow(camera);
+  }
+
+  // атлас модели своей команды; null — модель выключена или атласа нет
+  _modelAtlas() {
+    if (!this._modelAtlases) {
+      return null;
+    }
+
+    return this._teamId === 2
+      ? this._modelAtlases.liveTeamId2
+      : this._modelAtlases.liveTeamId1;
+  }
+
+  // живой танк рисуется моделью: плоские корпус и башня прячутся
+  _showModel(atlas) {
+    if (!this._model) {
+      this._model = createTankModelMesh(tankModelGeometry(), atlas);
+      this.addChild(this._model.mesh);
+    } else {
+      this._model.setAtlas(atlas);
+    }
+
+    this._model.mesh.visible = true;
+    this.body.visible = false;
+    this.gun.visible = false;
+  }
+
+  // поза, проекция и свет модели раз за кадр. Курс — поворот контейнера,
+  // всё остальное — в позе: тангаж и крен (с добавками отдачи и взрыва),
+  // поворот башни, откат ствола, сдвиг корпуса (отдача и встряска),
+  // просадка — сжатием по высоте. Наклон от центра экрана один на весь танк
+  _applyModel(camera) {
+    if (!this._model || !this._model.mesh.visible) {
+      return;
+    }
+
+    const model = tankModelGeometry();
+    const posed = poseModel({
+      model,
+      size: this._size,
+      gunRotation: this._condition === 0 ? this._wreckSkew : this._gunRotation,
+      pitch: tiltConfig.enabled
+        ? this._pitch + this._recoilTilt.pitch + this._blastTilt.pitch
+        : 0,
+      roll: tiltConfig.enabled
+        ? this._roll + this._recoilTilt.roll + this._blastTilt.roll
+        : 0,
+      gunKick: this._recoilOffsets.gun,
+      shift: {
+        x: this._recoilOffsets.body.x + this._blastShake.x,
+        y: this._recoilOffsets.body.y + this._blastShake.y,
+      },
+      squash: this._squash,
+    });
+
+    const lean = modelLean({
+      x: this._worldX,
+      y: this._worldY,
+      camera,
+      heading: this.rotation,
+      shear: parallaxConfig.shear,
+      levelHeight: tankModelConfig.levelHeight,
+      maxLean: tankModelConfig.maxLean,
+      gain: tankModelConfig.leanGain,
+      topHeight: (tankModelConfig.turretTop * this._size) / 10,
+    });
+
+    const projected = projectModel({
+      points: posed.points,
+      lean,
+      zScale: 1 + this._viewZ() * parallaxConfig.shear,
+    });
+
+    // поза нужна и тени по силуэту (`_updateModelShadow`)
+    this._modelPose = posed;
+
+    const order = visibleFaces({ model, points: posed.points, projected });
+    const light = modelLight();
+    const shades = posed.normals.map(normal =>
+      faceShade(normal, this.rotation, light),
+    );
+
+    this._model.update(projected, shades, order);
+  }
+
+  // тень по силуэту модели: живой танк с моделью (остов тени не
+  // отбрасывает, как и прежде)
+  _modelShadowActive() {
+    return (
+      this._condition !== 0 &&
+      this._model !== null &&
+      this._model.mesh.visible &&
+      this._modelPose !== undefined &&
+      this.parent !== null
+    );
+  }
+
+  // Тень модели — `Graphics` сиблингом на сцене (как спрайт тени): точки
+  // позы падают на опору вдоль света, по полигону на часть. Прозрачность —
+  // фильтром на всю тень, иначе перекрытия частей темнели бы дважды.
+  // Лежит на опоре в её проекции, повёрнута на курс
+  _updateModelShadow(camera) {
+    if (!this._modelShadow) {
+      const shadow = new Graphics();
+
+      this._modelShadowAlpha = new AlphaFilter({ alpha: 1 });
+      shadow.filters = tankModelConfig.shadowBlur
+        ? [
+            new BlurFilter({
+              strength: tankModelConfig.shadowBlur,
+              quality: 2,
+            }),
+            this._modelShadowAlpha,
+          ]
+        : [this._modelShadowAlpha];
+      this.parent.addChild(shadow);
+      this._modelShadow = shadow;
+    }
+
+    const shadow = this._modelShadow;
+    const groundZ = this._groundZ();
+    const view = offsetPoint(
+      this._worldX,
+      this._worldY,
+      camera,
+      groundZ * parallaxConfig.shear,
+    );
+    // подъём над опорой (прыжок, подброс взрыва), уровни → мировые единицы
+    const liftLevels = Math.max(0, this._viewZ() - groundZ);
+
+    shadow.visible = true;
+    shadow.position.set(view.x, view.y);
+    shadow.rotation = this.rotation;
+    shadow.scale.set(1 + groundZ * parallaxConfig.shear);
+    shadow.zIndex = levelZ(
+      TANK_BASE_Z - 1,
+      Math.min(LEVEL_MAX, Math.floor(groundZ)),
+    );
+
+    const polygons = shadowPolygons({
+      model: tankModelGeometry(),
+      points: this._modelPose.points,
+      lift: liftLevels * tankModelConfig.levelHeight,
+      drift: shadowDrift(
+        tiltConfig.lightDir,
+        tankLightConfig.lightZ,
+        this.rotation,
+      ),
+    });
+
+    shadow.clear();
+
+    for (const polygon of polygons) {
+      shadow.poly(polygon.flat()).fill(0x000000);
+    }
+
+    const airborne = this._vz !== 0 || this._blastLift > 0;
+    const base = airborne
+      ? Math.max(
+          0,
+          shadowConfig.baseAlpha - liftLevels * shadowConfig.alphaFalloff,
+        )
+      : shadowConfig.groundAlpha;
+
+    this._modelShadowAlpha.alpha = base * this.alpha;
   }
 
   // Тень показывает две вещи: объём корпуса на земле и отрыв от опоры в
@@ -905,6 +1289,21 @@ export default class Tank extends Container {
   // нулевом сдвиге она есть только в полёте. Признак полёта тот же, что у
   // `_groundZ`: ненулевая вертикальная скорость в кадре
   _updateShadow(camera) {
+    // у модели своя тень — по силуэту
+    if (this._modelShadowActive()) {
+      if (this._shadow) {
+        this._shadow.visible = false;
+      }
+
+      this._updateModelShadow(camera);
+
+      return;
+    }
+
+    if (this._modelShadow) {
+      this._modelShadow.visible = false;
+    }
+
     if (!this._shadowAsset || !this.parent) {
       return;
     }
@@ -1002,12 +1401,27 @@ export default class Tank extends Container {
       this._shadow = null;
     }
 
+    if (this._modelShadow) {
+      this._modelShadow.destroy();
+      this._modelShadow = null;
+    }
+
     if (this._unsubscribeShots) {
       this._unsubscribeShots();
       this._unsubscribeShots = null;
     }
 
+    if (this._unsubscribeBlasts) {
+      this._unsubscribeBlasts();
+      this._unsubscribeBlasts = null;
+    }
+
     // свой шейдер меш не уничтожает; текстуры общие и остаются
+    if (this._model) {
+      this._model.destroy();
+      this._model = null;
+    }
+
     for (const shader of this._lightShaders.values()) {
       shader.destroy();
     }

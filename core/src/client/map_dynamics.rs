@@ -452,7 +452,12 @@ impl PredictedBodies for MapDynamics {
     /// на хосте (`step_body_level` — одна функция на обе стороны).
     fn integrate_predicted(&mut self, dt: f32) {
         self.set_mut().integrate_predicted(dt);
+        self.after_solved_step(dt);
+    }
 
+    /// Правила уровня после шага решателя предиктора: позы тела уже
+    /// посчитал `step_bodies`, остаётся падение с кончившейся плиты.
+    fn after_solved_step(&mut self, dt: f32) {
         let Some(levels) = self.levels.clone() else {
             return;
         };

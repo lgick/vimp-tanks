@@ -320,21 +320,44 @@ is not cosmetic: two subsystems with copies of the mechanics would drift
 apart in behaviour on the first edit.
 
 The set keeps no clock of its own: it is stepped by `Predictor`
-(`integrate_predicted`, `decay_error`), so a contact with the local tank is
-resolved within a single step and the reconciliation replay replays the
-set's bodies too. `Predictor::resolve_world` is that step's contact pass —
-the tank, the captured bodies and the wall blocks are separated once **per
-pair** by the deepest point of their manifold and then run through
-`SOLVER_ITERATIONS` (4) impulse passes over every point of every manifold,
-using the engine's `client::collision`/`client::rigid_body` primitives.
-Without a map and without subsystems the pass is a full no-op, and the
-motion replica stays bit-for-bit what it was — the invariant the parity
-tests rest on.
+(`resolve_world`, then `after_solved_step` for its own rules such as a map
+body falling off a slab, and `decay_error`), so a contact with the local
+tank is resolved within a single step and the reconciliation replay
+replays the set's bodies too. `Predictor::resolve_world` is the whole body
+step: the tank, the captured bodies, the wall blocks and the ramp guards
+become `ContactRow`s (`ContactRow::from_manifold`, two points of a manifold
+in a row) and go through the engine's `rigid_body::step_bodies` — a port of
+the host's Rapier TGS solver: four substeps with a biased pass, position
+integration and a bias-free pass, a 2×2 block for a two-point manifold,
+velocity damping once per step. It returns poses and velocities after the
+step, so nothing integrates the bodies a second time. Without a map and
+without subsystems the tank still goes through `step_bodies`, with no rows:
+one integration path, or the rotation linearisation would jump at the
+border.
+
+**Contact memory.** Rapier gives a restitution bounce only to a *new*
+contact point (no impulse on the previous step) and starts each step from
+the last substep's impulses (warmstart). `step_bodies` keeps that in a
+`ContactCache` keyed by stable body names (`ContactKey`): the tank, a wall
+block by its level and index in `MapLevels::static_blocks`, a ramp guard by
+its index, a predicted body by an FNV hash of its subsystem and string id
+(the step's slice index shifts whenever a neighbour enters or leaves the
+prediction). The cache is snapshotted after every step next to the level
+history (`push_contact_snapshot` / `rewind_contacts`), and a replay starts
+from the memory of the frame's step; a frame older than the history, a
+`reset` or a new map clear it. Without the rollback every replay at a wall
+would see a "new" point and bounce on every server frame.
+
+The previous solver (`separate_bodies` + four passes of
+`apply_contact_impulse` + its own integration) left a body that reached a
+wall with the gap-closing speed instead of the host's bounce, and a
+two-point head-on hit spun and slid the hull: `vy` 43 against −6.3 on the
+host, a visible jerk on every wall hit.
 
 **The order of a step is Rapier's, not the obvious one.** Contacts are
 solved **before** the position is integrated: `step_inner` applies the
 input, calls `resolve_world(dt)` on the pose at the start of the step, and
-only then moves the body and damps it. The contacts themselves are
+only then moves the body and damps it (both inside `step_bodies`). The contacts themselves are
 collected with a gap — `motion::contact_prediction(width, height)`, the
 very number `Tank::new` hands Rapier as `soft_ccd_prediction`, so the two
 sides see a contact on the same step. Resolving after the integration let
@@ -1068,7 +1091,7 @@ exactly, and the additive terms (drag, track yaw, angular drag) run only when
 and `map_without_surfaces_moves_exactly_as_before` lock this in.
 
 A conveyor never brings a tank up to the belt speed: Rapier's linear damping
-(and the replica's `integrate`) pulls the ABSOLUTE velocity toward zero, not
+(and the replica's `step_bodies`) pulls the ABSOLUTE velocity toward zero, not
 the velocity relative to the belt. Across the hull the belt is transmitted by
 `lateralGrip` (equilibrium ≈ 0.87·belt with the shipped model), along the hull
 only by the idle braking (`brakingFactor` 0.3 against damping 3 —
@@ -1146,8 +1169,8 @@ stays `0`, the engine does not howl); the turn
 branch, `apply_slick` (decay) inside it, `tank_mix`, `apply_slick` and
 `boost_hold_mix` after it,
 the replica's `vx/vy` at the start of the step as `(vx0, vy0)`, the same Δv
-added to `vx/vy` in the same order, Δω to `angvel`, then `resolve_world` and
-`integrate` unchanged. With no entry state there is nothing to roll back on
+added to `vx/vy` in the same order, Δω to `angvel`, then `resolve_world`
+unchanged. With no entry state there is nothing to roll back on
 reconciliation (`boost_reconcile_replays_one_impulse_per_entry`: a frame
 mid-plate and one step before the entry, with the level history and after
 `reset`).
