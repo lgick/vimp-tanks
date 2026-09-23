@@ -5,19 +5,31 @@ import { cameraCenter } from '../camera.js';
 import { offsetPoint } from '../parallax.js';
 import { tiltCorners, tiltShade, scaleTint } from '../tilt.js';
 import { landingImpact } from '../landing.js';
+import { recoilAmount, recoilOffsets } from '../recoil.js';
+import {
+  createTankLightShader,
+  setTankLightTextures,
+  applyTankLight,
+  tankLightUniforms,
+} from '../tankLight.js';
 import { lightLevels } from '../lighting/lightMath.js';
 import {
   parallax as parallaxConfig,
   shadow as shadowConfig,
   tilt as tiltConfig,
+  tankLight as tankLightConfig,
+  recoil as recoilConfig,
   landing as landingConfig,
   lighting as lightingConfig,
+  surfaceFx,
 } from '../../config/render.js';
 import {
   M1_X,
   M1_Y,
   M1_ANGLE,
   M1_GUN_ROTATION,
+  M1_VX,
+  M1_VY,
   M1_ENGINE_LOAD,
   M1_CONDITION,
   M1_SIZE,
@@ -36,6 +48,10 @@ const SHADE_MAX = 1;
 
 // базовый zIndex танка внутри своего уровня (см. plan/stage_6.md)
 const TANK_BASE_Z = 3;
+
+// дуло — на 0.55 длины корпуса от центра по курсу башни (`Tank::
+// muzzle_position` в core/src/tank.rs)
+const MUZZLE_REACH = 0.55;
 
 // потолок уровней карты: движок нумерует их 0..7 (бит 8 занят
 // STATIC_LEVEL_GROUP, vimp-engine core/src/map.rs). Копия, потому что
@@ -109,6 +125,24 @@ export function calculateEngineSoundParams(load, timeMs = 0) {
   return { rate: rate * wobble, volumeFactor };
 }
 
+// сдвиг тени от света: `−lightDir` длиной `groundOffset`. Направление
+// света нормируется при чтении (см. `tilt.lightDir`)
+export function shadowOffset(
+  lightDir = tiltConfig.lightDir,
+  distance = shadowConfig.groundOffset,
+) {
+  const len = lightDir ? Math.hypot(lightDir[0], lightDir[1]) : 0;
+
+  if (!len || !distance) {
+    return { x: 0, y: 0 };
+  }
+
+  return {
+    x: (-lightDir[0] / len) * distance,
+    y: (-lightDir[1] / len) * distance,
+  };
+}
+
 export default class Tank extends Container {
   constructor(data, assets, dependencies, context) {
     super();
@@ -145,6 +179,10 @@ export default class Tank extends Container {
     this._wreckAnchor = { x: 0.5, y: 0.5 };
 
     this.addChild(this.body, this.gun, this.wreck);
+
+    // шейдеры света по карте нормалей: свой на каждый меш (у пушки свой
+    // поворот). Заводятся при первой текстуре с картой нормалей
+    this._lightShaders = new Map();
 
     this._textures = assets.tankTexture;
     this._shadowAsset = assets.tankShadowTexture || null;
@@ -206,6 +244,19 @@ export default class Tank extends Container {
     // посчитанный один раз, был бы навсегда false ровно у той сущности,
     // ради которой он и заведён
     this._isLocal = () => dependencies.localPlayer?.is(context?.id) === true;
+
+    // отдача после выстрела (src/client/recoil.js): мс с выстрела
+    // (Infinity — покой) и её добавка к наклону корпуса. Событие приносит
+    // сервис `shots` — его будит эффект выстрела с id стрелка
+    this._recoilElapsed = Infinity;
+    this._recoilTilt = { pitch: 0, roll: 0 };
+    this._unsubscribeShots =
+      dependencies.shots && context?.id !== undefined
+        ? dependencies.shots.subscribe(context.id, {
+            fired: () => this._onFired(),
+            muzzle: () => this._muzzleWorld(),
+          })
+        : null;
     this._levelView = dependencies.levelView || null;
 
     // Ночь (сервис игры, src/client/lighting/): два конуса фар и слабый
@@ -253,6 +304,17 @@ export default class Tank extends Container {
     // пыталась бы регистрировать звук каждый кадр для каждого танка
     this._hasEngineSound = !!engineConfig;
 
+    // плеск под гусеницами: поверхность клетки из ядра (сервис `surfaces`);
+    // без сервиса или без звука в каталоге воды не слышно
+    this._surfaces = dependencies.surfaces || null;
+    this._waterSoundId = null;
+    this._speed = Math.hypot(data[M1_VX] || 0, data[M1_VY] || 0);
+
+    const waterConfig = this._soundManager.getSoundConfig('tankWater');
+
+    this._baseWaterVolume = waterConfig?.volume || 0;
+    this._hasWaterSound = !!waterConfig;
+
     // первоначальная установка визуального состояния
     this.create();
   }
@@ -297,11 +359,18 @@ export default class Tank extends Container {
       this.body.visible = false;
       this.gun.visible = false;
 
-      this.wreck.texture = this._textures.destroyed;
+      this._setTexture(
+        this.wreck,
+        this._textures.destroyed,
+        this._textures.destroyedNormal,
+      );
       this.wreck.visible = true;
 
       // поворот башни, так как она теперь часть обломков
       this._gunRotation = 0;
+
+      // остов не откатывается
+      this._resetRecoil();
 
       // при уничтожении отключение звука
       this.destroySounds();
@@ -321,8 +390,8 @@ export default class Tank extends Container {
         liveTextures = this._textures.liveTeamId2;
       }
 
-      this.body.texture = liveTextures.body;
-      this.gun.texture = liveTextures.gun;
+      this._setTexture(this.body, liveTextures.body, liveTextures.bodyNormal);
+      this._setTexture(this.gun, liveTextures.gun, liveTextures.gunNormal);
       this.body.visible = true;
       this.gun.visible = true;
 
@@ -344,6 +413,7 @@ export default class Tank extends Container {
     // clamp() возвращает NaN, и в `sound.rate` каждый кадр уезжает NaN
     // (сравнение `rate !== activeInstance.rate` для NaN всегда истинно)
     this._engineLoad = data[M1_ENGINE_LOAD] || 0;
+    this._speed = Math.hypot(data[M1_VX] || 0, data[M1_VY] || 0);
 
     this._z = data[M1_Z] || 0;
     this._physLevel = data[M1_LEVEL] || 0;
@@ -416,6 +486,56 @@ export default class Tank extends Container {
     // источники света живут в МИРОВЫХ координатах и обновляются по кадру
     // данных, до отрисовки: карта освещённости не отстаёт от корпуса
     this._updateLights();
+    this._updateWaterSound();
+  }
+
+  // петля `tankWater`, пока живой танк стоит или едет по воде (не в
+  // полёте). Брызги рисует Dust.js, звук живёт только здесь — иначе
+  // дублировался бы
+  _updateWaterSound() {
+    const inWater =
+      this._hasWaterSound &&
+      this._condition > 0 &&
+      this._vz === 0 &&
+      this._surfaces?.kindAt(this._worldX, this._worldY, this._physLevel) ===
+        'water';
+
+    if (!inWater) {
+      this._removeWaterSound();
+      return;
+    }
+
+    if (this._waterSoundId === null) {
+      this._waterSoundId = this._soundManager.registerSound(
+        'tankWater',
+        this._getWaterSoundData(),
+      );
+    } else {
+      this._soundManager.updateSoundData(
+        this._waterSoundId,
+        this._getWaterSoundData(),
+      );
+    }
+  }
+
+  _getWaterSoundData() {
+    const { minVolume, fullSpeed, rate } = surfaceFx.water.sound;
+    const factor = clamp(this._speed / fullSpeed, 0, 1);
+
+    return {
+      position: { x: this._worldX, y: this._worldY },
+      rate: lerp(rate.min, rate.max, factor),
+      volume: this._baseWaterVolume * (minVolume + (1 - minVolume) * factor),
+      // свой плеск — по центру и без HRTF, как свой двигатель (_getSoundData)
+      spatial: !this._isLocal(),
+    };
+  }
+
+  _removeWaterSound() {
+    if (this._waterSoundId) {
+      this._soundManager.unregisterSound(this._waterSoundId);
+      this._waterSoundId = null;
+    }
   }
 
   // Две фары на передней кромке корпуса (4 × size вдоль курса, 3 × size в
@@ -503,6 +623,132 @@ export default class Tank extends Container {
     }
   }
 
+  // выстрел этого танка: отдача стартует с нуля, а повторный выстрел во
+  // время спада возвращает её на пик — при зажатом огне ствол держится
+  // откаченным, а не дрожит от перезапусков
+  _onFired() {
+    if (!recoilConfig.enabled || this._condition === 0) {
+      return;
+    }
+
+    const peak = recoilConfig.attack * recoilConfig.duration;
+
+    this._recoilElapsed =
+      this._recoilElapsed < recoilConfig.duration
+        ? Math.min(this._recoilElapsed, peak)
+        : 0;
+  }
+
+  // мировая (НЕсмещённая проекцией) точка дула: та же формула, что у ядра
+  // (`Tank::muzzle_position` — 0.55 длины корпуса по курсу башни). По ней
+  // трассер и вспышка держатся у ствола, пока танк едет. У остова дула нет
+  _muzzleWorld() {
+    if (this._condition === 0 || this.destroyed) {
+      return null;
+    }
+
+    const angle = this.rotation + this._gunRotation;
+    const reach = this._size * 4 * MUZZLE_REACH;
+
+    return {
+      x: this._worldX + Math.cos(angle) * reach,
+      y: this._worldY + Math.sin(angle) * reach,
+    };
+  }
+
+  _resetRecoil() {
+    this._recoilElapsed = Infinity;
+    this._recoilTilt.pitch = 0;
+    this._recoilTilt.roll = 0;
+    this.body.position.set(0, 0);
+    this.gun.position.set(0, 0);
+  }
+
+  // шаг отдачи по ВРЕМЕНИ, как просадка приземления: смещения мешей внутри
+  // повёрнутого контейнера — это и есть оси корпуса. Длины — мировые
+  // единицы, растут с высотой по той же проекции, что и сам корпус
+  _stepRecoil() {
+    if (this._recoilElapsed === Infinity) {
+      return;
+    }
+
+    this._recoilElapsed += Ticker.shared.deltaMS;
+
+    const amount = recoilAmount(
+      this._recoilElapsed,
+      recoilConfig.duration,
+      recoilConfig.attack,
+    );
+
+    if (amount === 0 && this._recoilElapsed >= recoilConfig.duration) {
+      this._resetRecoil();
+
+      return;
+    }
+
+    const zScale = 1 + this._z * parallaxConfig.shear;
+    const offsets = recoilOffsets({
+      amount,
+      gunRotation: this._gunRotation,
+      config: recoilConfig,
+    });
+
+    this.body.position.set(offsets.body.x * zScale, offsets.body.y * zScale);
+    // башня едет вместе с корпусом и ещё откатывается сама
+    this.gun.position.set(
+      (offsets.body.x + offsets.gun.x) * zScale,
+      (offsets.body.y + offsets.gun.y) * zScale,
+    );
+    this._recoilTilt.pitch = offsets.pitch;
+    this._recoilTilt.roll = offsets.roll;
+  }
+
+  // текстура меша и, если есть карта нормалей, шейдер света. Без карты
+  // (или при `tankLight.enabled: false`) меш остаётся батченым, как прежде
+  _setTexture(mesh, texture, normal) {
+    mesh.texture = texture;
+
+    const shader = this._lightShaders.get(mesh);
+
+    if (!tankLightConfig.enabled || !normal) {
+      if (shader) {
+        mesh.shader = null;
+        shader.destroy();
+        this._lightShaders.delete(mesh);
+      }
+
+      return;
+    }
+
+    if (shader) {
+      setTankLightTextures(shader, texture, normal);
+    } else {
+      const created = createTankLightShader(texture, normal);
+
+      mesh.shader = created;
+      this._lightShaders.set(mesh, created);
+    }
+  }
+
+  // uniforms света раз за кадр: курс, наклон и поворот пушки
+  _applyLight() {
+    for (const [mesh, shader] of this._lightShaders) {
+      applyTankLight(
+        shader,
+        tankLightUniforms({
+          heading: this.rotation,
+          rotation: mesh === this.gun ? this._gunRotation : 0,
+          pitch: tiltConfig.enabled ? this._pitch + this._recoilTilt.pitch : 0,
+          roll: tiltConfig.enabled ? this._roll + this._recoilTilt.roll : 0,
+          lightDir: tiltConfig.lightDir,
+          lightZ: tankLightConfig.lightZ,
+          ambient: tankLightConfig.ambient,
+          diffuse: tankLightConfig.diffuse,
+        }),
+      );
+    }
+  }
+
   // углы квада одного меша: масштаб высоты, просадка приземления и наклон
   // корпуса — один трансформ, потому что у PerspectiveMesh нет ни якоря, ни
   // осмысленного `scale` вокруг него
@@ -516,10 +762,12 @@ export default class Tank extends Container {
         anchorX: anchor.x,
         anchorY: anchor.y,
         rotation,
+        // курс нужен `lift`: поднявшийся край уезжает вверх по экрану
+        heading: this.rotation,
         // выключенный наклон вырождает квад в обычный прямоугольник —
         // отдельной «плоской» ветки держать не нужно
-        pitch: tiltConfig.enabled ? this._pitch : 0,
-        roll: tiltConfig.enabled ? this._roll : 0,
+        pitch: tiltConfig.enabled ? this._pitch + this._recoilTilt.pitch : 0,
+        roll: tiltConfig.enabled ? this._roll + this._recoilTilt.roll : 0,
         shear: parallaxConfig.shear,
         lift: tiltConfig.lift,
       }),
@@ -609,8 +857,13 @@ export default class Tank extends Container {
     this.position.set(view.x, view.y);
 
     // светотень наклона поверх тинта уровня: множитель, а не замена —
-    // затемнение нижних ярусов обязано остаться
-    if (tiltConfig.enabled && tiltConfig.shading) {
+    // затемнение нижних ярусов обязано остаться. Со светом по карте
+    // нормалей наклон уже учтён в шейдере, и второй раз его не кладём
+    if (
+      tiltConfig.enabled &&
+      tiltConfig.shading &&
+      this._lightShaders.size === 0
+    ) {
       const shade = clamp(
         tiltShade({
           angle: this.rotation,
@@ -639,22 +892,26 @@ export default class Tank extends Container {
       this._squash = 0;
     }
 
+    this._stepRecoil();
     this._applyTilt();
+    this._applyLight();
 
     this._updateShadow(camera);
   }
 
-  // Тень — признак ПОЛЁТА и ничего больше: она показывает, насколько танк
-  // оторвался от опоры. У стоящего и едущего танка отрыва нет, и тень там
-  // лежала бы ровно под корпусом, читаясь серым ореолом вокруг него, —
-  // поэтому вне полёта её нет вовсе. Признак полёта тот же, что у
+  // Тень показывает две вещи: объём корпуса на земле и отрыв от опоры в
+  // полёте. Она сдвинута ОТ света (`shadow.groundOffset`) — без сдвига
+  // лежала бы ровно под корпусом и читалась серым ореолом, поэтому при
+  // нулевом сдвиге она есть только в полёте. Признак полёта тот же, что у
   // `_groundZ`: ненулевая вертикальная скорость в кадре
   _updateShadow(camera) {
     if (!this._shadowAsset || !this.parent) {
       return;
     }
 
-    const visible = this._condition !== 0 && this._vz !== 0;
+    const airborne = this._vz !== 0;
+    const visible =
+      this._condition !== 0 && (airborne || shadowConfig.groundOffset > 0);
 
     if (!visible) {
       // спрайта может не быть вовсе: танк, который ни разу не взлетал, его
@@ -694,8 +951,12 @@ export default class Tank extends Container {
       groundZ * parallaxConfig.shear,
     );
 
-    shadow.x = view.x;
-    shadow.y = view.y;
+    // сдвиг — в осях ЭКРАНА, а не корпуса: свет один на всю сцену и с
+    // танком не поворачивается
+    const offset = shadowOffset();
+
+    shadow.x = view.x + offset.x;
+    shadow.y = view.y + offset.y;
     shadow.rotation = this.rotation;
 
     // масштаб и прозрачность читают ПОДЪЁМ над опорой, а не высоту над
@@ -704,9 +965,11 @@ export default class Tank extends Container {
     const lift = Math.max(0, this._z - groundZ);
 
     shadow.scale.set(this._shadowScale * (1 + lift * shadowConfig.scaleGain));
-    shadow.alpha =
-      Math.max(0, shadowConfig.baseAlpha - lift * shadowConfig.alphaFalloff) *
-      this.alpha;
+    const baseAlpha = airborne
+      ? Math.max(0, shadowConfig.baseAlpha - lift * shadowConfig.alphaFalloff)
+      : shadowConfig.groundAlpha;
+
+    shadow.alpha = baseAlpha * this.alpha;
 
     // тень лежит на слое, НАД которым висит танк: на рампе это ещё нижний
     // уровень, и именно поэтому по ней видно, что танк уже поднялся
@@ -723,6 +986,8 @@ export default class Tank extends Container {
       this._soundManager.unregisterSound(this._soundId);
       this._soundId = null;
     }
+
+    this._removeWaterSound();
   }
 
   destroy(options) {
@@ -736,6 +1001,18 @@ export default class Tank extends Container {
       this._shadow.destroy({ texture: false, textureSource: false });
       this._shadow = null;
     }
+
+    if (this._unsubscribeShots) {
+      this._unsubscribeShots();
+      this._unsubscribeShots = null;
+    }
+
+    // свой шейдер меш не уничтожает; текстуры общие и остаются
+    for (const shader of this._lightShaders.values()) {
+      shader.destroy();
+    }
+
+    this._lightShaders.clear();
 
     super.destroy({
       children: true,

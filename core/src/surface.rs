@@ -589,7 +589,7 @@ pub fn boost_dv(
         return (0.0, 0.0);
     }
 
-    let Some((_, SurfaceKind::Boost { dv, max_speed, min_entry_speed }, dir)) =
+    let Some((_, SurfaceKind::Boost { dv, max_speed, min_entry_speed, .. }, dir)) =
         map.sample(level, x, y)
     else {
         return (0.0, 0.0);
@@ -617,6 +617,61 @@ pub fn boost_dv(
     }
 
     (dx * gain, dy * gain)
+}
+
+/// Запуск удержания бустера: вызывается на шаге, где [`boost_dv`] дал
+/// импульс танку, с той же точкой. Плита с `boostTime` ставит таймер и
+/// множитель потолка; плита без удержания текущее удержание не трогает.
+pub fn start_boost_hold(map: &SurfaceMap, level_state: &mut LevelState, x: f32, y: f32) {
+    let Some((_, SurfaceKind::Boost { hold, speed_factor, .. }, _)) =
+        map.sample(level_state.level, x, y)
+    else {
+        return;
+    };
+
+    if hold > 0.0 {
+        level_state.boost_left = hold;
+        level_state.boost_factor = speed_factor;
+    }
+}
+
+/// Спад удержания за шаг — один раз за шаг, до ветки полёта, на хосте и
+/// реплике в одном месте. На нуле множитель возвращается к `1`.
+pub fn decay_boost(level_state: &mut LevelState, dt: f32) {
+    if level_state.boost_left <= 0.0 {
+        return;
+    }
+
+    level_state.boost_left = (level_state.boost_left - dt).max(0.0);
+
+    if level_state.boost_left <= 0.0 {
+        level_state.boost_factor = 1.0;
+    }
+}
+
+/// Поднятый потолок скорости на время удержания. Без удержания — `mix` как
+/// есть (нейтральный путь бит-в-бит).
+pub fn boost_hold_mix(mix: SurfaceMix, level_state: &LevelState) -> SurfaceMix {
+    if level_state.boost_left <= 0.0 {
+        return mix;
+    }
+
+    SurfaceMix {
+        max_speed: mix.max_speed * level_state.boost_factor,
+        ..mix
+    }
+}
+
+/// Δv компенсации линейного демпфирования на время удержания:
+/// `(v + v·linear·dt) / (1 + linear·dt) = v` — после затухания интеграции
+/// скорость остаётся прежней. Без удержания — нули. `v` — скорость НАЧАЛА
+/// шага.
+pub fn boost_damping_dv(v: (f32, f32), linear: f32, level_state: &LevelState, dt: f32) -> (f32, f32) {
+    if level_state.boost_left <= 0.0 {
+        return (0.0, 0.0);
+    }
+
+    (v.0 * linear * dt, v.1 * linear * dt)
 }
 
 #[cfg(test)]
@@ -929,6 +984,73 @@ mod tests {
 
         // въезд с плиты «восток» на плиту «юг» со скоростью на юго-восток
         assert_eq!(boost_dv(&map, 0, false, 40.5, 25.0, 120.0, 120.0, DT), (0.0, 160.0));
+    }
+
+    // та же полоса, но плита с удержанием
+    fn held_boost_strip() -> SurfaceMap {
+        let grid0 = grid(6, 10, |x, _| if (3..6).contains(&x) { 47 } else { 0 });
+        let mut held = rules();
+        let boost = held.types.get_mut("boost").unwrap();
+
+        boost.boost_time = Some(1.2);
+        boost.boost_speed_factor = Some(1.8);
+
+        SurfaceMap::build(&[&grid0], TILE, &game(json!({ "0": { "47": { "type": "boost", "dir": "east" } } })), &held)
+            .unwrap()
+    }
+
+    #[test]
+    fn plate_without_hold_starts_nothing() {
+        let map = boost_strip("east");
+        let mut state = LevelState::default();
+
+        // импульс прежний бит-в-бит, удержания нет
+        assert_eq!(boost_dv(&map, 0, false, 30.5, 25.0, 120.0, 0.0, DT), (160.0, 0.0));
+        start_boost_hold(&map, &mut state, 30.5, 25.0);
+        assert_eq!(state, LevelState::default());
+        assert_eq!(boost_hold_mix(SurfaceMix::NEUTRAL, &state), SurfaceMix::NEUTRAL);
+        assert_eq!(boost_damping_dv((300.0, 40.0), 3.0, &state, DT), (0.0, 0.0));
+    }
+
+    #[test]
+    fn held_boost_raises_the_ceiling_until_it_expires() {
+        let map = held_boost_strip();
+        let mut state = LevelState::default();
+
+        assert_eq!(boost_dv(&map, 0, false, 30.5, 25.0, 120.0, 0.0, DT), (160.0, 0.0));
+        start_boost_hold(&map, &mut state, 30.5, 25.0);
+        assert_eq!((state.boost_left, state.boost_factor), (1.2, 1.8));
+        assert_eq!(boost_hold_mix(SurfaceMix::NEUTRAL, &state).max_speed, 1.8);
+
+        // вне плиты удержание не запускается
+        let mut off = LevelState::default();
+
+        start_boost_hold(&map, &mut off, 5.0, 25.0);
+        assert_eq!(off, LevelState::default());
+
+        decay_boost(&mut state, 0.7);
+        assert!((state.boost_left - 0.5).abs() < 1e-6);
+        assert_eq!(state.boost_factor, 1.8);
+
+        decay_boost(&mut state, 0.7);
+        assert_eq!((state.boost_left, state.boost_factor), (0.0, 1.0));
+        assert_eq!(boost_hold_mix(SurfaceMix::NEUTRAL, &state), SurfaceMix::NEUTRAL);
+    }
+
+    #[test]
+    fn hold_compensation_cancels_one_damping_step() {
+        let state = LevelState {
+            boost_left: 1.0,
+            boost_factor: 1.8,
+            ..LevelState::default()
+        };
+        let (linear, v) = (3.0, (420.0, -35.0));
+        let (dvx, dvy) = boost_damping_dv(v, linear, &state, DT);
+        // затухание интеграции (`Predictor::integrate`, Rapier): v / (1 + l·dt)
+        let damp = 1.0 / (1.0 + linear * DT);
+
+        assert!(((v.0 + dvx) * damp - v.0).abs() < 1e-3);
+        assert!(((v.1 + dvy) * damp - v.1).abs() < 1e-3);
     }
 
     #[test]

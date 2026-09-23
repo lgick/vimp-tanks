@@ -52,34 +52,66 @@ describe('tiltCorners', () => {
     expect(rb.y).toBeCloseTo(0, 6);
   });
 
-  // нос (экранный верх квада) поднимается: уезжает вверх — потому что
-  // поднявшаяся точка проецируется выше, — и вширь, потому что она ближе к
-  // «камере» (та же проекция, что у плиты уровня)
-  it('тангаж поднимает нос', () => {
+  // нос — `+u` (правый край квада, текстура вытянута по `x`), как у ядра
+  // (`motion::tilt_target`) и фар. Поднявшийся нос уезжает вверх по экрану
+  // и вширь — он ближе к «камере» (та же проекция, что у плиты уровня)
+  it('тангаж поднимает нос +u', () => {
     const flat = corners();
     const tilted = corners({ pitch: 0.3 });
 
-    expect(tilted[0].y).toBeLessThan(flat[0].y);
+    // нос: правые углы уехали вверх, а сам нос раздался по высоте
     expect(tilted[1].y).toBeLessThan(flat[1].y);
-    expect(tilted[1].x).toBeGreaterThan(flat[1].x);
-    expect(tilted[0].x).toBeLessThan(flat[0].x);
+    expect(tilted[2].y).toBeLessThan(flat[2].y);
+    expect(tilted[2].y - tilted[1].y).toBeGreaterThan(flat[2].y - flat[1].y);
 
-    // корма уходит вниз и сужается
-    expect(tilted[2].y).toBeGreaterThan(flat[2].y);
-    expect(tilted[2].x).toBeLessThan(flat[2].x);
-    expect(tilted[3].x).toBeGreaterThan(flat[3].x);
+    // корма опустилась и сузилась
+    expect(tilted[0].y).toBeGreaterThan(flat[0].y);
+    expect(tilted[3].y - tilted[0].y).toBeLessThan(flat[3].y - flat[0].y);
+
+    // корпус укоротился по ходу, а не перекосился вбок
+    expect(tilted[1].x - tilted[0].x).toBeLessThan(flat[1].x - flat[0].x);
   });
 
-  it('крен наклоняет борта', () => {
+  it('крен поднимает борт +v', () => {
+    const flat = corners();
     const [lt, rt, rb, lb] = corners({ roll: 0.3 });
 
-    // правый борт поднялся, левый опустился
-    expect(rt.y).toBeLessThan(lt.y);
-    expect(rb.y).toBeLessThan(lb.y);
+    // нижний борт (+v) поднялся — уехал вверх, верхний (−v) опустился
+    expect(lb.y).toBeLessThan(flat[3].y);
+    expect(rb.y).toBeLessThan(flat[2].y);
+    expect(lt.y).toBeGreaterThan(flat[0].y);
+    expect(rt.y).toBeGreaterThan(flat[1].y);
 
-    // и поднявшийся борт стал длиннее: он ближе к наблюдателю
-    expect(rb.y - rt.y).toBeGreaterThan(lb.y - lt.y);
+    // поднявшийся борт стал длиннее: он ближе к наблюдателю
+    expect(rb.x - lb.x).toBeGreaterThan(rt.x - lt.x);
   });
+
+  // `lift` уводит поднявшийся край вверх ПО ЭКРАНУ при любом курсе:
+  // контейнер танка повёрнут на курс, и локальное «вверх» с ним не
+  // совпадает. Переводим углы в экранные оси и сравниваем с ровным танком
+  it.each([0, Math.PI / 2, Math.PI])(
+    'lift уводит край вверх по экрану при курсе %f',
+    heading => {
+      const screenX = ({ x, y }) =>
+        y * -Math.sin(heading) + x * Math.cos(heading);
+      const screenY = ({ x, y }) =>
+        x * Math.sin(heading) + y * Math.cos(heading);
+
+      const flat = corners({ heading });
+      const lifted = corners({ heading, pitch: 0.3 });
+      const bare = corners({ heading, pitch: 0.3, lift: 0 });
+
+      // нос (+u) — правые углы квада: с `lift` они выше, чем без него,
+      // а по экранной горизонтали сдвига нет
+      [1, 2].forEach(i => {
+        expect(screenY(lifted[i])).toBeLessThan(screenY(bare[i]));
+        expect(screenX(lifted[i])).toBeCloseTo(screenX(bare[i]), 6);
+      });
+
+      // и ровный танк `lift` не трогает
+      expect(corners({ heading, lift: 0 })).toEqual(flat);
+    },
+  );
 
   it('поворот спрайта коммутирует', () => {
     const turned = corners({ rotation: Math.PI / 2 });
@@ -92,20 +124,20 @@ describe('tiltCorners', () => {
     });
   });
 
-  // зеркальность наклона: знак тангажа меняет ширину краёв местами. По
+  // зеркальность наклона: знак тангажа меняет высоту краёв местами. По
   // вертикали зеркала нет и быть не может — `lift` проецирует поднявшийся
   // край ВВЕРХ по экрану при любом знаке, это не поворот картинки
   it('наклон симметричен', () => {
     const up = corners({ pitch: 0.3 });
     const down = corners({ pitch: -0.3 });
 
-    expect(down[3].x).toBeCloseTo(up[0].x, 6);
-    expect(down[2].x).toBeCloseTo(up[1].x, 6);
-    expect(down[0].x).toBeCloseTo(up[3].x, 6);
-    expect(down[1].x).toBeCloseTo(up[2].x, 6);
+    expect(down[0].x).toBeCloseTo(-up[1].x, 6);
+    expect(down[3].x).toBeCloseTo(-up[2].x, 6);
+    expect(down[3].y - down[0].y).toBeCloseTo(up[2].y - up[1].y, 6);
+    expect(down[2].y - down[1].y).toBeCloseTo(up[3].y - up[0].y, 6);
 
-    // поднимается противоположный край
-    expect(down[2].y).toBeLessThan(corners()[2].y);
+    // поднимается противоположный край — корма
+    expect(down[0].y).toBeLessThan(corners()[0].y);
     expect(down[3].y).toBeLessThan(corners()[3].y);
   });
 
@@ -114,14 +146,14 @@ describe('tiltCorners', () => {
   it('lift = 0 оставляет наклон чистым сжатием', () => {
     const [lt, rt, rb, lb] = corners({ pitch: 0.3, lift: 0 });
 
-    // края разъехались по ширине (проекция высоты осталась)
-    expect(rt.x - lt.x).toBeGreaterThan(rb.x - lb.x);
+    // края разъехались по высоте (проекция высоты осталась)
+    expect(rb.y - rt.y).toBeGreaterThan(lb.y - lt.y);
 
-    // а по вертикали квад только сжался: верх опустился, низ поднялся
-    expect(lt.y).toBeGreaterThan(-15);
-    expect(rb.y).toBeLessThan(15);
-    expect(lt.y).toBeCloseTo(
-      -15 * Math.cos(0.3) * (1 + ((15 * Math.sin(0.3)) / 30) * parallax.shear),
+    // а по горизонтали квад только сжался: нос и корма подтянулись
+    expect(rt.x).toBeLessThan(20);
+    expect(lt.x).toBeGreaterThan(-20);
+    expect(rt.x).toBeCloseTo(
+      20 * Math.cos(0.3) * (1 + ((20 * Math.sin(0.3)) / 30) * parallax.shear),
       6,
     );
   });
@@ -133,14 +165,11 @@ describe('tiltCorners', () => {
   });
 
   it('lift двигает поднявшийся край вверх', () => {
-    const [lt] = corners({ pitch: 0.3 });
-    const raised = 15 * Math.sin(0.3);
+    const [, rt] = corners({ pitch: 0.3 });
+    const raised = 20 * Math.sin(0.3);
     const k = (raised / 30) * parallax.shear;
 
-    expect(lt.y).toBeCloseTo(
-      -15 * Math.cos(0.3) * (1 + k) - raised * tilt.lift,
-      6,
-    );
+    expect(rt.y).toBeCloseTo(-15 * (1 + k) - raised * tilt.lift, 6);
   });
 });
 
@@ -185,6 +214,13 @@ describe('tiltShade', () => {
 
     expect(north).toBe(1);
     expect(south).toBeLessThan(1);
+  });
+
+  // крен поднимает борт +v (как в `tiltCorners`), и нормаль отклоняется к
+  // −v: при курсе π/2 борт +v смотрит в экранный −x, то есть −v — в +x
+  it('крен затемняет, когда свет со стороны поднятого борта', () => {
+    expect(shade({ roll: 0.4, angle: Math.PI / 2 })).toBeLessThan(1);
+    expect(shade({ roll: -0.4, angle: Math.PI / 2 })).toBe(1);
   });
 });
 

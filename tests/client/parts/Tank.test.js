@@ -2,15 +2,21 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Container, Texture, TextureSource, Ticker } from 'pixi.js';
 import Tank, {
   calculateEngineSoundParams,
+  shadowOffset,
 } from '../../../src/client/parts/Tank.js';
 import {
   shadow,
   parallax,
   seeThrough,
   landing,
+  surfaceFx,
+  tilt,
+  tankLight,
+  recoil,
 } from '../../../src/config/render.js';
 import { createLevelView } from '../../../src/client/levelView.js';
 import { createLighting } from '../../../src/client/lighting/createLighting.js';
+import { createShotEvents } from '../../../src/client/shotEvents.js';
 
 // Part танка поверх Pixi Container: проверяется только звуковой контур
 // (регистрация/обновление/снятие) — визуал рендером не трогаем.
@@ -130,6 +136,155 @@ describe('Tank: звук двигателя', () => {
     tank.destroy();
 
     expect(soundManager.unregisterSound).toHaveBeenCalledWith(soundId);
+  });
+});
+
+// плеск под гусеницами: петля `tankWater`, пока живой танк на воде и не в
+// полёте; громкость и скорость воспроизведения — от скорости хода
+describe('Tank: звук воды', () => {
+  const { minVolume, fullSpeed, rate } = surfaceFx.water.sound;
+  const WATER_VOLUME = 0.4;
+
+  const makeWaterSoundManager = () => {
+    const configs = {
+      tankEngine: { volume: 0.8 },
+      tankWater: { volume: WATER_VOLUME },
+    };
+
+    return {
+      getSoundConfig: vi.fn(name => configs[name] || null),
+      registerSound: vi.fn(name => Symbol(name)),
+      updateSoundData: vi.fn(),
+      unregisterSound: vi.fn(),
+    };
+  };
+
+  // вода — всё, что правее x = 100
+  const surfaces = { kindAt: vi.fn(x => (x > 100 ? 'water' : null)) };
+
+  // полный ряд m1 до M1_ROLL
+  const row = ({ x = 0, vx = 0, vy = 0, condition = 100, vz = 0 } = {}) => [
+    x,
+    0,
+    0,
+    0,
+    vx,
+    vy,
+    0,
+    condition,
+    10,
+    1,
+    0,
+    0,
+    0,
+    vz,
+    0,
+    0,
+  ];
+
+  const waterCalls = (mock, name = 'tankWater') =>
+    mock.mock.calls.filter(call => call[0] === name);
+
+  const waterId = soundManager =>
+    soundManager.registerSound.mock.results.find(
+      result => result.value.description === 'tankWater',
+    )?.value;
+
+  const makeWaterTank = (soundManager, dependencies = { surfaces }) =>
+    new Tank(row(), assets, { soundManager, ...dependencies });
+
+  it('въезд в воду регистрирует петлю tankWater', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager);
+
+    tank.update(row());
+
+    expect(waterCalls(soundManager.registerSound)).toHaveLength(0);
+
+    tank.update(row({ x: 200 }));
+
+    expect(waterCalls(soundManager.registerSound)).toHaveLength(1);
+  });
+
+  it('в воде обновляет громкость и rate от скорости', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager);
+
+    tank.update(row({ x: 200 }));
+
+    const standing = waterCalls(soundManager.registerSound)[0][1];
+
+    expect(standing.volume).toBeCloseTo(WATER_VOLUME * minVolume);
+    expect(standing.rate).toBeCloseTo(rate.min);
+
+    tank.update(row({ x: 200, vx: fullSpeed * 0.6, vy: fullSpeed * 0.8 }));
+
+    const id = waterId(soundManager);
+    const [updatedId, full] = soundManager.updateSoundData.mock.calls.at(-1);
+
+    expect(updatedId).toBe(id);
+    expect(full.volume).toBeCloseTo(WATER_VOLUME);
+    expect(full.rate).toBeCloseTo(rate.max);
+    expect(full.position).toEqual({ x: 200, y: 0 });
+    expect(waterCalls(soundManager.registerSound)).toHaveLength(1);
+  });
+
+  it('выезд из воды снимает петлю', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager);
+
+    tank.update(row({ x: 200 }));
+    tank.update(row());
+
+    expect(soundManager.unregisterSound).toHaveBeenCalledWith(
+      waterId(soundManager),
+    );
+  });
+
+  it('смерть в воде снимает петлю и не заводит её снова', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager);
+
+    tank.update(row({ x: 200 }));
+    tank.update(row({ x: 200, condition: 0 }));
+
+    expect(soundManager.unregisterSound).toHaveBeenCalledWith(
+      waterId(soundManager),
+    );
+
+    tank.update(row({ x: 200, condition: 0 }));
+
+    expect(waterCalls(soundManager.registerSound)).toHaveLength(1);
+  });
+
+  it('destroy снимает петлю', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager);
+
+    tank.update(row({ x: 200 }));
+    tank.destroy();
+
+    expect(soundManager.unregisterSound).toHaveBeenCalledWith(
+      waterId(soundManager),
+    );
+  });
+
+  it('в полёте над водой звука нет', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager);
+
+    tank.update(row({ x: 200, vz: -1 }));
+
+    expect(waterCalls(soundManager.registerSound)).toHaveLength(0);
+  });
+
+  it('без сервиса surfaces звука воды нет', () => {
+    const soundManager = makeWaterSoundManager();
+    const tank = makeWaterTank(soundManager, {});
+
+    tank.update(row({ x: 200 }));
+
+    expect(waterCalls(soundManager.registerSound)).toHaveLength(0);
   });
 });
 
@@ -353,6 +508,12 @@ describe('Tank: признаки уровня и высоты', () => {
     return { tank, stage };
   };
 
+  // точка опоры под тенью: тень сдвинута от света на постоянный вектор в
+  // осях экрана, проекция считается от точки без этого сдвига
+  const OFFSET = shadowOffset();
+  const shadowX = tank => tank._shadow.x - OFFSET.x;
+  const shadowY = tank => tank._shadow.y - OFFSET.y;
+
   // проекция 2.5D: смещается КОРПУС — на подъём НАД ОПОРОЙ. Тень лежит на
   // самой опоре, поэтому разъезд показывает высоту прыжка, а не высоту
   // яруса над нулём карты
@@ -364,17 +525,17 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.onRender();
 
     expect(tank.x).toBeCloseTo(100, 6);
-    expect(tank._shadow.x).toBeCloseTo(100);
+    expect(shadowX(tank)).toBeCloseTo(100);
 
     tank.update(row(0, 2, 100, 100, { vz: -2 }));
     tank.onRender();
 
-    const low = Math.abs(tank.x - tank._shadow.x);
+    const low = Math.abs(tank.x - shadowX(tank));
 
     tank.update(row(0, 4, 100, 100, { vz: -2 }));
     tank.onRender();
 
-    expect(Math.abs(tank.x - tank._shadow.x)).toBeGreaterThan(low);
+    expect(Math.abs(tank.x - shadowX(tank))).toBeGreaterThan(low);
   });
 
   // масштаб высоты — та же проекция, что у плиты: танк на уровне 1 крупнее
@@ -412,9 +573,10 @@ describe('Tank: признаки уровня и высоты', () => {
 
     const [lt, rt, rb, lb] = quad(tank.body);
 
-    // квад перестал быть прямоугольником: нос поднялся и стал шире кормы
-    expect(rt.x - lt.x).toBeGreaterThan(rb.x - lb.x);
-    expect(lt.y).toBeLessThan(-15);
+    // квад перестал быть прямоугольником: нос (+u, правый край) поднялся
+    // и стал шире кормы
+    expect(rb.y - rt.y).toBeGreaterThan(lb.y - lt.y);
+    expect(rt.y).toBeLessThan(-15);
   });
 
   it('приземление даёт просадку и гаснет', () => {
@@ -515,21 +677,86 @@ describe('Tank: признаки уровня и высоты', () => {
     expect(tank._shadow.alpha).toBeLessThan(groundAlpha);
   });
 
-  // Тень — признак ПОЛЁТА: у стоящего и едущего танка её нет вовсе. Это
-  // и есть ответ на проблему 4 ручного тестирования (тень уезжала от
-  // танка и жила своей жизнью): нечему уезжать
-  it('у стоящего на верхнем ярусе танка тени нет', () => {
+  // На земле тень есть, но сдвинута ОТ света: без сдвига она легла бы
+  // ровно под корпусом серым ореолом. Сдвиг — в осях экрана, поэтому от
+  // курса он не зависит
+  it('у стоящего танка тень сдвинута от света при любом курсе', () => {
     const { tank } = onStage({ levelView: makeView() });
 
-    // камера в (400, 300): танк далеко от её центра, и прежняя тень
-    // разъехалась бы с корпусом сильнее всего именно здесь
-    tank.update(row(2, 2, 100, 100));
-    tank.onRender();
+    for (const angle of [0, Math.PI]) {
+      const standing = row(2, 2, 100, 100);
 
-    expect(tank._shadow).toBe(null);
+      standing[2] = angle;
+      tank.update(standing);
+      tank.onRender();
+
+      expect(tank._shadow.visible).toBe(true);
+      expect(tank._shadow.alpha).toBeCloseTo(shadow.groundAlpha, 6);
+      // свет с северо-запада — тень уходит на юго-восток от опоры
+      expect(tank._shadow.x - shadowX(tank)).toBeGreaterThan(0);
+      expect(tank._shadow.y - shadowY(tank)).toBeGreaterThan(0);
+    }
+
+    // опора — плита уровня 2: тень лежит в её проекции, а не на земле
+    expect(shadowX(tank)).toBeCloseTo(tank.x, 6);
   });
 
-  it('тень гаснет после приземления', () => {
+  it('сдвиг тени — против lightDir, длиной groundOffset', () => {
+    const offset = shadowOffset([-1, 0], 3);
+
+    expect(offset.x).toBeCloseTo(3, 6);
+    expect(offset.y).toBeCloseTo(0, 6);
+
+    const diagonal = shadowOffset(tilt.lightDir, shadow.groundOffset);
+
+    expect(Math.hypot(diagonal.x, diagonal.y)).toBeCloseTo(
+      shadow.groundOffset,
+      6,
+    );
+  });
+
+  it('без сдвига тень есть только в полёте', () => {
+    const saved = shadow.groundOffset;
+
+    shadow.groundOffset = 0;
+
+    try {
+      const { tank } = onStage({ levelView: makeView() });
+
+      tank.update(row(2, 2, 100, 100));
+      tank.onRender();
+
+      expect(tank._shadow).toBe(null);
+
+      tank.update(row(0, 1, 100, 100, { vz: -3 }));
+      tank.onRender();
+      tank.update(row(0, 0, 100, 100));
+      tank.onRender();
+
+      expect(tank._shadow.visible).toBe(false);
+    } finally {
+      shadow.groundOffset = saved;
+    }
+  });
+
+  it('у остова тени нет', () => {
+    const { tank } = onStage({ levelView: makeView() });
+
+    tank.update(row(0, 0, 100, 100));
+    tank.onRender();
+
+    expect(tank._shadow.visible).toBe(true);
+
+    const wreck = row(0, 0, 100, 100);
+
+    wreck[7] = 0;
+    tank.update(wreck);
+    tank.onRender();
+
+    expect(tank._shadow.visible).toBe(false);
+  });
+
+  it('после приземления тень остаётся, но с прозрачностью земли', () => {
     const { tank } = onStage({ levelView: makeView() });
 
     tank.update(row(0, 1, 100, 100, { vz: -3 }));
@@ -540,7 +767,8 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.update(row(0, 0, 100, 100));
     tank.onRender();
 
-    expect(tank._shadow.visible).toBe(false);
+    expect(tank._shadow.visible).toBe(true);
+    expect(tank._shadow.alpha).toBeCloseTo(shadow.groundAlpha, 6);
   });
 
   it('в полёте тень отстаёт от корпуса', () => {
@@ -549,14 +777,14 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.update(row(2, 2.3, 100, 100, { vz: -2 }));
     tank.onRender();
 
-    const low = Math.abs(tank._shadow.x - tank.x);
+    const low = Math.abs(shadowX(tank) - tank.x);
 
     expect(low).toBeGreaterThan(0);
 
     tank.update(row(2, 3, 100, 100, { vz: -2 }));
     tank.onRender();
 
-    expect(Math.abs(tank._shadow.x - tank.x)).toBeGreaterThan(low);
+    expect(Math.abs(shadowX(tank) - tank.x)).toBeGreaterThan(low);
   });
 
   // падение с обрыва: опорой остаётся покинутая плита (ядро держит её в
@@ -568,10 +796,10 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.onRender();
 
     // проекция уровня 1 от центра камеры (400, 300)
-    expect(tank._shadow.x).toBeCloseTo(100 + (100 - 400) * parallax.shear, 6);
-    expect(tank._shadow.y).toBeCloseTo(100 + (100 - 300) * parallax.shear, 6);
+    expect(shadowX(tank)).toBeCloseTo(100 + (100 - 400) * parallax.shear, 6);
+    expect(shadowY(tank)).toBeCloseTo(100 + (100 - 300) * parallax.shear, 6);
     // корпус ниже опоры — он уехал к центру камеры сильнее тени
-    expect(tank.x).toBeGreaterThan(tank._shadow.x);
+    expect(tank.x).toBeGreaterThan(shadowX(tank));
   });
 
   // масштаб и прозрачность раньше росли от высоты над нулём карты — это
@@ -599,8 +827,8 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.update(row(0, 3, 100, 250, { vz: -2 }));
     tank.onRender();
 
-    expect(tank._shadow.x).toBeCloseTo(100);
-    expect(tank._shadow.y).toBeCloseTo(250);
+    expect(shadowX(tank)).toBeCloseTo(100);
+    expect(shadowY(tank)).toBeCloseTo(250);
     // корпус при этом уехал от центра камеры (400, 300)
     expect(tank.x).toBeLessThan(100);
     expect(tank.y).toBeLessThan(250);
@@ -613,12 +841,12 @@ describe('Tank: признаки уровня и высоты', () => {
     tank.update(row(0, 3, 400, 300, { vz: -2 }));
     tank.onRender();
 
-    expect(Math.abs(tank.x - tank._shadow.x)).toBeCloseTo(0);
+    expect(Math.abs(tank.x - shadowX(tank))).toBeCloseTo(0);
 
     tank.update(row(0, 3, 100, 300, { vz: -2 }));
     tank.onRender();
 
-    expect(Math.abs(tank.x - tank._shadow.x)).toBeGreaterThan(0);
+    expect(Math.abs(tank.x - shadowX(tank))).toBeGreaterThan(0);
   });
 
   // в levelView, в звук и в уклон уходит НЕсмещённая точка: иначе поехали бы
@@ -735,6 +963,208 @@ describe('Tank: признаки уровня и высоты', () => {
 // ровно на слушателе, HRTF сворачивает в гребенчатую окраску («гул»), а
 // расхождение камеры и танка в пару пикселей кидает звук целиком в одно
 // ухо. Свой двигатель принадлежит игроку, а не миру.
+// Свет по карте нормалей: у меша с картой — свой шейдер (меш перестаёт
+// батчиться), без карты — прежний батченый меш и светотень `tiltShade`
+describe('Tank: свет по карте нормалей', () => {
+  const litLive = () => ({
+    ...liveTextures(),
+    bodyNormal: sized(40, 30),
+    gunNormal: sized(20, 20),
+  });
+  const litAssets = {
+    tankTexture: {
+      liveTeamId1: litLive(),
+      liveTeamId2: litLive(),
+      destroyed: sized(40, 30),
+      destroyedNormal: sized(40, 30),
+    },
+  };
+  const make = (textures, condition = 100) =>
+    new Tank(data(condition), textures, {
+      soundManager: makeSoundManager(),
+    });
+
+  it('с картами нормалей у корпуса и пушки свой шейдер', () => {
+    const tank = make(litAssets);
+
+    expect(tank._lightShaders.get(tank.body)).toBe(tank.body.shader);
+    expect(tank._lightShaders.get(tank.gun)).toBe(tank.gun.shader);
+    expect(tank.body.batched).toBe(false);
+  });
+
+  it('без карт нормалей меш остаётся батченым', () => {
+    const tank = make(assets);
+
+    expect(tank._lightShaders.size).toBe(0);
+    expect(tank.body.shader).toBe(null);
+    expect(tank.body.batched).toBe(true);
+  });
+
+  it('tankLight.enabled = false возвращает прежний путь', () => {
+    tankLight.enabled = false;
+
+    try {
+      const tank = make(litAssets);
+
+      expect(tank._lightShaders.size).toBe(0);
+      expect(tank.body.batched).toBe(true);
+    } finally {
+      tankLight.enabled = true;
+    }
+  });
+
+  it('текстура шейдера следует за текстурой меша', () => {
+    const tank = make(litAssets);
+    const live = litAssets.tankTexture.liveTeamId1;
+    const shader = tank._lightShaders.get(tank.body);
+
+    expect(shader.resources.uTexture).toBe(live.body.source);
+    expect(shader.resources.uNormal).toBe(live.bodyNormal.source);
+  });
+
+  it('остов получает свой шейдер', () => {
+    const tank = make(litAssets, 0);
+
+    expect(tank._lightShaders.get(tank.wreck)).toBe(tank.wreck.shader);
+  });
+
+  it('destroy уничтожает шейдеры, но не текстуры', () => {
+    const tank = make(litAssets);
+    const shader = tank._lightShaders.get(tank.body);
+    const source = litAssets.tankTexture.liveTeamId1.body.source;
+
+    tank.destroy();
+
+    expect(shader.resources).toBe(null);
+    expect(source.destroyed).toBe(false);
+  });
+});
+
+// Визуальная отдача: событие приходит через сервис `shots` по id танка,
+// анимация идёт по времени (общий тикер)
+describe('Tank: отдача после выстрела', () => {
+  const make = (condition = 100) => {
+    const shots = createShotEvents();
+    const tank = new Tank(
+      data(condition),
+      assets,
+      { soundManager: makeSoundManager(), shots },
+      { id: '1' },
+    );
+
+    new Container().addChild(tank);
+
+    return { tank, shots };
+  };
+
+  const frame = (tank, ms) => {
+    Ticker.shared.deltaMS = ms;
+    tank.onRender();
+  };
+
+  afterEach(() => {
+    Ticker.shared.deltaMS = 1000 / 60;
+  });
+
+  it('выстрел откатывает башню и корпус назад и гаснет', () => {
+    const { tank, shots } = make();
+
+    shots.fired(1);
+    frame(tank, recoil.attack * recoil.duration);
+
+    // ствол по курсу (+x): откат к −x, башня дальше корпуса
+    expect(tank.gun.x).toBeCloseTo(-(recoil.gunKick + recoil.bodyKick), 6);
+    expect(tank.body.x).toBeCloseTo(-recoil.bodyKick, 6);
+    expect(tank._recoilTilt.pitch).toBeCloseTo(recoil.rock, 6);
+
+    frame(tank, recoil.duration);
+
+    expect(tank.gun.x).toBe(0);
+    expect(tank.body.x).toBe(0);
+    expect(tank._recoilTilt.pitch).toBe(0);
+  });
+
+  it('чужой выстрел танк не трогает', () => {
+    const { tank, shots } = make();
+
+    shots.fired(2);
+    frame(tank, recoil.attack * recoil.duration);
+
+    expect(tank.gun.x).toBe(0);
+  });
+
+  it('повторный выстрел на спаде возвращает отдачу на пик', () => {
+    const { tank, shots } = make();
+
+    shots.fired(1);
+    frame(tank, recoil.duration * 0.8);
+
+    const decayed = tank.gun.x;
+
+    shots.fired(1);
+    frame(tank, 0);
+
+    expect(tank.gun.x).toBeLessThan(decayed);
+    expect(tank.gun.x).toBeCloseTo(-(recoil.gunKick + recoil.bodyKick), 6);
+  });
+
+  it('у остова отдачи нет', () => {
+    const { tank, shots } = make(0);
+
+    shots.fired(1);
+    frame(tank, recoil.attack * recoil.duration);
+
+    expect(tank.gun.x).toBe(0);
+    expect(tank.body.x).toBe(0);
+  });
+
+  it('recoil.enabled = false выключает отдачу', () => {
+    recoil.enabled = false;
+
+    try {
+      const { tank, shots } = make();
+
+      shots.fired(1);
+      frame(tank, recoil.attack * recoil.duration);
+
+      expect(tank.gun.x).toBe(0);
+    } finally {
+      recoil.enabled = true;
+    }
+  });
+
+  // дуло — та же формула, что у ядра: 0.55 длины корпуса по курсу башни
+  it('отдаёт мировую точку дула по курсу башни', () => {
+    const { tank, shots } = make();
+    const length = tank._size * 4;
+
+    expect(shots.muzzle(1)).toEqual({ x: length * 0.55, y: 0 });
+
+    tank._gunRotation = Math.PI / 2;
+
+    const side = shots.muzzle(1);
+
+    expect(side.x).toBeCloseTo(0, 6);
+    expect(side.y).toBeCloseTo(length * 0.55, 6);
+  });
+
+  it('у остова дула нет', () => {
+    const { shots } = make(0);
+
+    expect(shots.muzzle(1)).toBe(null);
+  });
+
+  it('destroy отписывает танк от выстрелов', () => {
+    const { tank, shots } = make();
+    const onFired = vi.spyOn(tank, '_onFired');
+
+    tank.destroy();
+    shots.fired(1);
+
+    expect(onFired).not.toHaveBeenCalled();
+  });
+});
+
 describe('Tank: свой двигатель непространственный', () => {
   const row = (id = '1') => ({ id });
 

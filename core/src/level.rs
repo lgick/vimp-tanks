@@ -77,6 +77,18 @@ pub struct LevelState {
     /// Тип следа: индекс типа поверхности + 1, `0` — следа нет.
     #[serde(default)]
     pub slick_type: u8,
+    /// Остаток удержания бустера, с (`surface::boost_hold`): после импульса
+    /// плиты `boostTime`, спадает до нуля. Живёт здесь по той же причине,
+    /// что и `slick_left`.
+    #[serde(default)]
+    pub boost_left: f32,
+    /// Множитель потолка скорости на время удержания; `1` — удержания нет.
+    #[serde(default = "neutral_boost_factor")]
+    pub boost_factor: f32,
+}
+
+fn neutral_boost_factor() -> f32 {
+    1.0
 }
 
 impl Default for LevelState {
@@ -90,6 +102,8 @@ impl Default for LevelState {
             clear_walls: false,
             slick_left: 0.0,
             slick_type: 0,
+            boost_left: 0.0,
+            boost_factor: 1.0,
         }
     }
 }
@@ -311,13 +325,16 @@ pub fn step_level(
     rules: &LevelRules,
     dt: f32,
 ) -> LevelEvent {
-    // одноуровневая карта: уровня как понятия нет. Остаток поверхности к
-    // уровню не относится и переживает сброс — иначе у реплики (у хоста на
-    // такой карте шага уровня нет вовсе) он обнулялся бы каждый шаг
+    // одноуровневая карта: уровня как понятия нет. Остатки поверхности
+    // (масло, удержание бустера) к уровню не относятся и переживают сброс —
+    // иначе у реплики (у хоста на такой карте шага уровня нет вовсе) они
+    // обнулялись бы каждый шаг
     if !levels.is_layered() {
         *state = LevelState {
             slick_left: state.slick_left,
             slick_type: state.slick_type,
+            boost_left: state.boost_left,
+            boost_factor: state.boost_factor,
             ..LevelState::default()
         };
 
@@ -1023,6 +1040,8 @@ mod tests {
             level: 1,
             slick_left: 0.7,
             slick_type: 3,
+            boost_left: 0.4,
+            boost_factor: 1.8,
             ..LevelState::default()
         };
 
@@ -1030,6 +1049,7 @@ mod tests {
 
         assert_eq!(state.level, 0);
         assert_eq!((state.slick_left, state.slick_type), (0.7, 3));
+        assert_eq!((state.boost_left, state.boost_factor), (0.4, 1.8));
     }
 
     #[test]

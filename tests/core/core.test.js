@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
+import models from '../../src/data/models.js';
 import downtown from '../../src/data/maps/downtown.js';
 import poolMini from '../../src/data/maps/pool_mini.js';
 import {
@@ -116,6 +117,51 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
     });
   });
 
+  describe('downtown: прыжок на крышу-парковку', () => {
+    // бустер 18..19 → рампа 20..23 → плита парковки 24..36, перила по
+    // x = 36. Удержание бустера удлиняет прыжок: танк обязан приземлиться
+    // на плиту, а не перелететь перила
+    it('с бустера на полном газу танк приземляется на плиту парковки', () => {
+      const client = makeClientCore();
+      const tile = 32 * downtown.scale;
+      const cell = v => (v + 0.5) * tile;
+
+      core.load_map(JSON.stringify(downtown));
+      // респаун «бустер → рампа → крыша-парковка»
+      core.spawn_actor(1, 'm1', 1, cell(9), cell(35), 0);
+      core.apply_input(1, 1, 'down', 'forward');
+
+      let peak = 0;
+      let landedAt = null;
+      let row = null;
+
+      for (let i = 0; i < 360; i += 1) {
+        core.step(DT);
+        core.pack_body();
+        core.pack_frame(i, i, false, 0, 0, false, undefined, -1);
+        row = decodeFrame(client, frameBuffer(core)).snapshot.m1['1'];
+
+        // хвост строки m1: [..., z, level]
+        const z = row[11];
+
+        peak = Math.max(peak, z);
+
+        if (landedAt === null && peak > 1.05 && z <= 1) {
+          landedAt = row[0] / tile;
+        }
+      }
+
+      expect(peak, 'прыжок обязан оторвать танк от плиты').toBeGreaterThan(1.05);
+      // дуга ниже уровня + jumpClearance (0.45): перила танк видит всегда
+      expect(peak).toBeLessThan(1.45);
+      expect(landedAt).toBeGreaterThan(24);
+      expect(landedAt).toBeLessThan(35);
+      // доехал до восточных перил и стоит на плите уровня 1
+      expect(row[12]).toBe(1);
+      expect(row[0] / tile).toBeLessThan(36);
+    });
+  });
+
   describe('2.5D-уровни', () => {
     it('танк на плите моста едет в кадре с level = 1, танк на земле — с 0', () => {
       core.load_map(layeredMap);
@@ -222,7 +268,7 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       expect(tank).toHaveLength(16);
       expect(tank[0]).toBeCloseTo(decoded.player.state[0], 1); // x
       expect(tank[7]).toBe(3); // condition
-      expect(tank[8]).toBe(2); // size
+      expect(tank[8]).toBe(models.m1.size); // size
       expect(tank[9]).toBe(1); // teamId
       expect(tank[10]).toBeCloseTo(decoded.player.state[5], 1); // angvel
       expect(tank[11]).toBe(0); // z — одноуровневая карта

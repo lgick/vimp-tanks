@@ -48,6 +48,19 @@ const ERROR_SNAP_DISTANCE: f32 = 100.0;
 // защита от «спирали смерти» аккумулятора (мс)
 const MAX_ACCUMULATED_TIME: f64 = 100.0;
 
+// допуск аккумулятора (мс): шаг 1000/120 в f64 непредставим, и сумма
+// разностей `local_now` за N тиков выходит на ~1e-12 меньше N шагов —
+// без допуска должный шаг уезжал на следующий рендер-тик, и реплика
+// стояла на шаг позади кадра (детектор рассинхрона: Δ = v · шаг)
+const STEP_EPSILON_MS: f64 = 1e-6;
+
+// допуск сравнений с временем кадра (мс): `server_time` и `offset` — эпоха
+// в мс, шаг сетки f64 там ≈ 2.4e-4 (до 4.9e-4 к 2039 году). Момент кадра
+// `server_time − offset` выходит чуть раньше своего шага (откат истории
+// уровня), а `local_now + offset` — чуть раньше `server_time` (реплей).
+// Много больше квантования и много меньше шага (8.3 мс)
+const FRAME_TIME_EPSILON_MS: f64 = 0.01;
+
 // проходов решателя по собранным контактам за один шаг (sequential impulse)
 const SOLVER_ITERATIONS: usize = 4;
 
@@ -639,11 +652,12 @@ impl Predictor {
 
         self.accumulator = (self.accumulator + elapsed).min(MAX_ACCUMULATED_TIME);
 
-        while self.accumulator >= self.step_ms {
+        while self.accumulator + STEP_EPSILON_MS >= self.step_ms {
             let keys = self.keys_mask | self.one_shot_pending;
 
             self.one_shot_pending = 0;
-            self.accumulator -= self.step_ms;
+            // шаг, взятый по допуску, не уводит остаток ниже нуля
+            self.accumulator = (self.accumulator - self.step_ms).max(0.0);
             // остаток аккумулятора — это время ПОСЛЕ шага, поэтому шаг
             // подписывается им же: реконсиль ищет снапшот по этому времени
             self.step_time = local_now - self.accumulator;
@@ -866,7 +880,7 @@ impl Predictor {
 
         let replayed_from = history_index;
 
-        while t + self.step_ms <= server_now_est {
+        while t + self.step_ms <= server_now_est + FRAME_TIME_EPSILON_MS {
             t += self.step_ms;
 
             // записи, попавшие в этот шаг: обновляют маску и дают one-shot
@@ -884,8 +898,10 @@ impl Predictor {
             self.step(replay_keys | one_shot);
         }
 
-        // остаток времени доиграет update() своим аккумулятором
-        self.accumulator = server_now_est - t;
+        // остаток времени доиграет update() своим аккумулятором. Квантование
+        // эпохи даёт остаток ≈ −2.4e-4: отрицательный, он съедал следующий
+        // шаг — реплика вставала на шаг позади кадра
+        self.accumulator = (server_now_est - t).max(0.0);
 
         // окно переигранного ввода — в локальном времени (история хранит его)
         self.replayed = Some((
@@ -1002,6 +1018,9 @@ impl Predictor {
 
         (self.pitch, self.roll) = self.step_tilt(cos, sin, dt);
 
+        // спад удержания бустера — то же место, что у хоста: до выхода полёта
+        surface::decay_boost(&mut self.level_state, dt);
+
         if self.level_state.input_locked() {
             self.engine_load = 0.0;
 
@@ -1067,6 +1086,7 @@ impl Predictor {
             ),
             _ => mix,
         };
+        let mix = surface::boost_hold_mix(mix, &self.level_state);
         let (start_vx, start_vy, start_angvel) = (self.state.vx, self.state.vy, self.state.angvel);
 
         // скорость относительно «грунта» (ленты конвейера)
@@ -1116,7 +1136,18 @@ impl Predictor {
             if boost_x != 0.0 || boost_y != 0.0 {
                 self.state.vx += boost_x;
                 self.state.vy += boost_y;
+                surface::start_boost_hold(map, &mut self.level_state, self.state.x, self.state.y);
             }
+        }
+
+        // компенсация демпфирования на удержании — до интеграции, как импульс
+        // хоста до `world.step`
+        let (hold_x, hold_y) =
+            surface::boost_damping_dv((start_vx, start_vy), damping.0, &self.level_state, dt);
+
+        if hold_x != 0.0 || hold_y != 0.0 {
+            self.state.vx += hold_x;
+            self.state.vy += hold_y;
         }
 
         self.engine_load = motion::engine_load(self.state.throttle, forward_speed, model);
@@ -1225,7 +1256,7 @@ impl Predictor {
         while self
             .level_history
             .back()
-            .is_some_and(|(t, _)| *t > local_time)
+            .is_some_and(|(t, _)| *t > local_time + FRAME_TIME_EPSILON_MS)
         {
             self.level_history.pop_back();
         }
@@ -1741,6 +1772,81 @@ mod tests {
         p.on_server_state([0.0; 8], false, t, 0.0, t);
     }
 
+    // серверное время — эпоха в мс (~1.7e12), шаг сетки f64 там ≈ 2.4e-4:
+    // момент кадра `server_time − offset` выходит чуть РАНЬШЕ времени шага,
+    // на котором кадр снят. Строгое сравнение выбрасывало снимок этого шага,
+    // и реплика получала состояние уровня на шаг старше (на взлёте — «ещё
+    // рампа», после бустера — без удержания)
+    #[test]
+    fn rewind_keeps_the_frame_step_despite_epoch_quantization() {
+        const OFFSET: f64 = 1_700_000_000_000.0;
+
+        let mut p = make_predictor();
+        let step = 700.0 * STEP_MS;
+        let before = LevelState { boost_left: 0.0, ..LevelState::default() };
+        let at_frame = LevelState { boost_left: 1.2, boost_factor: 1.8, ..LevelState::default() };
+
+        p.level_history.push_back((step - STEP_MS, before));
+        p.level_history.push_back((step, at_frame));
+
+        let local_time = (OFFSET + step) - OFFSET;
+
+        assert!(local_time < step, "условие теста: квантование сдвигает кадр раньше шага");
+
+        p.rewind_level_state(local_time);
+
+        assert_eq!(p.level_state, at_frame);
+        assert_eq!(p.level_history.len(), 2);
+    }
+
+    // offset интерполятора — тоже эпоха в мс и отличается от точного на ulp
+    // (≈ 2.4e-4): `local_now + offset` выходит чуть меньше `server_time`, и
+    // остаток реплея был отрицательным — четыре рендер-тика после кадра
+    // делали три шага, следующие четыре — пять (headless: p3 на взлёте)
+    #[test]
+    fn reconcile_with_epoch_offset_keeps_one_step_per_tick() {
+        const OFFSET: f64 = 1_700_000_000_000.0;
+
+        let mut p = make_predictor();
+        let mut now = 700.0 * STEP_MS;
+        // offset на ulp ниже точного — так его и отдаёт EMA интерполятора
+        let offset = OFFSET - 2.44140625e-4;
+
+        seed(&mut p, now);
+        p.update(now);
+        p.on_server_state([0.0; 8], false, OFFSET + now, offset, now);
+
+        assert!(p.accumulator >= 0.0, "остаток реплея {}", p.accumulator);
+
+        for tick in 0..8 {
+            now += STEP_MS;
+            p.update(now);
+
+            assert!((p.step_time - now).abs() < 0.01, "тик {tick}: шаг {} при now {now}", p.step_time);
+        }
+    }
+
+    // рендер-тики ровно по шагу, время копится суммой f64, как у часов
+    // headless-раннера: каждый тик обязан сделать свой шаг. Без допуска
+    // сумма разностей недобирала до непредставимого 1000/120 на ~1e-12, шаг
+    // уезжал на следующий тик, и реплика стояла на шаг позади кадра
+    #[test]
+    fn render_ticks_on_the_step_grid_never_postpone_a_step() {
+        let mut p = make_predictor();
+        let mut now = 1000.0 / 3.0;
+
+        seed(&mut p, now);
+        p.update(now);
+
+        for tick in 0..300 {
+            now += STEP_MS;
+            p.update(now);
+
+            assert!((p.step_time - now).abs() < 1e-6, "тик {tick}: шаг {} при now {now}", p.step_time);
+            assert!(p.accumulator >= 0.0);
+        }
+    }
+
     #[test]
     fn input_updates_masks_and_history() {
         let mut p = make_predictor();
@@ -1969,7 +2075,9 @@ mod tests {
         let (from, to, count) = p.replayed_inputs().unwrap();
 
         assert!((from - 50.0).abs() < 1e-9);
-        assert!(to > from && to <= 200.0);
+        // последний шаг приходится ровно на local_now (150 мс = 18 шагов):
+        // конец окна — 200 с точностью до округления суммы шагов
+        assert!(to > from && to <= 200.0 + 1e-6);
         assert_eq!(count, 1);
 
         // сброс забывает окно
@@ -3990,8 +4098,19 @@ mod parity {
         steps: usize,
         schedule: &[(usize, u32)],
     ) -> Traced {
-        let cfg = core_config();
-        let mut game = GameState::new(engine_config(), &cfg);
+        simulate_traced_with(&core_config(), map_json, pose, level, steps, schedule)
+    }
+
+    // то же на другом конфиге ядра (общем для хоста и реплики)
+    fn simulate_traced_with(
+        cfg: &crate::config::TanksConfig,
+        map_json: &str,
+        pose: Pose,
+        level: u8,
+        steps: usize,
+        schedule: &[(usize, u32)],
+    ) -> Traced {
+        let mut game = GameState::new(engine_config(), cfg);
 
         game.load_map(map_json).unwrap();
         game.spawn_actor(1, "m1", 1, pose.x, pose.y, 0.0).unwrap();
@@ -4402,6 +4521,100 @@ mod parity {
             after_reset.on_server_state(host[frame], false, frame_time, 0.0, local_now);
             expect_scenario_thresholds(host[TOTAL], after_reset.state);
         }
+    }
+
+    // конфиг с бустером удержания (значения `src/config/game.js`); общий
+    // фикстурный — старая плита без удержания
+    fn held_boost_config() -> crate::config::TanksConfig {
+        let mut cfg = core_config();
+        let boost = cfg.surfaces.types.get_mut("boost").unwrap();
+
+        boost.boost_dv = Some(220.0);
+        boost.boost_max_speed = Some(480.0);
+        boost.boost_time = Some(1.2);
+        boost.boost_speed_factor = Some(1.8);
+        cfg
+    }
+
+    // въезд на плиту на полной скорости и 1.5 с после: удержание держит
+    // скорость выше потолка тяги, реплика сходится с хостом
+    #[test]
+    fn boost_hold_at_full_speed_in_parity() {
+        let cfg = held_boost_config();
+        let traced = simulate_traced_with(&cfg, &boost_column(47), pose(250.0, 336.0, 0.0, 260.0, 0.0), 0, 200, &[
+            (0, key_bit(&cfg, "forward")),
+        ]);
+
+        expect_traced(&traced);
+        assert_eq!(boost_jumps(&traced.core_v), (1, 0), "хост: один импульс");
+        assert_eq!(boost_jumps(&traced.replica_v), (1, 0), "реплика: один импульс");
+
+        // через boostTime/2 после въезда (72 шага) скорость ещё выше потолка
+        let entry = (1..traced.core_v.len())
+            .find(|&i| traced.core_v[i].0 - traced.core_v[i - 1].0 > 60.0)
+            .unwrap();
+
+        assert!(traced.core_v[entry + 72].0 > 400.0, "хост держит скорость: {:?}", traced.core_v[entry + 72]);
+        assert!(traced.replica_v[entry + 72].0 > 400.0, "реплика держит скорость: {:?}", traced.replica_v[entry + 72]);
+    }
+
+    // реконсиляция посреди удержания: история уровня хранит таймер, и
+    // реплей воспроизводит тот же остаток удержания, что хост
+    #[test]
+    fn boost_hold_reconcile_rewinds_the_timer() {
+        const TOTAL: usize = 120;
+
+        let cfg = held_boost_config();
+        let map = boost_column(47);
+        let start = pose(250.0, 336.0, 0.0, 260.0, 0.0);
+        let mut game = GameState::new(engine_config(), &cfg);
+
+        game.load_map(&map).unwrap();
+        game.spawn_actor(1, "m1", 1, start.x, start.y, 0.0).unwrap();
+        game.world.bodies[game.sim.tanks[&1].body].set_linvel(Vector::new(start.vx, start.vy), true);
+        game.apply_input(1, 1, "down", "forward");
+
+        let mut host = Vec::new();
+        let mut hold = Vec::new();
+
+        for i in 0..=TOTAL {
+            if i > 0 {
+                game.step(DT);
+            }
+
+            let tank = &game.sim.tanks[&1];
+
+            host.push(tank.prediction_state(&game.world.bodies[tank.body]).0);
+            hold.push(tank.level_state.boost_left);
+        }
+
+        let entry = (1..=TOTAL)
+            .find(|&i| hold[i] > 0.0 && hold[i - 1] <= 0.0)
+            .expect("хост обязан въехать на плиту");
+
+        assert!(entry + 30 < TOTAL && hold[TOTAL] > 0.0, "реконсиляция посреди удержания: {entry}");
+
+        let local_now = TOTAL as f64 * STEP_MS + STEP_MS * 0.5;
+        let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
+
+        p.set_model("m1");
+        p.set_active(true);
+        apply_map(&mut p, &map);
+        p.apply_input("down", "forward", 0.0);
+        // вся дорога реплики своим ходом: история уровня заполнена
+        p.on_server_state(host[0], false, 0.0, 0.0, local_now);
+
+        let frame = entry + 20;
+
+        p.on_server_state(host[frame], false, frame as f64 * STEP_MS, 0.0, local_now);
+
+        expect_scenario_thresholds(host[TOTAL], p.state);
+        assert!(
+            (p.level_state().boost_left - hold[TOTAL]).abs() < 1e-4,
+            "удержание реплики {} vs хоста {}",
+            p.level_state().boost_left,
+            hold[TOTAL]
+        );
     }
 
     // ---- поверхности для тел карты (этап 3) ----

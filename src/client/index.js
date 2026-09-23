@@ -9,6 +9,7 @@ import bakers from './bakers/index.js';
 import { isNodeCore, loadNodeCore } from '../nodeCore.js';
 import { createLevelView } from './levelView.js';
 import { createLighting } from './lighting/createLighting.js';
+import { createShotEvents } from './shotEvents.js';
 
 // стрелка клетки по индексу `surface_dir_at`: север/юг/запад/восток, как у
 // рамп (north = −y, east = +x)
@@ -57,7 +58,14 @@ export default {
   // контрактный чекер (правило C4) не может отличить игровой сервис от
   // опечатки в componentDependencies — хук требует живого ядра, а имена
   // из его `return` статически не видны
-  serviceNames: ['levelView', 'mapDynamics', 'rampRuns', 'surfaces', 'lighting'],
+  serviceNames: [
+    'levelView',
+    'mapDynamics',
+    'rampRuns',
+    'surfaces',
+    'lighting',
+    'shots',
+  ],
 
   hooks: {
     // сервисы игры для её же parts (движок их не описывает — только раздаёт
@@ -86,6 +94,8 @@ export default {
       return {
         levelView,
         lighting,
+        // «танк выстрелил»: эффект выстрела будит отдачу у танка стрелка
+        shots: createShotEvents(),
         mapDynamics: {
           // локальная точка тела → мировая в рендерном фрейме;
           // null — ключ неизвестен (карта сменилась, ящика больше нет)

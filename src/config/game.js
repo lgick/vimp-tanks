@@ -133,8 +133,18 @@ export default {
           slickTime: 1.5,
         },
         conveyor: { belt: 60 }, // ед./с по стрелке
-        // разовый импульс по стрелке при въезде; оба поля при boostDv обязательны
-        boost: { boostDv: 160, boostMaxSpeed: 340, minEntrySpeed: 20 },
+        // разовый импульс по стрелке при въезде; boostMaxSpeed и minEntrySpeed
+        // при boostDv обязательны. Удержание (необязательно): boostTime секунд
+        // после импульса потолок скорости танка умножен на boostSpeedFactor,
+        // а линейное демпфирование скомпенсировано. Итоговые числа
+        // подбираются вручную в `npm run dev`
+        boost: {
+          boostDv: 220,
+          boostMaxSpeed: 480,
+          minEntrySpeed: 20,
+          boostTime: 1.2,
+          boostSpeedFactor: 1.8,
+        },
       },
     },
     // разрушаемые тела карты: карта назначает тип полем

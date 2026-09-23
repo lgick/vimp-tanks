@@ -2762,6 +2762,77 @@ fn boost_fires_once_per_entry() {
     assert_eq!(count_boosts(&mut core, 1, 60), 0, "стоянка на плите — ни одного");
 }
 
+/// Ядро с бустером удержания (значения `src/config/game.js`); общий
+/// конфиг теста держит старую плиту без удержания — проверку обратной
+/// совместимости.
+fn make_core_with_held_boost() -> GameCore {
+    let mut flat = flat_config_json();
+
+    flat["surfaces"]["types"]["boost"] = serde_json::json!({
+        "boostDv": 220, "boostMaxSpeed": 480, "minEntrySpeed": 20, "boostTime": 1.2, "boostSpeedFactor": 1.8
+    });
+
+    GameCore::new(&serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()).unwrap()
+}
+
+/// Разгон по асфальту до полной скорости и въезд на поперечную полосу
+/// бустера (колонки 30..32): возвращает ядро на шаге импульса.
+fn drive_onto_boost(mut core: GameCore) -> GameCore {
+    let strip = |x: usize, _| if (30..32).contains(&x) { 47 } else { 0 };
+
+    core.load_map(&surface_map_json(90, strip, boost_game(47, "east"))).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 336.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+    core.step(DT);
+
+    let mut last = tank_row_of(&core, 1)[4];
+
+    for _ in 0..600 {
+        core.step(DT);
+
+        let vx = tank_row_of(&core, 1)[4];
+
+        if vx - last > 60.0 {
+            return core;
+        }
+
+        last = vx;
+    }
+
+    panic!("танк не доехал до бустера");
+}
+
+#[test]
+fn boost_hold_keeps_speed_above_max() {
+    // через boostTime/2 после импульса: с удержанием скорость выше потолка
+    // танка (260), без него демпфирование гасит её до потолка
+    let mut held = drive_onto_boost(make_core_with_held_boost());
+    let mut plain = drive_onto_boost(make_core());
+
+    steps(&mut held, 72);
+    steps(&mut plain, 72);
+
+    let held_vx = tank_row_of(&held, 1)[4];
+    let plain_vx = tank_row_of(&plain, 1)[4];
+
+    assert!(held_vx > 400.0, "удержание обязано держать скорость: {held_vx}");
+    assert!(plain_vx < 270.0, "без удержания скорость гаснет до потолка: {plain_vx}");
+}
+
+#[test]
+fn boost_hold_expires() {
+    // boostTime (1.2 с = 144 шага) + 0.5 с: удержание кончилось, скорость
+    // вернулась к потолку тяги
+    let mut core = drive_onto_boost(make_core_with_held_boost());
+
+    steps(&mut core, 144 + 60);
+
+    let vx = tank_row_of(&core, 1)[4];
+
+    assert!(vx < 270.0, "после удержания скорость — у потолка тяги: {vx}");
+    assert!(vx > 240.0, "танк на газу держит полный ход: {vx}");
+}
+
 #[test]
 fn boost_entry_from_off_the_grid_fires() {
     let mut core = make_core();

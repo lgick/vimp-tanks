@@ -4,7 +4,7 @@ export default {
     constructor: 'Tank',
     currentWeapon: 'w1',
     // соотношение сторон танка 4:3, то есть widht: size*4, height: size*3
-    size: 2,
+    size: 3,
 
     // коэффициент ускорения
     // (чем выше, тем быстрее танк достигает максимальной скорости)

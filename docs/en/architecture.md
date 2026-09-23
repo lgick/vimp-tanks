@@ -130,8 +130,25 @@ core's own table (`ClientCore.surface_at`/`surface_dir_at`) instead of a copy
 of `game.surfaces` on JS: a second copy could drift from the physics
 silently — dust rising where the track does not slow down. The type names
 (`surface_types`) are cached until the map changes (`map_generation`).
+`shots` (`src/client/shotEvents.js`) is a "tank fired" bus: `ShotEffect`
+reports the shooter id of its `w1` row (`fired(id)`) and the `Tank` with
+that id plays the visual recoil (`src/client/recoil.js`). While the tracer
+and the muzzle flash run, the effect also asks the bus for the shooter's
+CURRENT muzzle (`muzzle(id)`, the core's `muzzle_position` formula over the
+rendered tank): the effect lives in the world, and in 45–80 ms of flight a
+driving tank covers its own length (a remote one is also drawn with
+interpolation delay), so a sideways shot used to leave the barrel behind.
+The ray is moved WHOLE with the muzzle (`TracerEffect.shiftTo`): same
+direction and length. Re-aiming it at the fixed impact point is wrong —
+against a wall the muzzle is already inside it, the ray is near zero, and
+driving along the wall stretched it backwards. The impact debris still
+appears at the original hit point. One effect is
+created per shot — the local one is predicted and the authoritative echo is
+filtered by the core — so every shot kicks exactly once. Ids are compared as
+strings: the part context and the tracer row may carry different types.
 
-The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`)
+The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`,
+`lighting`, `shots`)
 are repeated in `ClientPlugin.serviceNames`. The hook
 needs a live core, so the contract checker cannot read what it returns; the
 list is what lets rule `C4` tell a game service from a typo in
@@ -215,9 +232,10 @@ The consequences the parts implement themselves:
   through the same 2.5D projection as the slab underneath, `groundZ *
   shear`, while the hull rides its own height `z`. The gap that opens
   between them is the RISE above the support, and that is what reads as
-  height. The shadow exists ONLY in flight (the sign is a non-zero `vz` in
-  the frame): a parked or driving tank has no rise, and the shadow would lie
-  exactly under the hull and read as a grey halo around it. A shadow left in
+  height. On the ground the shadow is shifted away from the light by
+  `shadow.groundOffset` (in screen axes): unshifted it would lie exactly
+  under the hull and read as a grey halo, so with a zero shift it exists
+  only in flight (the sign is a non-zero `vz` in the frame). A shadow left in
   the raw world point drifted away from the hull by
   `z · shear · (distance to the screen centre)` and lived a life of its
   own. The shadow is a **silhouette of the hull**
@@ -478,7 +496,10 @@ knows nothing about them.
   mode is stated, not inferred. The tank's `PerspectiveMesh`
   (`parts/Tank.js`) states it for the same reason and as a guard only: at
   the shipped `tilt.vertices` (6×6) it batches on its own, and would cross
-  the threshold above 10.
+  the threshold above 10. With `tankLight.enabled` the tank meshes carry
+  their OWN shader (`src/client/tankLight.js`) and are unbatched, but never
+  touch the shared `GlMeshAdaptor` shader; `Tank.destroy` destroys these
+  shaders (a mesh does not) and leaves the shared textures alone.
 - **Async part constructors** (`createStatic`, `createDynamic`,
   `_createExtrusion`) check `this.destroyed` after EVERY `await`: a map change
   tears down the old parts in the same tick that creates the new ones, and a

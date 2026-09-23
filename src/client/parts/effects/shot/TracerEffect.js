@@ -1,235 +1,184 @@
 import { Graphics } from 'pixi.js';
 import BaseEffect from '../BaseEffect.js';
 import { lerp, clamp } from 'vimp-engine/lib/math.js';
+import { tracer as tracerConfig } from '../../../../config/render.js';
+
+/**
+ * Видимый отрезок трассера: расстояния хвоста и головы от дула. Хвост
+ * растёт прямо от дула — отступа нет, линия выходит из ствола, — и не
+ * длиннее `max(trailLength, totalDist · trailShare)`; к концу пути он
+ * стягивается к цели. Доля от длины луча держит у дальнего выстрела линию
+ * от ствола в первых кадрах: голова там проходит сотни единиц за кадр.
+ *
+ * @param {object} p
+ * @param {number} p.progress     0..1 — доля пройденного пути
+ * @param {number} p.totalDist    длина луча
+ * @param {number} p.trailLength  наименьшая наибольшая длина хвоста
+ * @param {number} [p.trailShare] доля луча, которой хвост может достигать
+ * @returns {{ tail: number, head: number }}
+ */
+export function tracerSpan({
+  progress,
+  totalDist,
+  trailLength,
+  trailShare = 0,
+}) {
+  const head = totalDist * clamp(progress, 0, 1);
+  const longest = Math.max(trailLength, totalDist * trailShare);
+  const maxTrail = lerp(longest, 0, clamp(progress, 0, 1));
+
+  return { tail: Math.max(0, head - maxTrail), head };
+}
 
 export default class TracerEffect extends BaseEffect {
-  constructor(startX, startY, endX, endY, onComplete) {
+  constructor(startX, startY, endX, endY, onComplete, config = tracerConfig) {
     super(onComplete);
 
     this.startPositionX = startX;
     this.startPositionY = startY;
     this.endPositionX = endX;
     this.endPositionY = endY;
+    this.config = config;
 
-    this.config = {
-      // цвет трассера
-      color: 0xffff99,
-      // начальная прозрачность "головы" трассера
-      alphaStart: 1,
-      // конечная прозрачность "головы" трассера (когда она достигнет цели)
-      alphaEnd: 0.6,
-      // фиксированная максимальная длина видимой части хвоста трассера в px
-      trailLength: 55,
-      // желаемая скорость "головы" трассера в px/second
-      tracerSpeed: 19000,
-      // минимальная длительность анимации в миллисекундах
-      minDuration: 45,
-      // максимальная длительность анимации в миллисекундах
-      maxDuration: 80,
-      // коэффициент для скорости укорачивания хвоста
-      // (чем больше, тем быстрее хвост укорачивается к концу пути)
-      trailShrinkPower: 1.0,
-      // начало появления трассера
-      // на этом расстоянии от дула (начальной точки) в px
-      trailStartOffset: 30,
-      // количество сегментов (кругов), из которых состоит линия трассера
-      segmentCount: 12,
-      // толщина трассера (радиус каждого сегмента)
-      segmentRadius: 1,
-      // частота пульсации прозрачности (чем выше, тем чаще пульсирует)
-      alphaPulseFrequency: 0.1,
-      // амплитуда пульсации прозрачности (насколько сильно меняется альфа)
-      alphaPulseAmplitude: 0.15,
-    };
-
+    // свечение складывается со сценой: трассер — это свет, а не краска
     this.graphics = new Graphics();
+    this.graphics.blendMode = 'add';
     this.addChild(this.graphics);
 
-    this.elapsedTime = 0; // время, прошедшее с начала анимации
+    this.elapsedTime = 0;
+    this.progress = 0;
+    this._aim();
 
-    // расчет вектора направления и дистанции
-    this.dx = this.endPositionX - this.startPositionX;
-    this.dy = this.endPositionY - this.startPositionY;
+    this.animationDuration = clamp(
+      (this.totalDist / config.speed) * 1000,
+      config.minDuration,
+      config.maxDuration,
+    );
+  }
 
-    // общая дистанция полета трассера
-    this.totalDist = Math.hypot(this.dx, this.dy);
+  // направление и длина луча от текущего дула к неподвижной цели
+  _aim() {
+    const dx = this.endPositionX - this.startPositionX;
+    const dy = this.endPositionY - this.startPositionY;
 
-    // нормализация вектора направления
+    this.totalDist = Math.hypot(dx, dy);
+
     if (this.totalDist > 0.001) {
-      this.nx = this.dx / this.totalDist;
-      this.ny = this.dy / this.totalDist;
-
-      this.animationDuration =
-        (this.totalDist / this.config.tracerSpeed) * 1000;
-      // иначе, если дистанция очень мала (выстрел в ту же точку)
+      this.nx = dx / this.totalDist;
+      this.ny = dy / this.totalDist;
     } else {
       this.nx = 0;
       this.ny = 0;
       this.totalDist = 0;
-
-      this.animationDuration = this.config.minDuration;
-    }
-
-    this.animationDuration = Math.max(
-      this.config.minDuration,
-      this.animationDuration,
-    );
-
-    this.animationDuration = Math.min(
-      this.config.maxDuration,
-      this.animationDuration,
-    );
-
-    if (this.animationDuration <= 0) {
-      this.animationDuration = this.config.minDuration;
     }
   }
 
-  _drawSegment(x, y, radius, color, alpha) {
-    this.graphics.circle(x, y, radius);
-    this.graphics.fill({
-      color,
-      alpha: clamp(alpha, 0, 1),
+  /**
+   * Дуло сдвинулось (танк едет): луч переносится ЦЕЛИКОМ — начало в новое
+   * дуло, конец на тот же сдвиг, направление и длина прежние. Перестраивать
+   * луч к неподвижной цели нельзя: у танка вплотную к стене дуло уже в
+   * стене, луч почти нулевой, и при езде вдоль стены он растягивался бы
+   * назад к старой точке. Прогресс и длительность пролёта не меняются
+   */
+  shiftTo(x, y) {
+    if (this.isComplete) {
+      return;
+    }
+
+    this.endPositionX += x - this.startPositionX;
+    this.endPositionY += y - this.startPositionY;
+    this.startPositionX = x;
+    this.startPositionY = y;
+    this._draw();
+  }
+
+  _draw() {
+    this.graphics.clear();
+
+    const { tail, head } = tracerSpan({
+      progress: this.progress,
+      totalDist: this.totalDist,
+      trailLength: this.config.trailLength,
+      trailShare: this.config.trailShare,
     });
+
+    if (head - tail > 0.001) {
+      this._drawTrail(
+        tail,
+        head,
+        lerp(this.config.alphaStart, this.config.alphaEnd, this.progress),
+      );
+    }
   }
 
   _update(deltaMs) {
     if (this.isComplete) {
-      // проверка из BaseEffect
       return;
     }
 
     this.elapsedTime += deltaMs;
-    this.graphics.clear();
-
-    const tracerDrawProgress = Math.min(
-      this.elapsedTime / this.animationDuration,
-      1.0,
-    );
-
-    if (tracerDrawProgress > 0) {
-      const headX = lerp(
-        this.startPositionX,
-        this.endPositionX,
-        tracerDrawProgress,
-      );
-
-      const headY = lerp(
-        this.startPositionY,
-        this.endPositionY,
-        tracerDrawProgress,
-      );
-
-      const baseTracerAlpha = lerp(
-        this.config.alphaStart,
-        this.config.alphaEnd,
-        tracerDrawProgress,
-      );
-
-      const pulse =
-        Math.sin(this.elapsedTime * this.config.alphaPulseFrequency) *
-        this.config.alphaPulseAmplitude;
-      let currentTracerAlpha = baseTracerAlpha + pulse;
-
-      currentTracerAlpha = clamp(currentTracerAlpha, 0, this.config.alphaStart);
-
-      const shrinkProgress = Math.pow(
-        tracerDrawProgress,
-        this.config.trailShrinkPower,
-      );
-
-      const currentMaxAllowedTrailLength = lerp(
-        this.config.trailLength,
-        0,
-        shrinkProgress,
-      );
-
-      // расстояние, которое прошла голова от начальной точки
-      const distCoveredByHead = this.totalDist * tracerDrawProgress;
-
-      // если голова еще не прошла отступ trailStartOffset, не рисуем трассер
-      if (distCoveredByHead >= this.config.trailStartOffset) {
-        let adjustedDistCoveredByHead = distCoveredByHead;
-
-        if (this.totalDist > 0.001) {
-          // применяем отступ только если есть направление
-          // дистанция, пройденная головой от *эффективной* начальной точки
-          adjustedDistCoveredByHead = Math.max(
-            0,
-            distCoveredByHead - this.config.trailStartOffset,
-          );
-        }
-
-        // фактическая видимая длина хвоста, отсчитываемая от effectiveStart
-        const actualVisibleTrailLength = Math.min(
-          adjustedDistCoveredByHead,
-          currentMaxAllowedTrailLength,
-        );
-
-        let tailX, tailY;
-        // хвост отсчитывается от головы назад на actualVisibleTrailLength
-        // если actualVisibleTrailLength = 0, хвост будет в голове
-        if (this.totalDist > 0.001) {
-          tailX = headX - this.nx * actualVisibleTrailLength;
-          tailY = headY - this.ny * actualVisibleTrailLength;
-        } else {
-          // выстрел в точку
-          tailX = headX;
-          tailY = headY;
-        }
-
-        const trailLineLength = Math.hypot(headX - tailX, headY - tailY);
-
-        if (
-          trailLineLength < this.config.segmentRadius * 0.5 &&
-          this.totalDist === 0
-        ) {
-          this._drawSegment(
-            headX,
-            headY,
-            this.config.segmentRadius,
-            this.config.color,
-            currentTracerAlpha,
-          );
-        } else if (trailLineLength >= this.config.segmentRadius * 0.5) {
-          const numSegments = Math.max(1, this.config.segmentCount);
-          for (let i = 0; i < numSegments; i++) {
-            let t = 0.5;
-            if (numSegments > 1) {
-              t = i / (numSegments - 1);
-            }
-
-            const segmentX = lerp(tailX, headX, t);
-            const segmentY = lerp(tailY, headY, t);
-            const segmentAlphaFactor = lerp(1.0, 0.8, t);
-
-            this._drawSegment(
-              segmentX,
-              segmentY,
-              this.config.segmentRadius,
-              this.config.color,
-              currentTracerAlpha * segmentAlphaFactor,
-            );
-          }
-        }
-      }
-    }
+    this.progress = Math.min(this.elapsedTime / this.animationDuration, 1);
+    this._draw();
 
     if (this.elapsedTime >= this.animationDuration) {
-      this.graphics.clear(); // очищаем графику перед вызовом onComplete
-      this._completeEffect(); // метод из BaseEffect
+      this.graphics.clear();
+      this._completeEffect();
+    }
+  }
+
+  // хвост гаснет к дулу: подотрезки с растущей к голове альфой (по квадрату). Сначала
+  // все слои свечения, потом ядро — иначе свечение следующего подотрезка
+  // легло бы поверх ядра предыдущего
+  _drawTrail(tail, head, alpha) {
+    const { color, coreColor, coreWidth, glowWidth, glowAlpha } = this.config;
+    const steps = Math.max(1, this.config.fadeSteps);
+    const point = distance => [
+      this.startPositionX + this.nx * distance,
+      this.startPositionY + this.ny * distance,
+    ];
+    const pieces = [];
+
+    for (let i = 0; i < steps; i += 1) {
+      const from = point(lerp(tail, head, i / steps));
+      const to = point(lerp(tail, head, (i + 1) / steps));
+
+      // квадрат: яркость собрана у головы, хвост быстро сходит на нет —
+      // так выглядит смазанная в движении точка, а не ровная полоса
+      const share = (i + 1) / steps;
+
+      pieces.push({ from, to, fade: share * share });
+    }
+
+    for (const { from, to, fade } of pieces) {
+      this.graphics
+        .moveTo(from[0], from[1])
+        .lineTo(to[0], to[1])
+        .stroke({
+          width: glowWidth,
+          color,
+          alpha: alpha * glowAlpha * fade,
+          cap: 'round',
+        });
+    }
+
+    for (const { from, to, fade } of pieces) {
+      this.graphics
+        .moveTo(from[0], from[1])
+        .lineTo(to[0], to[1])
+        .stroke({
+          width: coreWidth,
+          color: coreColor,
+          alpha: alpha * fade,
+          cap: 'round',
+        });
     }
   }
 
   destroy(options) {
-    // если graphics существует, требуется clear
     if (this.graphics) {
       this.graphics.clear();
     }
 
-    // BaseEffect по умолчанию использует
-    // { children: true, texture: false, textureSource: false }
-    // для Graphics-объектов это подходит
     super.destroy(options);
   }
 }

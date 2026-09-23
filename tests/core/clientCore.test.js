@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import models from '../../src/data/models.js';
 import hostDefaults from 'vimp-engine/config/hostDefaults.js';
 import tanksGameConfig from '../../src/config/game.js';
 import { readFileSync } from 'node:fs';
@@ -121,7 +122,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       expect(row).toHaveLength(16);
       expect(row[0]).toBe(100.57); // round2
-      expect(row.slice(7, 10)).toEqual([3, 2, 1]); // condition, size, teamId
+      expect(row.slice(7, 10)).toEqual([3, models.m1.size, 1]); // condition, size, teamId
       expect(row[10]).toBe(0); // angvel — стоящий танк не крутится
       expect(row.slice(11, 13)).toEqual([0, 0]); // z, level — карты нет
 

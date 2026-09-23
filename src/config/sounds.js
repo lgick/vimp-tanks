@@ -51,6 +51,13 @@ const sounds = {
   // Tank.js — 0.6, поэтому эффективная громкость стоящего танка 0.5 × 0.6 =
   // 0.3 (было 0.29 × 0.9 = 0.26), а на ходу двигатель звучит в полный голос
   tankEngine: { file: 'tank-engine', priority: 50, loop: true, volume: 0.5 },
+
+  // https://freesound.org/people/paulprit/sounds/563555/ (CC0, он же
+  // https://pixabay.com/sound-effects/nature-river-wading-fast-50619/):
+  // ровный отрезок 197.5–201.5 с, стык склеен кроссфейдом 100 мс
+  // плеск под гусеницами в воде; громкость и скорость воспроизведения
+  // ведёт Tank.js по `surfaceFx.water.sound` (src/config/render.js)
+  tankWater: { file: 'tank-water', priority: 55, loop: true, volume: 0.3 },
 };
 
 export default {

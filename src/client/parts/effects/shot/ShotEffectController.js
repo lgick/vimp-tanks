@@ -1,6 +1,7 @@
 import { Container } from 'pixi.js';
 import TracerEffect from './TracerEffect.js';
 import ImpactEffect from './ImpactEffect.js';
+import MuzzleFlashEffect from './MuzzleFlashEffect.js';
 import { levelZ } from '../../../levelZ.js';
 import { cameraCenter } from '../../../camera.js';
 import { applyParallax } from '../../../parallax.js';
@@ -68,7 +69,16 @@ export default class ShotEffectController extends Container {
     // игроку, а не миру, поэтому не панорамируется
     this._isLocalShot =
       dependencies.localPlayer?.is(data[W1_SHOOTER_ID]) === true;
+
+    // отдача: танк стрелка откатывается (src/client/recoil.js). Эффект
+    // создаётся раз на выстрел — свой предсказанный, а авторитетный дубль
+    // ядро отфильтровывает
+    dependencies.shots?.fired(data[W1_SHOOTER_ID]);
     this._mapDynamics = dependencies.mapDynamics || null;
+    // дуло стрелка: пока идут трассер и вспышка, они держатся у ствола
+    // едущего танка (сервис `shots`, src/client/shotEvents.js)
+    this._shots = dependencies.shots || null;
+    this._shooterId = data[W1_SHOOTER_ID];
     this._levelView = dependencies.levelView || null;
     // ночь: вспышка выстрела на стволе (no-op днём)
     this._lighting = dependencies.lighting || null;
@@ -92,17 +102,19 @@ export default class ShotEffectController extends Container {
         // проекция высоты: трассер и осколки на мосту стоят на мосту.
         // Дети контроллера авторятся в мировых координатах, сам он
         // единичный — трансформ контейнера даёт им ровно offsetPoint
-        applyParallax(
-          this,
-          cameraCenter(this.parent, this._renderer),
-          this.endLevel * parallaxConfig.shear,
-          1,
-        );
+        const camera = cameraCenter(this.parent, this._renderer);
+
+        applyParallax(this, camera, this.endLevel * parallaxConfig.shear, 1);
+        this._followMuzzle();
+        this._placeFlash(camera);
       };
     }
 
     this.tracer = null;
     this.impact = null;
+    // вспышка у дула; пока её нет, ждать нечего
+    this.flash = null;
+    this._flashComplete = true;
     this._isDestroyed = false;
 
     // флаги для управления жизненным циклом
@@ -143,6 +155,27 @@ export default class ShotEffectController extends Container {
       z: this.startLevel,
     });
 
+    // вспышка у дула — по направлению луча: оно и есть направление ствола
+    const dx = this.endPositionX - this.startPositionX;
+    const dy = this.endPositionY - this.startPositionY;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > 0.001) {
+      this._flashComplete = false;
+      this.flash = new MuzzleFlashEffect(
+        this.startPositionX,
+        this.startPositionY,
+        dx / dist,
+        dy / dist,
+        () => {
+          this._flashComplete = true;
+          this._tryDestroy();
+        },
+      );
+      this.addChild(this.flash);
+      this.flash.run();
+    }
+
     this.tracer = new TracerEffect(
       this.startPositionX,
       this.startPositionY,
@@ -153,6 +186,58 @@ export default class ShotEffectController extends Container {
 
     this.addChild(this.tracer);
     this.tracer.run();
+  }
+
+  // Танк едет, эффект живёт в мире: за время пролёта трассера корпус
+  // проезжает свою длину, и при стрельбе вбок хвост отрывался от ствола. А
+  // чужой танк ещё и нарисован с задержкой интерполяции. Поэтому трассер и
+  // вспышка идут за ТЕКУЩИМ дулом стрелка: луч переносится целиком
+  // (`TracerEffect.shiftTo`), без поворота. Осколки попадания появляются в
+  // исходной точке удара — стена на месте
+  _followMuzzle() {
+    if (!this._shots || this.impact) {
+      return;
+    }
+
+    const tracerRunning = this.tracer && !this.tracer.isComplete;
+    const flashRunning = this.flash && !this.flash.isComplete;
+
+    if (!tracerRunning && !flashRunning) {
+      return;
+    }
+
+    const muzzle = this._shots.muzzle(this._shooterId);
+
+    if (!muzzle) {
+      return;
+    }
+
+    this.startPositionX = muzzle.x;
+    this.startPositionY = muzzle.y;
+
+    if (tracerRunning) {
+      this.tracer.shiftTo(muzzle.x, muzzle.y);
+    }
+  }
+
+  // Контроллер рисуется в проекции уровня КОНЦА луча, а дуло — на уровне
+  // начала. Если они разные (выстрел с моста вниз), вспышку переносим так,
+  // чтобы после проекции контроллера она легла в проекцию дула:
+  // q = cam + (p − cam)·(1 + k_s)/(1 + k_e), масштаб — то же отношение
+  _placeFlash(camera) {
+    if (!this.flash || this.flash.destroyed) {
+      return;
+    }
+
+    const ratio =
+      (1 + this.startLevel * parallaxConfig.shear) /
+      (1 + this.endLevel * parallaxConfig.shear);
+
+    this.flash.position.set(
+      camera.x + (this.startPositionX - camera.x) * ratio,
+      camera.y + (this.startPositionY - camera.y) * ratio,
+    );
+    this.flash.scale.set(ratio);
   }
 
   // трассер завершил анимацию.
@@ -229,7 +314,7 @@ export default class ShotEffectController extends Container {
 
   // проверяет, завершены ли звук и визуал, и если да, уничтожает объект
   _tryDestroy() {
-    if (this._visualsComplete && this._soundComplete) {
+    if (this._visualsComplete && this._soundComplete && this._flashComplete) {
       this.destroy();
     }
   }
@@ -256,6 +341,11 @@ export default class ShotEffectController extends Container {
     if (this.impact) {
       this.impact.destroy();
       this.impact = null;
+    }
+
+    if (this.flash) {
+      this.flash.destroy();
+      this.flash = null;
     }
 
     if (this.parent) {

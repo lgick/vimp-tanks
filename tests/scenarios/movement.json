@@ -16,7 +16,7 @@
     { "tick": 500, "op": "key", "who": "p1", "action": "down", "name": "gunCenter" }
   ],
   "unusedSnapshotKeys": ["w1", "w2", "w2e", "c1", "c2"],
-  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06], "angles": [2] },
   "ticks": 600,
   "dumpTicks": [40, 600]
 }

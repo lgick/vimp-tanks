@@ -492,6 +492,10 @@ impl Tank {
             });
         }
 
+        // удержание бустера спадает раз за шаг, в том числе в полёте, — до
+        // раннего выхода, как у реплики
+        surface::decay_boost(&mut self.level_state, dt);
+
         // полёт: ввод движения игнорируется целиком (клавиши остаются
         // нажатыми и подхватятся при приземлении)
         if self.level_state.input_locked() {
@@ -551,6 +555,8 @@ impl Tank {
                 dt,
             )
         });
+        // поднятый потолок скорости на время удержания бустера
+        let mix = surface::boost_hold_mix(mix, &self.level_state);
         let start_velocity = body.linvel();
         let start_angvel = body.angvel();
 
@@ -615,7 +621,21 @@ impl Tank {
 
             if boost_x != 0.0 || boost_y != 0.0 {
                 body.apply_impulse(Vector::new(boost_x, boost_y) * self.mass, true);
+                surface::start_boost_hold(map, &mut self.level_state, position.x, position.y);
             }
+        }
+
+        // удержание бустера гасит линейное демпфирование Rapier: скорость
+        // выше потолка тяги не тает за доли секунды
+        let (hold_x, hold_y) = surface::boost_damping_dv(
+            (start_velocity.x, start_velocity.y),
+            model.damping.linear,
+            &self.level_state,
+            dt,
+        );
+
+        if hold_x != 0.0 || hold_y != 0.0 {
+            body.apply_impulse(Vector::new(hold_x, hold_y) * self.mass, true);
         }
 
         self.engine_load = motion::engine_load(self.engine_throttle, current_forward_speed, model);

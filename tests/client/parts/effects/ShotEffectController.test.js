@@ -223,3 +223,91 @@ describe('ShotEffectController: свой выстрел непространст
     expect(soundManager.registerSound.mock.calls[0][1].spatial).toBe(true);
   });
 });
+
+// отдача: эффект выстрела сообщает id стрелка сервису `shots`
+describe('ShotEffectController: отдача стрелка', () => {
+  const row = shooterId => [0, 0, 100, 0, 0, 0, false, shooterId, 0, 0];
+
+  it('сообщает shots.fired с id стрелка', () => {
+    const shots = { fired: vi.fn() };
+
+    makeController(row(5), { shots });
+
+    expect(shots.fired).toHaveBeenCalledWith(5);
+  });
+
+  it('без сервиса shots эффект создаётся как прежде', () => {
+    expect(() => makeController(row(5))).not.toThrow();
+  });
+});
+
+describe('ShotEffectController: вспышка у дула', () => {
+  // промах: [startX, startY, endX, endY, bodyX, bodyY, hit, shooter, ...]
+  const row = [10, 20, 110, 20, 0, 0, false, 1, 0, 0];
+
+  it('вспышка стоит в точке вылета и смотрит вдоль луча', () => {
+    const controller = makeController(row);
+
+    controller.run();
+
+    expect(controller.flash.x).toBe(10);
+    expect(controller.flash.y).toBe(20);
+    expect(controller.flash.dirX).toBeCloseTo(1, 6);
+    expect(controller.flash.dirY).toBeCloseTo(0, 6);
+  });
+
+  it('контроллер ждёт конца вспышки', () => {
+    soundManager.registerSound = vi.fn(() => null);
+
+    const controller = makeController(row);
+
+    controller.run();
+    finishTracer(controller);
+
+    // трассер закончен, звука нет, но вспышка ещё идёт: её время
+    // шагает отдельно
+    expect(controller._isDestroyed).toBe(false);
+
+    controller.flash._update(controller.flash.config.duration);
+
+    expect(controller._isDestroyed).toBe(true);
+  });
+});
+
+// танк едет: начало луча и вспышка идут за его ТЕКУЩИМ дулом, точка удара
+// остаётся на месте
+describe('ShotEffectController: привязка к дулу', () => {
+  const row = [10, 20, 110, 20, 0, 0, false, 1, 0, 0];
+
+  it('трассер и вспышка следуют за дулом стрелка', () => {
+    let muzzle = { x: 10, y: 20 };
+    const shots = { fired: vi.fn(), muzzle: vi.fn(() => muzzle) };
+    const controller = makeController(row, {
+      shots,
+      renderer: { screen: { width: 800, height: 600 } },
+    });
+
+    controller.run();
+    muzzle = { x: 10, y: 35 };
+    controller.onRender();
+
+    expect(shots.muzzle).toHaveBeenCalledWith(1);
+    // луч перенесён целиком: и начало, и конец сдвинулись на 15
+    expect(controller.tracer.startPositionY).toBe(35);
+    expect(controller.tracer.endPositionY).toBe(35);
+    expect(controller.flash.y).toBeCloseTo(35, 6);
+  });
+
+  it('без дула (стрелок уничтожен) эффект остаётся на месте', () => {
+    const shots = { fired: vi.fn(), muzzle: () => null };
+    const controller = makeController(row, {
+      shots,
+      renderer: { screen: { width: 800, height: 600 } },
+    });
+
+    controller.run();
+    controller.onRender();
+
+    expect(controller.tracer.startPositionY).toBe(20);
+  });
+});

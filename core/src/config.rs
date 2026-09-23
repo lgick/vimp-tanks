@@ -318,11 +318,16 @@ pub enum SurfaceKind {
     /// Подвижный пол: скорость «грунта» `belt` ед./с по стрелке клетки.
     Conveyor { belt: f32 },
     /// Разовый импульс `dv` по стрелке плиты при въезде: не выше
-    /// `max_speed` вдоль стрелки и только от `min_entry_speed`.
+    /// `max_speed` вдоль стрелки и только от `min_entry_speed`. После
+    /// импульса `hold` секунд потолок скорости танка умножен на
+    /// `speed_factor`, а линейное демпфирование компенсировано (`0` / `1` —
+    /// без удержания).
     Boost {
         dv: f32,
         max_speed: f32,
         min_entry_speed: f32,
+        hold: f32,
+        speed_factor: f32,
     },
 }
 
@@ -352,6 +357,11 @@ pub struct SurfaceType {
     pub boost_dv: Option<f32>,
     pub boost_max_speed: Option<f32>,
     pub min_entry_speed: Option<f32>,
+    /// Удержание бустера, с: столько после импульса держится поднятый
+    /// потолок скорости. `None` — без удержания.
+    pub boost_time: Option<f32>,
+    /// Множитель потолка скорости на время удержания. `None` — `1`.
+    pub boost_speed_factor: Option<f32>,
     /// Время остатка, с: после съезда с клетки гусеницы ещё столько
     /// скользят, эффект спадает линейно. `None` — остатка нет.
     pub slick_time: Option<f32>,
@@ -371,6 +381,8 @@ impl Default for SurfaceType {
             boost_dv: None,
             boost_max_speed: None,
             min_entry_speed: None,
+            boost_time: None,
+            boost_speed_factor: None,
             slick_time: None,
         }
     }
@@ -378,18 +390,24 @@ impl Default for SurfaceType {
 
 impl SurfaceType {
     /// Вид поверхности. У описания ровно один вид: `belt` и `boostDv`
-    /// вместе — ошибка; `boostMaxSpeed`/`minEntrySpeed` без `boostDv` —
-    /// ошибка; при `boostDv` оба обязательны — умолчание молча меняло бы
-    /// поведение плиты при опечатке в конфиге.
+    /// вместе — ошибка; `boostMaxSpeed`/`minEntrySpeed`/`boostTime`/
+    /// `boostSpeedFactor` без `boostDv` — ошибка; при `boostDv` первые два
+    /// обязательны — умолчание молча меняло бы поведение плиты при опечатке
+    /// в конфиге. Удержание необязательно: без него плита — прежний
+    /// разовый импульс.
     pub fn kind(&self, name: &str) -> Result<SurfaceKind, String> {
-        let boost_extras = self.boost_max_speed.is_some() || self.min_entry_speed.is_some();
+        let boost_extras = self.boost_max_speed.is_some()
+            || self.min_entry_speed.is_some()
+            || self.boost_time.is_some()
+            || self.boost_speed_factor.is_some();
 
         match (self.belt, self.boost_dv) {
             (Some(_), Some(_)) => Err(format!(
                 "surfaces.types.{name}: `belt` and `boostDv` are mutually exclusive"
             )),
             (_, None) if boost_extras => Err(format!(
-                "surfaces.types.{name}: `boostMaxSpeed`/`minEntrySpeed` require `boostDv`"
+                "surfaces.types.{name}: `boostMaxSpeed`/`minEntrySpeed`/`boostTime`/\
+                 `boostSpeedFactor` require `boostDv`"
             )),
             (Some(belt), None) => Ok(SurfaceKind::Conveyor { belt }),
             (None, None) => Ok(SurfaceKind::Plain),
@@ -409,6 +427,8 @@ impl SurfaceType {
                     dv,
                     max_speed,
                     min_entry_speed,
+                    hold: self.boost_time.unwrap_or(0.0),
+                    speed_factor: self.boost_speed_factor.unwrap_or(1.0),
                 })
             }
         }
@@ -515,9 +535,23 @@ impl SurfaceRules {
             if let SurfaceKind::Boost {
                 max_speed,
                 min_entry_speed,
+                hold,
+                speed_factor,
                 ..
             } = kind
             {
+                if !(hold >= 0.0 && hold.is_finite()) {
+                    return Err(format!(
+                        "surfaces.types.{name}.boostTime must be >= 0, got {hold}"
+                    ));
+                }
+
+                if !(speed_factor >= 1.0 && speed_factor.is_finite()) {
+                    return Err(format!(
+                        "surfaces.types.{name}.boostSpeedFactor must be >= 1, got {speed_factor}"
+                    ));
+                }
+
                 if !(max_speed > 0.0) {
                     return Err(format!(
                         "surfaces.types.{name}.boostMaxSpeed must be > 0, got {max_speed}"
@@ -1310,6 +1344,60 @@ mod validate_tests {
 
             assert!(bad.validate().unwrap_err().contains("slickTime"), "slickTime {value}");
         }
+    }
+
+    #[test]
+    fn boost_hold_parses_with_neutral_defaults() {
+        let held = config_with_surfaces(serde_json::json!({ "types": { "boost": {
+            "boostDv": 220, "boostMaxSpeed": 480, "minEntrySpeed": 20, "boostTime": 1.2, "boostSpeedFactor": 1.8
+        } } }));
+        let plain = config_with_surfaces(serde_json::json!({ "types": { "boost": {
+            "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20
+        } } }));
+
+        assert!(held.validate().is_ok());
+        assert_eq!(
+            held.surfaces.types["boost"].kind("boost"),
+            Ok(SurfaceKind::Boost {
+                dv: 220.0,
+                max_speed: 480.0,
+                min_entry_speed: 20.0,
+                hold: 1.2,
+                speed_factor: 1.8,
+            })
+        );
+        // старая плита без полей удержания — прежний разовый импульс
+        assert!(plain.validate().is_ok());
+        assert_eq!(
+            plain.surfaces.types["boost"].kind("boost"),
+            Ok(SurfaceKind::Boost {
+                dv: 160.0,
+                max_speed: 340.0,
+                min_entry_speed: 20.0,
+                hold: 0.0,
+                speed_factor: 1.0,
+            })
+        );
+    }
+
+    #[test]
+    fn boost_hold_values_are_validated() {
+        for (extra, field) in [
+            (serde_json::json!({ "boostTime": -0.5 }), "boostTime"),
+            (serde_json::json!({ "boostSpeedFactor": 0.9 }), "boostSpeedFactor"),
+        ] {
+            let mut pad = serde_json::json!({ "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20 });
+
+            pad.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+
+            let cfg = config_with_surfaces(serde_json::json!({ "types": { "pad": pad } }));
+
+            assert!(cfg.validate().unwrap_err().contains(field), "{field}");
+        }
+
+        let orphan = config_with_surfaces(serde_json::json!({ "types": { "pad": { "boostTime": 1.0 } } }));
+
+        assert!(orphan.validate().unwrap_err().contains("require `boostDv`"));
     }
 
     fn config_with_props(props: serde_json::Value) -> TanksConfig {

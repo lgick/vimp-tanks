@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Migration
 
-- Requires `vimp-engine >= 0.34.0` and `vimp-engine-core 0.20.0`. Rebuild the
+- Requires `vimp-engine >= 0.34.1` and `vimp-engine-core 0.21.0`. Rebuild the
   core (`npm run core:build`) and release host and client together — the
   `c1`/`c2` row layout changed.
 - Rebuild the core (`npm run core:build`) and republish host and client
@@ -47,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Visual recoil after a hitscan shot (`recoil` in `src/config/render.js`):
+  the turret and hull kick back along the gun and the hull rocks, then
+  settle. Render only — physics are unchanged. A new client service `shots`
+  carries the shooter id from the shot effect to the tank.
+- Tanks are lit by baked normal maps (`tankLight` in `src/config/render.js`):
+  bevels facing the light (`tilt.lightDir`, screen axes) get brighter, the
+  far ones darker, following heading, turret rotation and tilt. A flat hull
+  looks as before; `tankLight.enabled: false` restores the batched mesh and
+  `tilt.shading`.
+- Water splashing sound under the tracks: the `tankWater` loop follows the
+  tank's speed (render config `surfaceFx.water.sound`).
 - `game.roofs` map field: per level, the tiles that are roofs. A roof needs its
   own render layer; it stays opaque (and keeps its level's light) until it
   actually covers the local tank. Render config `seeThrough.roofMargin`.
@@ -172,9 +183,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   off it: a new optional surface field (`slickTime: 1.5` on `oil`), the skid
   fading linearly; the client prediction replays it. Track marks stay oily
   for as long (`surfaceFx.tracks.oil.trail`).
+- Boost plates keep the speed boost for `boostTime` seconds: new optional
+  surface fields `boostTime` and `boostSpeedFactor` raise the tank's speed
+  ceiling and cancel the linear damping for that long after the push; the
+  client prediction replays it. Map bodies get the push only.
 
 ### Changed
 
+- The hitscan tracer leaves the barrel directly (the 30-unit gap is gone)
+  and is a thin film-like line — a white-hot core over a narrow warm glow,
+  fading quadratically towards the muzzle — instead of a pulsing dotted
+  line. A short muzzle
+  flash — irregular flame tongues and muzzle-brake jets with a soft layered
+  edge, random per shot — is drawn on every shot, by day too. While
+  they run, the tracer and the flash move with the shooter's current muzzle
+  (the whole ray, keeping its direction), so a driving tank shooting
+  sideways or point-blank into a wall no longer leaves them behind. On long
+  shots the tail grows with the ray (`tracer.trailShare`), so the line is
+  visible from the barrel instead of flashing by off-screen. Both are
+  configured in `src/config/render.js` (`tracer`, `muzzleFlash`).
+- The `m1` tank is 1.5 times larger: `size` 2 → 3 in `src/data/models.js`
+  (hull 12 × 9 world units instead of 8 × 6), with the collider, mass and
+  hitbox growing with it.
+- New tank art: tracks with treads, a bevelled deck with a sloped front plate
+  and an engine grille, a bevelled turret with a hatch and a muzzle brake.
+  Every tank texture now comes with a baked normal map (`bodyNormal`,
+  `gunNormal`, `destroyedNormal`) in the same frame.
+- Tanks cast a soft ground shadow away from the light, not only in flight
+  (`shadow.groundOffset`, `shadow.groundAlpha`; `groundOffset: 0` restores
+  the flight-only shadow).
 - Volumes are drawn as solid side walls plus a top instead of stacked
   copies (`volume.faces`; `false` restores the old slices). A side wall is
   textured from a strip of `volume.faceTileRepeats` copies of its own tile —
@@ -222,9 +259,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   entry bound now EXCLUDES its own value: a jump of exactly half a level is
   refused, which on a run one cell long — one with no side rails at all —
   used to click the hull and its shadow up by half a level at once.
+- The shipped `boost` surface pushes harder and holds the speed:
+  `boostDv` 160 → 220, `boostMaxSpeed` 340 → 480, plus `boostTime: 1.2` and
+  `boostSpeedFactor: 1.8`.
 
 ### Fixed
 
+- The hull tilts along its heading on a ramp instead of sideways, and the
+  raised edge rises up the screen whatever the heading.
+- The client prediction no longer falls one step behind now and then: float
+  rounding in the step accumulator postponed a due step to the next render
+  tick.
+- Reconciliation no longer restores the level state of the step before the
+  frame: the frame's local time (`serverTime − offset`, epoch milliseconds)
+  came out a fraction of a millisecond early, so a reconcile right on a boost
+  plate dropped the boost hold for the next steps.
+- After a reconciliation the prediction no longer loses a step: with
+  epoch-millisecond server times the replay's leftover came out slightly
+  negative and swallowed the next due step.
 - No square outline around the crater of an exploded barrel, and no stray
   edge on any other blurred texture (smoke, lamp light and heads, headlight
   cones, the tank's shadow, neon glow): the bakers' blur area now extends

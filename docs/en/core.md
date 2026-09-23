@@ -1074,7 +1074,7 @@ the velocity relative to the belt. Across the hull the belt is transmitted by
 only by the idle braking (`brakingFactor` 0.3 against damping 3 —
 ≈ 0.09·belt).
 
-**The boost has no state.** Entering a plate is a pure function of the body's
+**The boost entry has no state.** Entering a plate is a pure function of the body's
 current position and velocity. The impulse
 `dir · min(boostDv, max(0, boostMaxSpeed − v·dir))` fires if the body is not
 airborne, the centre cell is a boost with direction `dir`, the cell
@@ -1111,22 +1111,43 @@ has no level step on such a map) would lose the timer every step. Respawn and
 a map change reset them with the rest of `LevelState`. With no residue the
 mix is returned unchanged — the neutral path stays bit for bit.
 
-**Order in `Tank::update`**: in the early return on locked input (flight)
-`apply_slick` only decays the residue; after it — `tank_mix` (the angle from
-the body), `apply_slick` over that mix, and a snapshot of the step-start velocity
+**The boost hold has state.** Without it the push above the tank's ceiling
+melts within a fraction of a second: past `maxForwardSpeed` thrust stops and
+Rapier's linear damping (`v /= 1 + linear·dt`) wins. A plate with `boostTime`
+starts a hold on the step its impulse fires (`surface::start_boost_hold`, the
+same point as `boost_dv`): `LevelState.boost_left = boostTime`,
+`boost_factor = boostSpeedFactor`. While `boost_left > 0`,
+`boost_hold_mix` multiplies the mix's `max_speed` by the factor (the gas keeps
+pushing up to the raised ceiling) and `boost_damping_dv` adds
+`v0 · linear · dt` — after the integration's damping
+`(v + v·l·dt) / (1 + l·dt) = v`, the speed stays. `decay_boost` drops the timer
+by `dt` once per step, before the flight branch, and at zero returns the factor
+to `1`; in flight the hold decays but is not applied. A plate without
+`boostTime` leaves a running hold alone. Map bodies get no hold. The fields
+roll back with the level history like the oil residue
+(`boost_hold_reconcile_rewinds_the_timer`), survive the flat-map reset in
+`step_level` and are cleared on respawn and a map change. With no hold both
+functions are neutral — the path stays bit for bit.
+
+**Order in `Tank::update`**: `decay_boost` before the early return on locked
+input; in that return (flight) `apply_slick` only decays the residue; after
+it — `tank_mix` (the angle from the body), `apply_slick` over that mix,
+`boost_hold_mix`, and a snapshot of the step-start velocity
 `(vx0, vy0)` and `ω0` — Rapier changes `linvel` right inside `apply_impulse`,
 so any read after the lateral impulse or the thrust is already different;
 `step_throttle`; `v_rel`; the lateral impulse `lateral_dv_on`;
 `drive_accel_on`; the drag impulse, then the boost impulse (`boost_dv` gets
-`(vx0, vy0)` and the step's `dt`, both for `minEntrySpeed` and for `prev`);
-`engine_load` from the relative forward speed (with no gas on a belt the load
+`(vx0, vy0)` and the step's `dt`, both for `minEntrySpeed` and for `prev`;
+when it fires, `start_boost_hold`), then the hold's damping compensation
+`boost_damping_dv(v0)`; `engine_load` from the relative forward speed (with no gas on a belt the load
 stays `0`, the engine does not howl); the turn
 `turn_delta · turn + track_yaw_dv + angular_drag_dw(ω0)` times the inertia.
-**`Predictor::step_inner`** mirrors it: `apply_slick` (decay) inside the
-flight branch, `tank_mix` and `apply_slick` after it,
+**`Predictor::step_inner`** mirrors it: `decay_boost` before the flight
+branch, `apply_slick` (decay) inside it, `tank_mix`, `apply_slick` and
+`boost_hold_mix` after it,
 the replica's `vx/vy` at the start of the step as `(vx0, vy0)`, the same Δv
 added to `vx/vy` in the same order, Δω to `angvel`, then `resolve_world` and
-`integrate` unchanged. With no boost state there is nothing to roll back on
+`integrate` unchanged. With no entry state there is nothing to roll back on
 reconciliation (`boost_reconcile_replays_one_impulse_per_entry`: a frame
 mid-plate and one step before the entry, with the level history and after
 `reset`).
@@ -1184,9 +1205,9 @@ Covered by `crate_on_conveyor`, `crate_hits_boost_once`,
 
 | Layer | Where | Covers |
 | --- | --- | --- |
-| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence), surface formulas (`motion.rs`: the neutral mix bit for bit, sand, oil, the track yaw sign, a belt) and the surface table (`surface.rs`: validation, sampling points inside the hull, the boost entry rule, the oil residue's linear fade, no residue without `slickTime`, decay without effect in flight), props (`props.rs`: transitions and `damagedAt`, the multiplier by cause, priming only a blast type and only by a blast, detonation order) and the `coreParams.props` validation; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
-| Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios, 2 on a map; surfaces: 10 scenarios from `sand_straight_run` to `boost_against_arrow_does_nothing`, boost reconciliation, equal cell size; map bodies: `crate_on_conveyor`, `crate_hits_boost_once`, `crate_in_sand_slows`, the crate's boost reconciliation) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, the oil residue still skidding after leaving the patch and expiring after `slickTime`, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre) |
+| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence), surface formulas (`motion.rs`: the neutral mix bit for bit, sand, oil, the track yaw sign, a belt) and the surface table (`surface.rs`: validation, sampling points inside the hull, the boost entry rule, the oil residue's linear fade, no residue without `slickTime`, decay without effect in flight, the boost hold: none without `boostTime`, the raised ceiling and its expiry, the compensation cancelling one damping step), props (`props.rs`: transitions and `damagedAt`, the multiplier by cause, priming only a blast type and only by a blast, detonation order) and the `coreParams.props` validation; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
+| Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios, 2 on a map; surfaces: 10 scenarios from `sand_straight_run` to `boost_against_arrow_does_nothing`, boost reconciliation, the boost hold at full speed and its reconciliation, equal cell size; map bodies: `crate_on_conveyor`, `crate_hits_boost_once`, `crate_in_sand_slows`, the crate's boost reconciliation) — **required to run for any edit to motion in the core or `models.js`** |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, the oil residue still skidding after leaving the patch and expiring after `slickTime`, the boost hold keeping the speed above `maxForwardSpeed` and expiring after `boostTime`, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre) |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
 
 `tests/core/` tests are part of `npm test` and **are skipped** if

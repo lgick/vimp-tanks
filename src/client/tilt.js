@@ -16,8 +16,14 @@
  * @param {number} p.anchorX    0..1
  * @param {number} p.anchorY    0..1
  * @param {number} p.rotation   собственный поворот спрайта (пушка), рад
- * @param {number} p.pitch      продольный наклон, рад
- * @param {number} p.roll       поперечный наклон, рад
+ * @param {number} p.heading    курс корпуса (поворот контейнера танка),
+ *   рад: нужен, чтобы `lift` уводил край вверх по ЭКРАНУ, а не по
+ *   локальной оси танка
+ * @param {number} p.pitch      продольный наклон, рад (> 0 — нос `+u`
+ *   поднят, как у `motion::tilt_target`)
+ * @param {number} p.roll       поперечный наклон, рад (> 0 — поднят борт
+ *   `+v`, то есть сторона `(−sin, cos)` курса в экранных осях y-вниз:
+ *   туда смотрит `lat` в `motion::tilt_target`)
  * @param {number} p.shear      parallax.shear
  * @param {number} p.lift       экранный подъём поднявшегося края, доля
  *   его высоты
@@ -31,6 +37,7 @@ export function tiltCorners({
   anchorX,
   anchorY,
   rotation,
+  heading = 0,
   pitch,
   roll,
   shear,
@@ -56,6 +63,11 @@ export function tiltCorners({
   const cosB = Math.cos(roll);
   const sinB = Math.sin(roll);
 
+  // экранное «вверх» (0, −1) в локальных осях контейнера, повёрнутого на
+  // курс: поворот на −heading даёт (−sin, −cos)
+  const upU = -Math.sin(heading);
+  const upV = -Math.cos(heading);
+
   const out = [];
 
   for (const [su, sv] of quad) {
@@ -64,14 +76,15 @@ export function tiltCorners({
     const u = su * cosR - sv * sinR;
     const v = su * sinR + sv * cosR;
 
-    // тангаж вокруг локального X (поперёк корпуса): экранный `+v` — это
-    // «назад», а поднимается нос, отсюда минус у высоты
-    const vp = v * cosP;
-    const h1 = -v * sinP;
+    // тангаж вокруг локальной оси `v` (поперёк корпуса): нос — `+u`, как
+    // у ядра, фар и текстуры корпуса (она вытянута по `x`)
+    const up = u * cosP;
+    const h1 = u * sinP;
 
-    // крен вокруг локального Y (вдоль корпуса)
-    const up = u * cosB;
-    const h2 = u * sinB;
+    // крен вокруг локальной оси `u` (вдоль корпуса): при `roll > 0`
+    // поднимается борт `+v`
+    const vp = v * cosB;
+    const h2 = v * sinB;
 
     // высота точки в ЭКРАННЫХ единицах и её доля в высоте спрайта,
     // переведённая в тот же безразмерный сдвиг, которым живёт весь 2.5D
@@ -80,8 +93,11 @@ export function tiltCorners({
 
     // `lift` — насколько поднявшаяся часть корпуса уезжает вверх по
     // экрану: без него наклон читается только сжатием и выглядит как
-    // «сплющивание»
-    out.push(up * (1 + k), vp * (1 + k) - h * lift);
+    // «сплющивание». Сдвиг — вдоль экранного верха, а не локального `−v`,
+    // иначе он поворачивался бы вместе с танком
+    const shift = h * lift;
+
+    out.push(up * (1 + k) + upU * shift, vp * (1 + k) + upV * shift);
   }
 
   return out;
@@ -110,15 +126,17 @@ export function tiltShade({ angle, pitch, roll, lightDir, shading }) {
     return 1;
   }
 
-  // наклон корпуса = поворот его нормали. Малые углы: наклон вокруг
-  // локального X даёт составляющую вдоль курса, вокруг Y — поперёк
+  // наклон корпуса = поворот его нормали: тангаж (вокруг поперечной оси
+  // `v`) даёт составляющую вдоль курса, крен (вокруг `u`) — поперёк
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
 
   // нормаль в экранных осях (её вертикальная составляющая нам не нужна:
   // свет задан в плоскости экрана)
-  const nx = -Math.sin(pitch) * cos - Math.sin(roll) * sin;
-  const ny = -Math.sin(pitch) * sin + Math.sin(roll) * cos;
+  // поднятый нос `+u` отклоняет нормаль к корме `−u`, поднятый борт
+  // `+v` — к борту `−v` (те же оси, что у `tiltCorners`)
+  const nx = -Math.sin(pitch) * cos + Math.sin(roll) * sin;
+  const ny = -Math.sin(pitch) * sin - Math.sin(roll) * cos;
 
   const len = Math.hypot(lightDir[0], lightDir[1]) || 1;
   const dot = (nx * lightDir[0] + ny * lightDir[1]) / len;

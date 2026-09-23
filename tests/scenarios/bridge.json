@@ -21,7 +21,7 @@
     { "tick": 955, "op": "key", "who": "p1", "action": "up", "name": "forward" }
   ],
   "unusedSnapshotKeys": ["w1", "w2", "w2e", "c2"],
-  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06] },
+  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06], "angles": [2] },
   "ticks": 1400,
   "dumpTicks": [95, 600, 1000, 1400]
 }

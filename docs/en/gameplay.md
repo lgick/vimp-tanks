@@ -162,7 +162,7 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   level number above the tank — the level reads from another tank's ring in
   its level colour, the layer tinting on the radar, the dimming of levels
   below the player, the transparency of the slab above them and the height
-  parallax; the shadow joins them only in flight.
+  parallax; in flight the shadow's gap from the hull joins them.
 - **Ramps are entered at their ends, from any direction.** A run lifts (or
   lowers) only the tank that drove into an END CELL matching its own level:
   the foot cell takes tanks of the lower level, the top cell tanks of the
@@ -271,7 +271,8 @@ flight feels none of them.
 
 - **Sand and mud** — weaker thrust, a lower speed ceiling and extra drag; mud
   is heavier.
-- **Water** (shallow) — moderate drag and a loss of thrust.
+- **Water** (shallow) — moderate drag and a loss of thrust. A tank in water
+  splashes: quietly when standing, louder and higher-pitched at speed.
 - **Oil** — almost no lateral grip or braking and sharper turns: the tank
   skids and spins. The tracks stay oily after you drive off: the skid fades
   out over 1.5 seconds, and the tank leaves oily marks for as long.
@@ -280,7 +281,11 @@ flight feels none of them.
   along it.
 - **Boost plate** — a one-off push along the arrow when you drive onto the
   plate in the arrow's direction (from 20 units/s). Crossing the cells of one
-  plate pushes once; driving against the arrow does nothing.
+  plate pushes once; driving against the arrow does nothing. After the push the
+  tank keeps the extra speed for about a second (`boostTime`): its speed
+  ceiling is raised and the speed does not melt away, the gas keeps
+  accelerating. In the air the hold only runs down. Crates and barrels get the
+  push but not the hold.
 
 Each track feels its own ground: with one track in mud, the tank pulls toward
 the mud. Wrecks are carried and slowed the same way. Crates and barrels ride
