@@ -214,7 +214,11 @@ lengthen the landing pad or keep the plate away from the ramp's run.
    color, intensity, head, flicker }]`. The cell must be inside the grid and
    the level must exist. A lamp lights only its own level: a level-0 lamp
    under the bridge does not light the slab, and a bridge lamp does not
-   spill off the slab.
+   spill off the slab. A lamp with `head: true` also gets light shafts in
+   the air, cut by the shadows of tanks and props nearby, and lamps light
+   glints on the objects inside their radius
+   ([configuration.md](configuration.md#night-and-lighting-lighting),
+   `lighting.shafts`, `lighting.glints`).
 3. Keep every render layer of every level below base `zIndex` 40: the light
    map of a level lies at 40 and its emissive layer at 45.
 4. Give roofs their own render layer and list their tiles in `game.roofs`

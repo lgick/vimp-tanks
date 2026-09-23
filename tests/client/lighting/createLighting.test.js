@@ -777,3 +777,251 @@ describe('lighting: область фильтра оверлея', () => {
     map.destroy();
   });
 });
+
+describe('lighting: засветы (lightsAt, onScreen)', () => {
+  const lampAt = (cell, extra = {}) =>
+    nightLighting([{ cell, radius: 50, head: true, ...extra }]);
+
+  it('фонарь своего уровня светит в точку рядом, дальше радиуса — нет', () => {
+    const { service } = setup();
+
+    service.registerTextures(textures());
+    makeParts(service, 'a', lampAt([1, 1]));
+    Ticker.shared.lastTime += 16;
+
+    const [hit] = service.lightsAt(60, 48, 0);
+
+    expect(hit.light.x).toBe(48);
+    expect(hit.strength).toBeGreaterThan(0);
+    // направление от точки на фонарь — влево
+    expect(Math.abs(hit.angle)).toBeCloseTo(Math.PI);
+    expect(hit.color).toBe(0xffc070);
+    expect(service.lightsAt(400, 400, 0)).toEqual([]);
+    // фонарь уровня 0 не светит на плиту уровня 1
+    expect(service.lightsAt(60, 48, 1)).toEqual([]);
+  });
+
+  it('чужая фара — источник, своя (exclude) и свет под корпусом — нет', () => {
+    const { service } = setup();
+
+    makeParts(service, 'a', lampAt([30, 30]));
+
+    const cone = service.addLight({
+      kind: 'cone',
+      x: 0,
+      y: 0,
+      radius: 100,
+      spread: 0.5,
+      rotation: 0,
+    });
+
+    service.addLight({ kind: 'radial', x: 40, y: 0, radius: 60 });
+    Ticker.shared.lastTime += 16;
+
+    expect(service.lightsAt(40, 0, 0)[0].light).toBe(cone);
+    expect(service.lightsAt(40, 0, 0, 1, [cone])).toEqual([]);
+  });
+
+  it('вспышка светит, пока не погасла', () => {
+    const { service } = setup();
+
+    service.registerTextures(textures());
+    makeParts(service, 'a', lampAt([30, 30]));
+    service.flash({ x: 0, y: 0, radius: 80, duration: 100 });
+
+    expect(service.lightsAt(10, 0, 0)).toHaveLength(1);
+
+    Ticker.shared.lastTime += 200;
+
+    expect(service.lightsAt(10, 0, 0)).toEqual([]);
+  });
+
+  it('днём и без сервиса ночи засвета нет', () => {
+    const { service } = setup();
+
+    makeParts(service, 'a', { night: false, lamps: [] });
+
+    expect(service.lightsAt(0, 0, 0)).toEqual([]);
+
+    const off = createLighting({ ...lighting, enabled: false });
+
+    expect(off.lightsAt(0, 0, 0)).toEqual([]);
+    expect(off.onScreen(0, 0, 0, 10)).toBe(false);
+  });
+
+  it('бюджет: не больше maxLights засветов за тик, новый тик — заново', () => {
+    const { service } = setup({ ...lighting, maxLights: 2 });
+
+    makeParts(service, 'a', lampAt([1, 1]));
+    Ticker.shared.lastTime += 16;
+
+    expect(service.lightsAt(50, 48, 0)).toHaveLength(1);
+    expect(service.lightsAt(52, 48, 0)).toHaveLength(1);
+    expect(service.lightsAt(54, 48, 0)).toEqual([]);
+
+    Ticker.shared.lastTime += 16;
+
+    expect(service.lightsAt(54, 48, 0)).toHaveLength(1);
+  });
+
+  it('onScreen: точка у камеры видна, далеко за краем — нет', () => {
+    const { service } = setup();
+
+    makeParts(service, 'a', lampAt([1, 1]));
+
+    expect(service.onScreen(0, 0, 0, 10)).toBe(true);
+    expect(service.onScreen(5000, 0, 0, 10)).toBe(false);
+  });
+});
+
+describe('lighting: лучи фонарей и тени', () => {
+  const shaftAsset = () => ({ texture: sized(262, 262), contentSize: 256 });
+  const spyShafts = () => vi.spyOn(LevelLightMap.prototype, 'layoutShafts');
+  const lastShafts = (spy, level) => {
+    for (let i = spy.mock.calls.length - 1; i >= 0; i -= 1) {
+      if (spy.mock.contexts[i].level === level) {
+        return spy.mock.calls[i][0];
+      }
+    }
+
+    return null;
+  };
+
+  const withShaft = (cfg = lighting, lamps) => {
+    const env = setup(cfg);
+
+    env.service.registerTextures({ ...textures(), shaft: shaftAsset() });
+    makeParts(env.service, 'a', nightLighting(lamps));
+
+    return env;
+  };
+
+  it('фонарь с головой получает лучи: радиус — length · радиус фонаря', () => {
+    const spy = spyShafts();
+    const { service } = withShaft();
+
+    frame(service);
+
+    const [item] = lastShafts(spy, 0);
+
+    expect(item.x).toBeCloseTo(48);
+    expect(item.y).toBeCloseTo(48);
+    expect(item.scale).toBeCloseTo((50 * lighting.shafts.length * 2) / 256);
+    expect(item.alpha).toBeCloseTo(lighting.shafts.intensity * 0.9);
+    expect(item.color).toBe(0xffc070);
+    expect(item.shadows).toEqual([]);
+  });
+
+  it('без головы, без текстуры или с выключенными лучами — лучей нет', () => {
+    let spy = spyShafts();
+    let env = withShaft(lighting, [{ cell: [1, 1], radius: 50 }]);
+
+    frame(env.service);
+    expect(lastShafts(spy, 0)).toEqual([]);
+
+    vi.restoreAllMocks();
+    spy = spyShafts();
+    env = withShaft({ ...lighting, shafts: { ...lighting.shafts, enabled: false } });
+    frame(env.service);
+    expect(lastShafts(spy, 0)).toEqual([]);
+
+    vi.restoreAllMocks();
+    spy = spyShafts();
+    env = setup();
+    env.service.registerTextures(textures());
+    makeParts(env.service, 'a', nightLighting());
+    frame(env.service);
+    expect(lastShafts(spy, 0)).toEqual([]);
+  });
+
+  it('предмет в лучах своего уровня бросает клин, чужого уровня — нет', () => {
+    const spy = spyShafts();
+    const { service } = withShaft();
+    const tank = {};
+    const upstairs = {};
+
+    service.setCaster(tank, { x: 68, y: 48, z: 0, level: 0, radius: 5 });
+    service.setCaster(upstairs, { x: 48, y: 68, z: 1, level: 1, radius: 5 });
+    frame(service);
+
+    const [item] = lastShafts(spy, 0);
+
+    expect(item.shadows).toHaveLength(1);
+    // клин лежит за предметом, прочь от фонаря
+    expect(item.shadows[0][2]).toBeGreaterThan(68);
+
+    service.setCaster(tank, null);
+    frame(service);
+
+    expect(lastShafts(spy, 0)[0].shadows).toEqual([]);
+  });
+
+  it('теней на фонарь — не больше maxShadowCasters, ближайшие', () => {
+    const spy = spyShafts();
+    const { service } = withShaft();
+
+    for (let i = 0; i < 6; i += 1) {
+      service.setCaster({}, { x: 58 + i * 5, y: 48, z: 0, level: 0, radius: 1 });
+    }
+
+    frame(service);
+
+    expect(lastShafts(spy, 0)[0].shadows).toHaveLength(
+      lighting.shafts.maxShadowCasters,
+    );
+  });
+
+  it('shadows: false — лучи без теней', () => {
+    const spy = spyShafts();
+    const { service } = withShaft({
+      ...lighting,
+      shafts: { ...lighting.shafts, shadows: false },
+    });
+
+    service.setCaster({}, { x: 68, y: 48, z: 0, level: 0, radius: 5 });
+    frame(service);
+
+    expect(lastShafts(spy, 0)[0].shadows).toEqual([]);
+  });
+
+  it('LevelLightMap: тени — инверсная маска контейнера лучей, без теней маски нет', () => {
+    const levelMap = new LevelLightMap({
+      level: 0,
+      ambient: 0x3a4260,
+      resolution: 0.5,
+      area: { x: 0, y: 0, width: 100, height: 100 },
+    });
+    const item = {
+      texture: sized(262, 262),
+      x: 10,
+      y: 20,
+      scale: 0.5,
+      rotation: 0.1,
+      color: 0xffc070,
+      alpha: 0.3,
+      shadows: [[0, 0, 10, 0, 10, 10, 0, 10]],
+    };
+
+    levelMap.layoutShafts([item]);
+
+    const [entry] = levelMap.shaftPool;
+
+    expect(entry.sprite.blendMode).toBe('add');
+    expect(entry.sprite.alpha).toBeCloseTo(0.3);
+    expect(entry.container.mask).toBe(entry.shadow);
+    expect(entry.container._maskOptions.inverse).toBe(true);
+
+    levelMap.layoutShafts([{ ...item, shadows: [] }]);
+
+    // геттер Pixi без маски отдаёт undefined
+    expect(entry.container.mask).toBeFalsy();
+    expect(entry.shadow.visible).toBe(false);
+
+    // лишние записи пула прячутся, а не уничтожаются
+    levelMap.layoutShafts([]);
+
+    expect(entry.container.visible).toBe(false);
+
+    levelMap.destroy();
+  });
+});

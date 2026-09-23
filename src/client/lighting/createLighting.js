@@ -19,19 +19,28 @@ import LevelLightMap from './LevelLightMap.js';
 import {
   EMISSIVE_BASE_Z,
   LAMP_HEAD_BASE_Z,
+  buildLightGrid,
   cellCenter,
   cellRuns,
   flashFactor,
   flicker,
   isOnScreen,
   projectLight,
+  queryLightGrid,
+  selectLights,
+  shadowWedge,
+  shaftSway,
 } from './lightMath.js';
 
 // цвет полумрака, если карта его не задала
 const DEFAULT_AMBIENT = 0x3a4260;
 
-// ключи текстур, которые принимает сервис (7.3)
-const TEXTURE_KEYS = ['radial', 'cone', 'head'];
+// ключи текстур, которые принимает сервис (7.3); `glint` и `shaft` —
+// засветы и лучи фонарей
+const TEXTURE_KEYS = ['radial', 'cone', 'head', 'glint', 'shaft'];
+
+// наибольшее покачивание лучей фонаря, рад
+const SHAFT_SWAY = 0.08;
 
 // Сервис пула зависимостей `lighting`: ночь, карты освещённости уровней,
 // источники света и эмиссивный слой. Возвращается из `hooks.services(core)`
@@ -74,6 +83,11 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   // sprite -> level
   const emissive = new Map();
   const flashes = [];
+  // предметы, отбрасывающие тени в лучах: owner -> { x, y, z, level, radius }
+  const casters = new Map();
+  // бюджет засветов на тик: `lightsAt` с ответом — не больше `maxLights`
+  let glintTick = null;
+  let glintCount = 0;
 
   // --- состояние карты ---
   let mapKey = null;
@@ -197,6 +211,13 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     for (const [sprite, level] of emissive) {
       emissiveContainer(level).addChild(sprite);
     }
+
+    // сетка фонарей для `lightsAt`: клетка — наибольший радиус фонаря,
+    // фонарь лежит не больше чем в девяти клетках
+    map.lampGrid = buildLightGrid(
+      map.lamps,
+      Math.max(1, ...map.lamps.map(lamp => lamp.radius)),
+    );
 
     ensureLampHeads();
     masksDirty = true;
@@ -514,11 +535,117 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       push(lamp, flicker(lamp.seed, now, lamp.flicker));
     }
 
+    const shafts = layoutShafts(camera, screen, now);
+
     // карта крыш уровня получает те же источники, что и обычная
     for (const levelMap of allLevelMaps()) {
       levelMap.place(camera, shear);
       levelMap.layout(perLevel.get(levelMap.level) || []);
+      levelMap.layoutShafts(shafts.get(levelMap.level) || []);
     }
+  };
+
+  // клинья теней предметов уровня фонаря в его лучах: ближайшие
+  // `maxShadowCasters` в радиусе лучей, в нарисованных координатах
+  const shadowsOf = (lamp, view, reach, camera, shaftsCfg) => {
+    if (!shaftsCfg.shadows || !(shaftsCfg.maxShadowCasters > 0)) {
+      return [];
+    }
+
+    const worldReach = lamp.radius * shaftsCfg.length;
+    const near = [];
+
+    for (const caster of casters.values()) {
+      const distance = Math.hypot(caster.x - lamp.x, caster.y - lamp.y);
+
+      if (caster.level === lamp.level && distance < worldReach) {
+        near.push({ caster, distance });
+      }
+    }
+
+    near.sort((a, b) => a.distance - b.distance);
+
+    const polygons = [];
+
+    for (const { caster } of near.slice(0, shaftsCfg.maxShadowCasters)) {
+      const k = (caster.z ?? caster.level) * shear;
+      const point = offsetPoint(caster.x, caster.y, camera, k);
+      const wedge = shadowWedge(
+        view.x,
+        view.y,
+        point.x,
+        point.y,
+        caster.radius * (1 + k),
+        reach,
+      );
+
+      if (wedge) {
+        polygons.push(wedge);
+      }
+    }
+
+    return polygons;
+  };
+
+  // лучи в воздухе вокруг голов фонарей: level -> items для
+  // `LevelLightMap.layoutShafts`
+  const layoutShafts = (camera, screen, now) => {
+    const perLevel = new Map();
+    const shaftsCfg = cfg.shafts;
+    const asset = textures.shaft;
+
+    if (!shaftsCfg?.enabled || !asset) {
+      return perLevel;
+    }
+
+    let count = 0;
+
+    for (const lamp of map.lamps) {
+      if (!lamp.head || !map.levels.has(lamp.level)) {
+        continue;
+      }
+
+      if (count >= cfg.maxLights) {
+        break;
+      }
+
+      const view = projectLight(lamp.x, lamp.y, lamp.level, camera, stage, shear);
+      const reach = lamp.radius * shaftsCfg.length * view.scale;
+
+      if (
+        !(reach > 0) ||
+        !isOnScreen(
+          view.screenX,
+          view.screenY,
+          reach * stage.scale.x,
+          screen.width,
+          screen.height,
+        )
+      ) {
+        continue;
+      }
+
+      if (!perLevel.has(lamp.level)) {
+        perLevel.set(lamp.level, []);
+      }
+
+      perLevel.get(lamp.level).push({
+        texture: asset.texture,
+        x: view.x,
+        y: view.y,
+        scale: (reach * 2) / asset.contentSize,
+        rotation: shaftSway(lamp.seed, now, SHAFT_SWAY),
+        color: lamp.color,
+        alpha:
+          shaftsCfg.intensity *
+          lamp.intensity *
+          flicker(lamp.seed, now, lamp.flicker),
+        shadows: shadowsOf(lamp, view, reach, camera, shaftsCfg),
+      });
+      count += 1;
+    }
+
+    return perLevel;
   };
 
   // --- прозрачность над игроком ---
@@ -614,6 +741,39 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   };
 
   const isNight = () => enabled && map?.night === true;
+
+  // источники, светящие в точку уровня `level`: фонари (из сетки), фары
+  // танков (конусы сессии) и вспышки — `[{ light, factor }]`. Свет под
+  // корпусом (радиальные источники сессии) засвета не даёт
+  const candidatesAt = (x, y, level, exclude, now) => {
+    const candidates = [];
+    const onLevel = light => (light.levels ?? [light.level ?? 0]).includes(level);
+
+    for (const lamp of queryLightGrid(map.lampGrid, x, y)) {
+      if (lamp.level === level) {
+        candidates.push({
+          light: lamp,
+          factor: flicker(lamp.seed, now, lamp.flicker),
+        });
+      }
+    }
+
+    for (const light of lights) {
+      if (light.kind === 'cone' && !exclude?.includes(light) && onLevel(light)) {
+        candidates.push({ light, factor: 1 });
+      }
+    }
+
+    for (const flash of flashes) {
+      const factor = flashFactor(now - flash.start, flash.duration);
+
+      if (factor > 0 && onLevel(flash)) {
+        candidates.push({ light: flash, factor });
+      }
+    }
+
+    return candidates;
+  };
 
   return {
     get enabled() {
@@ -859,6 +1019,79 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     },
 
     isNight,
+
+    // Засвет: до `limit` сильнейших источников в мировой точке уровня
+    // `level` — `[{ light, strength, angle, color }]`, `angle` — от точки НА
+    // источник. `exclude` — свои источники (фары самого танка). Без ночи —
+    // пусто; после `maxLights` ответов за тик — тоже пусто (бюджет спрайтов)
+    lightsAt(x, y, level, limit = 1, exclude = null) {
+      if (!isNight() || !(limit > 0)) {
+        return [];
+      }
+
+      const now = Ticker.shared.lastTime;
+
+      if (glintTick !== now) {
+        glintTick = now;
+        glintCount = 0;
+      }
+
+      if (glintCount >= cfg.maxLights) {
+        return [];
+      }
+
+      const hits = selectLights(
+        candidatesAt(x, y, level, exclude, now),
+        x,
+        y,
+        limit,
+      );
+
+      if (hits.length) {
+        glintCount += 1;
+      }
+
+      return hits;
+    },
+
+    // виден ли круг `reach` (мировые единицы) вокруг точки на высоте `z`:
+    // засветы вне экрана не считаются
+    onScreen(x, y, z, reach) {
+      if (!stage || !renderer?.screen) {
+        return false;
+      }
+
+      const camera = levelView ? levelView.camera() : cameraCenter(stage, renderer);
+
+      if (!camera) {
+        return false;
+      }
+
+      const view = projectLight(x, y, z, camera, stage, shear);
+
+      return isOnScreen(
+        view.screenX,
+        view.screenY,
+        reach * view.scale * stage.scale.x,
+        renderer.screen.width,
+        renderer.screen.height,
+      );
+    },
+
+    // предмет, отбрасывающий тень в лучах фонарей: `{ x, y, z, level,
+    // radius }` в мировых единицах; null — снять. Состояние сессии, как
+    // `addLight`: предметы снимают себя сами
+    setCaster(owner, caster) {
+      if (!enabled) {
+        return;
+      }
+
+      if (caster) {
+        casters.set(owner, caster);
+      } else {
+        casters.delete(owner);
+      }
+    },
 
     // Зовут части из onRender. Раскладка — один раз на трансформ сцены в
     // тике: за тик полотно рисуется несколько раз, и каждая отрисовка после

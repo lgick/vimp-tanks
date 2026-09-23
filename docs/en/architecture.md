@@ -410,7 +410,24 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   textures (`lightRadialTexture`, `headlightConeTexture`, `lampHeadTexture`)
   and therefore batch, are culled against the screen and capped by
   `lighting.maxLights`. The layout runs once per stage transform per tick.
-- **No shift shadows.** Sources light spots and cast nothing: projected
+- **Glints.** `Tank` and `MapObject` ask the service for the strongest
+  source at their world point (`lightsAt`: lamps through a cell grid built
+  once per map, headlight cones except the tank's own, flashes) and draw
+  an additive `glintTexture` gradient turned towards it, as the last child
+  of their own container — so it follows tilt and parallax. The gradient's
+  mask is a sprite with the object's own texture (the hull or wreck, the
+  prop's current state). Screen culling (`onScreen`) and a per-tick budget
+  of `maxLights` keep the mask passes bounded.
+- **Light shafts and their shadows.** Every lamp with `head: true` gets a
+  `lightShaftTexture` sprite in its level's light map, above the sources and
+  below the volume tops, slowly swaying by the lamp's `seed`. Tanks and
+  props register as shadow casters (`setCaster`, a circle in world units);
+  the nearest `maxShadowCasters` on the lamp's level cast a wedge from the
+  tangents of their circle to the end of the shafts (`shadowWedge`). The
+  wedges are an **inverse stencil mask** of that lamp's shaft container, so
+  they dim only its shafts, not the ground light spot or the dusk; a lamp
+  with no casters has no mask at all.
+- **No shift shadows on the ground.** Light spots cast nothing: projected
   shadows would need the geometry of every wall per light per frame, and
   the 2.5D volumes already read as height.
 

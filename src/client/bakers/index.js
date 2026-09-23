@@ -11,6 +11,8 @@ import debrisTexture from './debrisTexture.js';
 import lightRadialTexture from './lightRadialTexture.js';
 import headlightConeTexture from './headlightConeTexture.js';
 import lampHeadTexture from './lampHeadTexture.js';
+import glintTexture from './glintTexture.js';
+import lightShaftTexture from './lightShaftTexture.js';
 
 export default {
   // четыре ассета - один и тот же размытый круг, различаются параметрами
@@ -31,4 +33,6 @@ export default {
   lightRadialTexture,
   headlightConeTexture,
   lampHeadTexture,
+  glintTexture,
+  lightShaftTexture,
 };

@@ -161,6 +161,8 @@ export default class MapLayer {
       this._lighting.registerTextures({
         radial: assets.lightRadialTexture,
         head: assets.lampHeadTexture,
+        glint: assets.glintTexture,
+        shaft: assets.lightShaftTexture,
       });
       this._mapKey = mapKeyOf(data);
       this._lighting.acquireMap(

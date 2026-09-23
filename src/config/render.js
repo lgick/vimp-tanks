@@ -482,4 +482,26 @@ export const lighting = {
     explosion: { radius: 140, intensity: 1.0, duration: 260, color: 0xffb060 },
     shot: { radius: 40, intensity: 0.6, duration: 70, color: 0xfff0a0 },
   },
+
+  // засвет: яркий аддитивный блик на стороне танка или пропа, обращённой к
+  // сильнейшему источнику (фонарь, чужая фара, вспышка). Форма — градиент
+  // `glintTexture` по силуэту предмета. intensity — множитель силы
+  // источника в точке, size — размер блика в долях размера предмета.
+  // Число бликов на кадр не больше `maxLights`
+  glints: { enabled: true, intensity: 0.8, size: 1.2 },
+
+  // лучи в воздухе вокруг головы фонаря (`lamps[].head: true`): запечённые
+  // лучи `lightShaftTexture`, аддитивно в карте освещённости уровня фонаря.
+  // rays — лучей в текстуре; length — радиус лучей в долях радиуса фонаря;
+  // intensity — яркость; shadows — просветы-тени от танков и пропов;
+  // maxShadowCasters — теней на фонарь (ближайшие). Число фонарей с лучами
+  // на кадр не больше `maxLights`
+  shafts: {
+    enabled: true,
+    rays: 14,
+    length: 1.3,
+    intensity: 0.35,
+    shadows: true,
+    maxShadowCasters: 4,
+  },
 };

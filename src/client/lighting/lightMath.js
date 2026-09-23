@@ -172,3 +172,165 @@ export function flashFactor(elapsedMs, durationMs) {
 
   return t * t;
 }
+
+// --- засветы и лучи (этап 10) ---
+
+// спад пятна фонаря по расстоянию: тот же `(1 − t)²`, что у текстуры
+// `lightRadialTexture`, — засвет гаснет там же, где пятно
+export function radialFalloff(distance, radius) {
+  if (!(radius > 0) || distance >= radius) {
+    return 0;
+  }
+
+  const t = 1 - Math.max(0, distance) / radius;
+
+  return t * t;
+}
+
+// Сила источника в мировой точке `(x, y)` без мерцания. Конус — как его
+// текстура (`headlightConeTexture`): клин от вершины по `rotation`,
+// полуширина `along · spread`, яркость спадает по длине и к краям клина
+export function lightStrength(light, x, y) {
+  const dx = x - light.x;
+  const dy = y - light.y;
+  const intensity = light.intensity ?? 1;
+
+  if (light.kind !== 'cone') {
+    return intensity * radialFalloff(Math.hypot(dx, dy), light.radius);
+  }
+
+  const cos = Math.cos(light.rotation || 0);
+  const sin = Math.sin(light.rotation || 0);
+  const along = dx * cos + dy * sin;
+  const across = Math.abs(dy * cos - dx * sin);
+
+  if (!(light.radius > 0) || along <= 0 || along >= light.radius) {
+    return 0;
+  }
+
+  const halfWidth = along * (light.spread ?? 0.5);
+
+  if (across >= halfWidth) {
+    return 0;
+  }
+
+  const t = along / light.radius;
+
+  return intensity * (1 - t) * (1 - t * 0.35) * (1 - across / halfWidth);
+}
+
+// Отбор источников для точки: `candidates` — `[{ light, factor }]`, где
+// `factor` — мерцание или затухание вспышки. Возвращает до `limit`
+// сильнейших `{ light, strength, angle, color }`; `angle` — направление ОТ
+// точки НА источник (рад)
+export function selectLights(candidates, x, y, limit) {
+  const hits = [];
+
+  for (const { light, factor } of candidates) {
+    const strength = lightStrength(light, x, y) * factor;
+
+    if (strength > 0) {
+      hits.push({
+        light,
+        strength,
+        angle: Math.atan2(light.y - y, light.x - x),
+        color: light.color ?? 0xffffff,
+      });
+    }
+  }
+
+  hits.sort((a, b) => b.strength - a.strength);
+
+  return hits.slice(0, Math.max(0, limit));
+}
+
+const gridKey = (col, row) => `${col},${row}`;
+
+// Сетка источников для запроса по точке: каждый источник лежит во всех
+// клетках, которые задевает квадрат его радиуса. Запрос читает одну клетку
+// и не обходит все фонари карты
+export function buildLightGrid(lights, cellSize) {
+  const size = cellSize > 0 ? cellSize : 1;
+  const cells = new Map();
+
+  for (const light of lights) {
+    const radius = light.radius || 0;
+    const col0 = Math.floor((light.x - radius) / size);
+    const col1 = Math.floor((light.x + radius) / size);
+    const row0 = Math.floor((light.y - radius) / size);
+    const row1 = Math.floor((light.y + radius) / size);
+
+    for (let row = row0; row <= row1; row += 1) {
+      for (let col = col0; col <= col1; col += 1) {
+        const key = gridKey(col, row);
+
+        if (!cells.has(key)) {
+          cells.set(key, []);
+        }
+
+        cells.get(key).push(light);
+      }
+    }
+  }
+
+  return { cellSize: size, cells };
+}
+
+// источники клетки сетки, в которую попала точка
+export function queryLightGrid(grid, x, y) {
+  if (!grid) {
+    return [];
+  }
+
+  const col = Math.floor(x / grid.cellSize);
+  const row = Math.floor(y / grid.cellSize);
+
+  return grid.cells.get(gridKey(col, row)) || [];
+}
+
+// Клин тени предмета в лучах: предмет — круг `(cx, cy, radius)`, источник —
+// точка `(lx, ly)`. Четырёхугольник от точек касания до дальности `reach`
+// от источника: `[x0, y0, …, x3, y3]`. null — источник внутри предмета или
+// предмет дальше `reach`
+export function shadowWedge(lx, ly, cx, cy, radius, reach) {
+  const distance = Math.hypot(cx - lx, cy - ly);
+
+  if (!(radius > 0) || distance <= radius) {
+    return null;
+  }
+
+  const tangent = Math.sqrt(distance * distance - radius * radius);
+
+  if (tangent >= reach) {
+    return null;
+  }
+
+  const angle = Math.atan2(cy - ly, cx - lx);
+  const half = Math.asin(radius / distance);
+  const a0 = angle - half;
+  const a1 = angle + half;
+
+  return [
+    lx + Math.cos(a0) * tangent,
+    ly + Math.sin(a0) * tangent,
+    lx + Math.cos(a0) * reach,
+    ly + Math.sin(a0) * reach,
+    lx + Math.cos(a1) * reach,
+    ly + Math.sin(a1) * reach,
+    lx + Math.cos(a1) * tangent,
+    ly + Math.sin(a1) * tangent,
+  ];
+}
+
+// медленное покачивание лучей фонаря (рад): две медленные синусоиды с
+// фазой от `seed` — у соседних фонарей не синхронно, у одного одинаково
+// на всех клиентах
+export function shaftSway(seed, timeMs, amount) {
+  const t = timeMs / 1000;
+
+  return (
+    amount *
+    (Math.sin(t * 0.37 + seed * 1.7) * 0.6 +
+      Math.sin(t * 0.61 + seed * 4.1) * 0.4)
+  );
+}

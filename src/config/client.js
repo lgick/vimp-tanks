@@ -207,6 +207,30 @@ export default {
           },
         },
         {
+          // ночь: засвет — градиент «край → центр», режется силуэтом танка
+          // или пропа. Регистрирует в сервисе освещения `Map`, `Tank`
+          // берёт его из сервиса
+          name: 'glintTexture',
+          component: 'Map',
+          params: {
+            radius: 32, // полуразмер квадрата
+            strips: 16, // полос градиента
+            blur: 2,
+          },
+        },
+        {
+          // ночь: лучи в воздухе вокруг головы фонаря
+          name: 'lightShaftTexture',
+          component: 'Map',
+          params: {
+            radius: 128, // наибольшая длина луча
+            rays: lighting.shafts.rays,
+            width: 0.05, // полуширина луча на конце, рад
+            seed: 7, // рисунок лучей
+            blur: 3,
+          },
+        },
+        {
           // ночь: конус фары (вершина на фаре, спад по длине)
           name: 'headlightConeTexture',
           component: 'Tank',

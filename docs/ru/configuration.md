@@ -333,10 +333,13 @@
 | `headlights` | Два конуса у живого танка: `length` (мировые единицы), `spread` (полуширина на конце в долях длины), `intensity`, `color`, `offset` (смещение фары от оси корпуса в долях полуширины корпуса). Своего блика у фар нет |
 | `tankGlow` | Слабый свет под каждым живым танком, чтобы враги были различимы: `radius`, `intensity`, `color` |
 | `flash.explosion`, `flash.shot` | Короткие вспышки: `radius`, `intensity`, `duration` (мс), `color` |
+| `glints` | Засвет: аддитивный блик на стороне танка или пропа, обращённой к сильнейшему источнику в его точке, — фонарю, фаре другого танка или вспышке (свои фары танка и свет под корпусом не в счёт). `enabled`, `intensity` (множитель силы источника в точке), `size` (размер блика в долях размера предмета). Градиент режется силуэтом предмета; не больше `maxLights` бликов за тик, предметы вне экрана блика не получают |
+| `shafts` | Лучи в воздухе вокруг каждого фонаря с `head: true`, аддитивно в карте освещённости уровня фонаря: `enabled`, `rays` (лучей в запечённой текстуре), `length` (радиус лучей в долях радиуса фонаря), `intensity`, `shadows` (танки и пропы в лучах вырезают из них тёмные клинья), `maxShadowCasters` (ближайших теней на фонарь). Не больше `maxLights` фонарей с лучами за кадр |
 
-Запечённые текстуры (`parts.bakedAssets.vimp`): `lightRadialTexture` и
-`lampHeadTexture` (компонент `Map`), `headlightConeTexture` (компонент
-`Tank`). Движок отдаёт запечённый ассет только одному компоненту, поэтому
+Запечённые текстуры (`parts.bakedAssets.vimp`): `lightRadialTexture`,
+`lampHeadTexture`, `glintTexture` и `lightShaftTexture` (компонент `Map`),
+`headlightConeTexture` (компонент `Tank`); текстуру засвета `Tank` берёт из
+сервиса (`texture('glint')`). Движок отдаёт запечённый ассет только одному компоненту, поэтому
 сервис получает их через части (`registerTextures` сливает частичный набор);
 текстура головы рисует головы фонарей.
 
@@ -363,7 +366,10 @@
 (счётчик по ключу, маска привязана к владельцу), `setLevelMask` (с `{ roof }`),
 `setVolumeTops`,
 `registerTextures`, `texture`, `addLight`/`updateLight`/`removeLight`,
-`flash`, `addEmissive`/`removeEmissive`, `isNight` и `render`.
+`flash`, `addEmissive`/`removeEmissive`, `isNight`, `lightsAt` (сильнейшие
+источники в мировой точке уровня — фонари через сетку клеток, конусы,
+вспышки), `onScreen`, `setCaster` (предмет, отбрасывающий тень в лучах) и
+`render`.
 
 ### Анимации: `animations`
 

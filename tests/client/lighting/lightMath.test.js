@@ -10,6 +10,13 @@ import {
   lightLevels,
   mapKeyOf,
   projectLight,
+  radialFalloff,
+  lightStrength,
+  selectLights,
+  buildLightGrid,
+  queryLightGrid,
+  shadowWedge,
+  shaftSway,
 } from '../../../src/client/lighting/lightMath.js';
 import { cellOfPoint } from '../../../src/client/parts/map/tileGrid.js';
 
@@ -180,5 +187,142 @@ describe('lightMath: уровни источника на рампе', () => {
 
   it('в полёте — уровень отрисовки', () => {
     expect(lightLevels(1, 0.4, true)).toEqual([0]);
+  });
+});
+
+describe('lightMath: сила источника в точке (засвет)', () => {
+  it('спад пятна — (1 − t)², ноль на краю и за ним', () => {
+    expect(radialFalloff(0, 100)).toBe(1);
+    expect(radialFalloff(50, 100)).toBeCloseTo(0.25);
+    expect(radialFalloff(100, 100)).toBe(0);
+    expect(radialFalloff(150, 100)).toBe(0);
+    expect(radialFalloff(10, 0)).toBe(0);
+  });
+
+  it('радиальный источник: сила · спад по расстоянию', () => {
+    const lamp = { kind: 'radial', x: 0, y: 0, radius: 100, intensity: 0.8 };
+
+    expect(lightStrength(lamp, 50, 0)).toBeCloseTo(0.2);
+    expect(lightStrength(lamp, 0, 120)).toBe(0);
+  });
+
+  it('конус светит только вперёд и внутри клина', () => {
+    const cone = {
+      kind: 'cone',
+      x: 0,
+      y: 0,
+      radius: 100,
+      spread: 0.5,
+      rotation: 0,
+      intensity: 1,
+    };
+
+    expect(lightStrength(cone, 50, 0)).toBeGreaterThan(0);
+    // позади фары
+    expect(lightStrength(cone, -10, 0)).toBe(0);
+    // вне клина: полуширина на 50 — 25
+    expect(lightStrength(cone, 50, 30)).toBe(0);
+    // дальше луча
+    expect(lightStrength(cone, 120, 0)).toBe(0);
+    // к краю клина слабее, чем на оси
+    expect(lightStrength(cone, 50, 20)).toBeLessThan(lightStrength(cone, 50, 0));
+  });
+
+  it('поворот конуса поворачивает клин', () => {
+    const cone = {
+      kind: 'cone',
+      x: 0,
+      y: 0,
+      radius: 100,
+      rotation: Math.PI / 2,
+      intensity: 1,
+    };
+
+    expect(lightStrength(cone, 0, 50)).toBeGreaterThan(0);
+    expect(lightStrength(cone, 50, 0)).toBe(0);
+  });
+
+  it('отбор: сильнейшие первыми, с множителем и направлением на источник', () => {
+    const near = { kind: 'radial', x: 10, y: 0, radius: 100, color: 0xff0000 };
+    const far = { kind: 'radial', x: 0, y: -60, radius: 100 };
+    const dark = { kind: 'radial', x: 500, y: 0, radius: 100 };
+    const hits = selectLights(
+      [
+        { light: far, factor: 1 },
+        { light: near, factor: 1 },
+        { light: dark, factor: 1 },
+      ],
+      0,
+      0,
+      5,
+    );
+
+    expect(hits.map(hit => hit.light)).toEqual([near, far]);
+    expect(hits[0].angle).toBeCloseTo(0);
+    expect(hits[1].angle).toBeCloseTo(-Math.PI / 2);
+    expect(hits[0].color).toBe(0xff0000);
+    expect(hits[1].color).toBe(0xffffff);
+
+    // мерцание гасит источник целиком, лимит режет список
+    expect(selectLights([{ light: near, factor: 0 }], 0, 0, 1)).toEqual([]);
+    expect(
+      selectLights(
+        [
+          { light: near, factor: 1 },
+          { light: far, factor: 1 },
+        ],
+        0,
+        0,
+        1,
+      ),
+    ).toHaveLength(1);
+  });
+});
+
+describe('lightMath: сетка фонарей', () => {
+  it('фонарь лежит во всех клетках квадрата своего радиуса', () => {
+    const lamp = { x: 150, y: 150, radius: 100 };
+    const grid = buildLightGrid([lamp], 100);
+
+    expect(queryLightGrid(grid, 60, 60)).toEqual([lamp]);
+    expect(queryLightGrid(grid, 240, 240)).toEqual([lamp]);
+    expect(queryLightGrid(grid, 350, 150)).toEqual([]);
+  });
+
+  it('пустая сетка и её отсутствие — пустой ответ', () => {
+    expect(queryLightGrid(buildLightGrid([], 50), 0, 0)).toEqual([]);
+    expect(queryLightGrid(undefined, 0, 0)).toEqual([]);
+  });
+});
+
+describe('lightMath: клин тени в лучах', () => {
+  it('клин начинается у касательных и уходит до дальности лучей', () => {
+    const wedge = shadowWedge(0, 0, 50, 0, 10, 200);
+
+    expect(wedge).toHaveLength(8);
+
+    const tangent = Math.sqrt(50 * 50 - 10 * 10);
+
+    expect(Math.hypot(wedge[0], wedge[1])).toBeCloseTo(tangent);
+    expect(Math.hypot(wedge[2], wedge[3])).toBeCloseTo(200);
+    expect(Math.hypot(wedge[4], wedge[5])).toBeCloseTo(200);
+    // клин симметричен оси «источник → предмет» и лежит за предметом
+    expect(wedge[3]).toBeCloseTo(-wedge[5]);
+    expect(wedge[2]).toBeGreaterThan(50);
+    // полуугол — asin(r / d)
+    expect(Math.atan2(wedge[5], wedge[4])).toBeCloseTo(Math.asin(10 / 50));
+  });
+
+  it('источник внутри предмета или предмет дальше лучей — клина нет', () => {
+    expect(shadowWedge(0, 0, 5, 0, 10, 200)).toBeNull();
+    expect(shadowWedge(0, 0, 300, 0, 10, 200)).toBeNull();
+    expect(shadowWedge(0, 0, 50, 0, 0, 200)).toBeNull();
+  });
+
+  it('покачивание лучей мало, детерминировано и разное у соседей', () => {
+    expect(Math.abs(shaftSway(1, 12345, 0.08))).toBeLessThanOrEqual(0.08);
+    expect(shaftSway(1, 12345, 0.08)).toBe(shaftSway(1, 12345, 0.08));
+    expect(shaftSway(1, 12345, 0.08)).not.toBe(shaftSway(2, 12345, 0.08));
+    expect(shaftSway(3, 500, 0)).toBeCloseTo(0);
   });
 });

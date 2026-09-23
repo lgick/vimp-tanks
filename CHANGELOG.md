@@ -193,6 +193,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   surface fields `boostTime` and `boostSpeedFactor` raise the tank's speed
   ceiling and cancel the linear damping for that long after the push; the
   client prediction replays it. Map bodies get the push only.
+- Night maps: glints and light shafts (`lighting.glints`, `lighting.shafts`
+  in `src/config/render.js`). A tank or prop lit by a lamp, another tank's
+  headlight or a flash gets an additive highlight on the side facing the
+  light, clipped to its silhouette. Lamps with `head: true` get swaying
+  light shafts in the air, and tanks and props standing in them cut shadow
+  wedges out of the shafts. New baked textures `glintTexture` and
+  `lightShaftTexture`; new `lighting` service methods `lightsAt`,
+  `onScreen` and `setCaster`. Render only.
 
 ### Changed
 

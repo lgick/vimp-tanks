@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Assets, Container, Texture } from 'pixi.js';
+import { Assets, Container, Texture, Ticker } from 'pixi.js';
 import Map from '../../../../src/client/parts/Map.js';
 import { createLevelView } from '../../../../src/client/levelView.js';
+import { createLighting } from '../../../../src/client/lighting/createLighting.js';
 import { seeThrough } from '../../../../src/config/render.js';
 import {
   C_Z,
@@ -465,5 +466,118 @@ describe('MapObject: динамическое тело карты', () => {
       // ушёл и сам парт, и его разлёт
       expect(stage.children.length).toBe(children - 2);
     });
+  });
+});
+
+describe('MapObject: засвет и тень в лучах (ночь)', () => {
+  const screenRenderer = { screen: { width: 800, height: 600 } };
+
+  const flush = async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+    }
+  };
+
+  const propRow = (x, y, state = 0) => {
+    const row = [x, y, 0, 0, 0, 0, 0, 0, 0];
+
+    row[C_Z] = 0;
+    row[C_LEVEL] = 0;
+    row[C_STATE] = state;
+
+    return row;
+  };
+
+  // фонарь в клетке [21, 15] (центр 688, 496): ящик 640..704 × 480..544
+  const makeLitProp = async ({ night = true } = {}) => {
+    load.mockImplementation(() => Promise.resolve(Texture.WHITE));
+
+    const service = createLighting();
+    const levelView = createLevelView(seeThrough);
+    const stage = new Container();
+
+    stage.position.set(400 - 672, 300 - 512);
+    service.registerTextures({
+      glint: { texture: Texture.WHITE, contentSize: 64 },
+    });
+    service.acquireMap(
+      'k',
+      { night, lamps: [{ cell: [21, 15], radius: 120, color: 0xffc070 }] },
+      32,
+      1,
+    );
+
+    const part = new Map(
+      dynamicData,
+      {},
+      {
+        renderer: screenRenderer,
+        assetsBase: '/build/',
+        levelView,
+        lighting: service,
+      },
+    );
+
+    stage.addChild(part);
+    service.attachStage(stage, screenRenderer);
+    await flush();
+    part.update(propRow(640, 480));
+
+    return { part, mode: part._mode, service };
+  };
+
+  const step = part => {
+    Ticker.shared.lastTime += 16;
+    part._onRender();
+  };
+
+  it('проп под фонарём получает блик по своему силуэту', async () => {
+    const { part, mode } = await makeLitProp();
+
+    step(part);
+
+    const { sprite, mask } = mode._glint;
+
+    expect(sprite.visible).toBe(true);
+    expect(sprite.blendMode).toBe('add');
+    expect(sprite.mask).toBe(mask);
+    expect(mask.texture).toBe(mode.sprite.texture);
+    expect(mask.rotation).toBe(mode.sprite.rotation);
+    expect(sprite.tint).toBe(0xffc070);
+    // центр тела (672, 512), фонарь (688, 496): вправо-вверх
+    expect(sprite.rotation).toBeCloseTo(-Math.PI / 4);
+  });
+
+  it('днём блика нет', async () => {
+    const { part, mode } = await makeLitProp({ night: false });
+
+    step(part);
+
+    expect(mode._glint).toBeNull();
+  });
+
+  it('целый проп — тень в лучах, копоть — нет, destroy снимает', async () => {
+    const { part, mode, service } = await makeLitProp();
+    const setCaster = vi.spyOn(service, 'setCaster');
+
+    step(part);
+
+    expect(setCaster).toHaveBeenLastCalledWith(mode, {
+      x: 672,
+      y: 512,
+      z: 0,
+      level: 0,
+      radius: Math.hypot(64, 64) / 2,
+    });
+
+    part.update(propRow(640, 480, 2));
+    step(part);
+
+    expect(setCaster).toHaveBeenLastCalledWith(mode, null);
+    expect(mode._glint.sprite.visible).toBe(false);
+
+    part.destroy();
+
+    expect(setCaster).toHaveBeenLastCalledWith(mode, null);
   });
 });

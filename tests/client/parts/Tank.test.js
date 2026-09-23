@@ -1782,3 +1782,124 @@ describe('Tank: фары (lighting)', () => {
     expect(typeof tank._onRender).toBe('function');
   });
 });
+
+describe('Tank: засвет (lighting.glints) и тень в лучах', () => {
+  const renderer = { screen: { width: 800, height: 600 } };
+  const glintAsset = () => ({ texture: sized(72, 72), contentSize: 64 });
+
+  // m1: [x, y, angle, gun, vx, vy, load, condition, size, team, angvel, z, level]
+  const row = (condition = 100) => [0, 0, 0, 0, 0, 0, 0, condition, 10, 1, 0, 0, 0];
+
+  // фонарь в клетке [1, 1] (центр 48, 48): танк в нуле — внутри радиуса
+  const setupNight = ({ night = true, glint = true } = {}) => {
+    const service = createLighting();
+    const stage = new Container();
+
+    stage.position.set(400, 300);
+    service.registerTextures(glint ? { glint: glintAsset() } : {});
+    service.acquireMap(
+      'k',
+      { night, lamps: [{ cell: [1, 1], radius: 100, color: 0xffc070 }] },
+      32,
+      1,
+    );
+
+    const tank = new Tank(row(), assets, {
+      soundManager: makeSoundManager(),
+      lighting: service,
+      renderer,
+    });
+
+    stage.addChild(tank);
+
+    return { service, tank };
+  };
+
+  const step = tank => {
+    Ticker.shared.lastTime += 16;
+    tank._updateView();
+  };
+
+  it('танк под фонарём получает блик к фонарю, обрезанный силуэтом', () => {
+    const { tank } = setupNight();
+
+    step(tank);
+
+    const { sprite, mask } = tank._glint;
+
+    expect(sprite.visible).toBe(true);
+    expect(sprite.blendMode).toBe('add');
+    expect(sprite.mask).toBe(mask);
+    expect(mask.texture).toBe(tank.body.texture);
+    expect(sprite.tint).toBe(0xffc070);
+    expect(sprite.alpha).toBeGreaterThan(0);
+    // фонарь справа-снизу, курс 0: блик повёрнут на него
+    expect(sprite.rotation).toBeCloseTo(Math.PI / 4);
+    // блик — поверх корпуса
+    expect(tank.children[tank.children.length - 1]).toBe(sprite);
+  });
+
+  it('днём и без текстуры блика нет вовсе', () => {
+    const day = setupNight({ night: false });
+
+    step(day.tank);
+    expect(day.tank._glint).toBeNull();
+
+    const bare = setupNight({ glint: false });
+
+    step(bare.tank);
+    expect(bare.tank._glint).toBeNull();
+  });
+
+  it('вне света блик прячется', () => {
+    const { tank } = setupNight();
+
+    step(tank);
+    tank.update([400, 400, 0, 0, 0, 0, 0, 100, 10, 1, 0, 0, 0]);
+    step(tank);
+
+    expect(tank._glint.sprite.visible).toBe(false);
+  });
+
+  it('свои фары блика не дают', () => {
+    const { service, tank } = setupNight();
+    const lightsAt = vi.spyOn(service, 'lightsAt');
+
+    step(tank);
+
+    const exclude = lightsAt.mock.calls[0][4];
+
+    expect(exclude).toContain(tank._headlights.cones[0]);
+    expect(exclude).toContain(tank._headlights.cones[1]);
+  });
+
+  it('танк — тень в лучах; destroy снимает её', () => {
+    const { service, tank } = setupNight();
+    const setCaster = vi.spyOn(service, 'setCaster');
+
+    step(tank);
+
+    expect(setCaster).toHaveBeenLastCalledWith(tank, {
+      x: 0,
+      y: 0,
+      z: 0,
+      level: 0,
+      radius: 20,
+    });
+
+    tank.destroy();
+
+    expect(setCaster).toHaveBeenLastCalledWith(tank, null);
+  });
+
+  it('колбэк onRender зарегистрирован и ведёт засвет', () => {
+    const { tank } = setupNight();
+
+    expect(typeof tank._onRender).toBe('function');
+
+    Ticker.shared.lastTime += 16;
+    tank._onRender();
+
+    expect(tank._glint.sprite.visible).toBe(true);
+  });
+});

@@ -3,7 +3,10 @@ import { degToRad } from 'vimp-engine/lib/math.js';
 import { levelZ, renderLevel } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
-import { parallax as parallaxConfig } from '../../../config/render.js';
+import {
+  lighting as lightingConfig,
+  parallax as parallaxConfig,
+} from '../../../config/render.js';
 import { baseScale } from './tileGrid.js';
 import DebrisEffect from '../effects/DebrisEffect.js';
 import {
@@ -45,6 +48,13 @@ export default class MapObject {
 
     // где локальный игрок (сервис игры, src/client/levelView.js)
     this._levelView = dependencies.levelView || null;
+
+    // ночь (src/client/lighting/): засвет пропа и его тень в лучах фонарей.
+    // `_glint` — `{ sprite, mask }`, заводится на первом кадре ночи
+    this._lighting = dependencies.lighting?.enabled
+      ? dependencies.lighting
+      : null;
+    this._glint = null;
 
     // масштаб карты держим числами: у тела сам контейнер несёт `data.scale`,
     // а в мир переводит базовый масштаб, а не текущий (его каждый кадр
@@ -143,6 +153,9 @@ export default class MapObject {
       return;
     }
 
+    this._updateGlint();
+    this._updateCaster();
+
     const container = this._container;
 
     container.alpha = this._levelView.alphaFor(
@@ -222,6 +235,102 @@ export default class MapObject {
   // база zIndex по состоянию: обломки лежат под танками
   _drawLayer() {
     return this._state === STATE_DESTROYED ? DESTROYED_LAYER : this._layer;
+  }
+
+  // целое тело (не копоть): только оно ловит засвет и бросает тень
+  _standing() {
+    return this._state !== STATE_DESTROYED || Boolean(this._destroyedUrl);
+  }
+
+  // Засвет: блик на стороне тела, обращённой к сильнейшему источнику.
+  // Градиент `glintTexture` режется маской — копией спрайта тела; блик
+  // ложится по центру тела поверх него
+  _updateGlint() {
+    const glints = lightingConfig.glints;
+    const asset = this._lighting?.texture('glint');
+    // строка кадра везёт угол тела: свет меряется от его центра
+    const center = this._localCenter();
+    const worldX = center.x * this._baseScale.x;
+    const worldY = center.y * this._baseScale.y;
+    const reach = Math.max(
+      this._width * this._baseScale.x,
+      this._height * this._baseScale.y,
+    );
+    const hit =
+      glints?.enabled &&
+      asset &&
+      this.sprite.visible &&
+      this._standing() &&
+      this._lighting.isNight() &&
+      this._lighting.onScreen(worldX, worldY, this._z, reach)
+        ? this._lighting.lightsAt(worldX, worldY, this._level, 1)[0]
+        : null;
+
+    if (!hit) {
+      if (this._glint) {
+        this._glint.sprite.visible = false;
+      }
+
+      return;
+    }
+
+    if (!this._glint) {
+      const sprite = new Sprite(asset.texture);
+      const mask = new Sprite();
+
+      sprite.anchor.set(0.5);
+      sprite.blendMode = 'add';
+      sprite.mask = mask;
+      this._container.addChild(mask, sprite);
+      this._glint = { sprite, mask };
+    }
+
+    const { sprite, mask } = this._glint;
+    const body = this.sprite;
+
+    // маска повторяет спрайт тела: текстура состояния, габариты и поворот
+    mask.texture = body.texture;
+    mask.position.copyFrom(body.position);
+    mask.scale.copyFrom(body.scale);
+    mask.rotation = body.rotation;
+
+    sprite.texture = asset.texture;
+    sprite.visible = true;
+    sprite.position.set(center.x, center.y);
+    sprite.rotation = hit.angle;
+    sprite.scale.set(
+      (Math.max(this._width, this._height) * glints.size) / asset.contentSize,
+    );
+    sprite.tint = hit.color;
+    sprite.alpha = Math.min(1, glints.intensity * hit.strength);
+  }
+
+  // тень тела в лучах фонарей: круг с полудиагональю тела вокруг центра.
+  // Копоть тени не бросает
+  _updateCaster() {
+    if (!this._lighting) {
+      return;
+    }
+
+    if (!this._standing()) {
+      this._lighting.setCaster(this, null);
+
+      return;
+    }
+
+    const local = this._localCenter();
+
+    this._lighting.setCaster(this, {
+      x: local.x * this._baseScale.x,
+      y: local.y * this._baseScale.y,
+      z: this._z,
+      level: this._level,
+      radius:
+        Math.hypot(
+          this._width * this._baseScale.x,
+          this._height * this._baseScale.y,
+        ) / 2,
+    });
   }
 
   // картинка и порядок отрисовки состояния
@@ -376,6 +485,11 @@ export default class MapObject {
     }
 
     this._effects.clear();
+    // тень в лучах — состояние сессии сервиса освещения; блик и маска —
+    // дети контейнера, их снимет `super.destroy` парта
+    this._lighting?.setCaster(this, null);
+    this._lighting = null;
+    this._glint = null;
     this.sprite = null;
     this._scorch = null;
     this._baseTexturePromise = null;

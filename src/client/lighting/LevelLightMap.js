@@ -38,6 +38,9 @@ const WHITE = 0xffffff;
 //           маска этажа цвета `ambient` в проекции уровня, затем источники.
 //           Вне этажа карта остаётся белой, и уровень 0 не темнеет дважды.
 //
+// Над источниками — лучи фонарей в воздухе (`layoutShafts`) с просветами-
+// тенями предметов.
+//
 // Поверх источников — вершины объёмов уровня (`setTops`): прямоугольники
 // клеток цвета `ambient` в проекции `(L + volume) · shear`. Боковые грани
 // остаются освещёнными, верх стены фары наземного танка не ловит.
@@ -74,6 +77,13 @@ export default class LevelLightMap {
 
     this.lights = new Container();
     this.overlay.addChild(this.lights);
+
+    // лучи фонарей в воздухе: по контейнеру на фонарь — спрайт лучей и
+    // клинья теней предметов. Тени — ИНВЕРСНАЯ стенсил-маска контейнера:
+    // гасят только лучи своего фонаря, пятно на земле и полумрак не трогают
+    this.shafts = new Container();
+    this.overlay.addChild(this.shafts);
+    this.shaftPool = [];
 
     // вершины объёмов: по графике на высоту объёма, `{ graphics, volume }`
     this.tops = new Container();
@@ -206,6 +216,74 @@ export default class LevelLightMap {
     }
   }
 
+  // раскладка лучей кадра: `items` — `{ texture, x, y, scale, rotation,
+  // color, alpha, shadows }`, где `shadows` — клинья теней
+  // `[[x0, y0, …], …]` в тех же нарисованных координатах
+  layoutShafts(items) {
+    while (this.shaftPool.length < items.length) {
+      const container = new Container();
+      const sprite = new Sprite();
+      const shadow = new Graphics();
+
+      sprite.anchor.set(0.5);
+      sprite.blendMode = 'add';
+      container.addChild(sprite, shadow);
+      this.shafts.addChild(container);
+      this.shaftPool.push({ container, sprite, shadow, masked: false });
+    }
+
+    for (let i = 0; i < this.shaftPool.length; i += 1) {
+      const entry = this.shaftPool[i];
+      const item = items[i];
+
+      if (!item) {
+        entry.container.visible = false;
+        continue;
+      }
+
+      const { container, sprite, shadow } = entry;
+      const shadows = item.shadows || [];
+
+      container.visible = true;
+      sprite.texture = item.texture;
+      sprite.position.set(item.x, item.y);
+      sprite.scale.set(item.scale);
+      sprite.rotation = item.rotation;
+      sprite.tint = item.color;
+      sprite.alpha = item.alpha;
+
+      shadow.clear();
+
+      for (const polygon of shadows) {
+        shadow.poly(polygon);
+      }
+
+      if (shadows.length) {
+        shadow.fill(WHITE);
+      }
+
+      // маска ставится и снимается только на смене: без теней стенсил не
+      // нужен вовсе
+      const masked = shadows.length > 0;
+
+      if (masked !== entry.masked) {
+        entry.masked = masked;
+
+        if (masked) {
+          container.setMask({ mask: shadow, inverse: true });
+        } else {
+          container.mask = null;
+          // снятая маска возвращает графике отрисовку: пустая она невидима
+          shadow.visible = false;
+        }
+      }
+
+      if (masked) {
+        shadow.visible = true;
+      }
+    }
+  }
+
   // Освобождение: сначала со сцены, потом ресурсы. Текстуры источников —
   // общие запечённые ассеты, их не трогаем
   destroy() {
@@ -221,6 +299,13 @@ export default class LevelLightMap {
     }
 
     this.pool = [];
+
+    for (const entry of this.shaftPool) {
+      entry.container.mask = null;
+      entry.sprite.texture = null;
+    }
+
+    this.shaftPool = [];
     this.topGroups = [];
 
     overlay.destroy({ children: true, texture: false, textureSource: false });

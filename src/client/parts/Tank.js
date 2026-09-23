@@ -342,6 +342,11 @@ export default class Tank extends Container {
     // { cones: [левая, правая], glow }; null — фары выключены
     this._headlights = null;
 
+    // засвет (`lighting.glints`): `{ sprite, mask }` — градиент к источнику,
+    // обрезанный силуэтом корпуса. Заводится на первом кадре ночи, днём и
+    // без сервиса его нет вовсе
+    this._glint = null;
+
     if (this._lighting && assets.headlightConeTexture) {
       this._lighting.registerTextures({ cone: assets.headlightConeTexture });
     }
@@ -1116,6 +1121,98 @@ export default class Tank extends Container {
     this._applyModel(camera);
 
     this._updateShadow(camera);
+    this._updateGlint();
+    this._updateCaster();
+  }
+
+  // Засвет: блик на стороне корпуса, обращённой к сильнейшему чужому
+  // источнику (фонарь, фара другого танка, вспышка). Градиент
+  // `glintTexture` режется маской — спрайтом с текстурой корпуса (или
+  // остова) в тех же габаритах; блик — последний ребёнок, поверх модели
+  _updateGlint() {
+    const glints = lightingConfig.glints;
+    const asset = this._lighting?.texture('glint');
+    const zScale = 1 + this._viewZ() * parallaxConfig.shear;
+    const reach = this._size * 2 * zScale;
+    const hit =
+      glints?.enabled &&
+      asset &&
+      this._lighting.isNight() &&
+      this._lighting.onScreen(this._worldX, this._worldY, this._viewZ(), reach)
+        ? this._lighting.lightsAt(
+            this._worldX,
+            this._worldY,
+            this._level,
+            1,
+            this._headlights
+              ? [...this._headlights.cones, this._headlights.glow]
+              : null,
+          )[0]
+        : null;
+
+    if (!hit) {
+      if (this._glint) {
+        this._glint.sprite.visible = false;
+      }
+
+      return;
+    }
+
+    if (!this._glint) {
+      const sprite = new Sprite(asset.texture);
+      const mask = new Sprite();
+
+      sprite.anchor.set(0.5);
+      sprite.blendMode = 'add';
+      sprite.mask = mask;
+      this.addChild(mask, sprite);
+      this._glint = { sprite, mask };
+    }
+
+    const { sprite, mask } = this._glint;
+    const dead = this._condition === 0;
+    const source = dead ? this.wreck : this.body;
+    const anchor = dead ? this._wreckAnchor : this._bodyAnchor;
+    const size = this._scaleFactor * zScale;
+
+    // модель могла лечь поверх после `_showModel`
+    if (this.children[this.children.length - 1] !== sprite) {
+      this.addChild(sprite);
+    }
+
+    mask.texture = source.texture;
+    mask.anchor.set(anchor.x, anchor.y);
+    mask.position.copyFrom(source.position);
+    mask.scale.set(size, size * (1 - this._squash));
+
+    sprite.texture = asset.texture;
+    sprite.visible = true;
+    sprite.position.copyFrom(source.position);
+    sprite.rotation = hit.angle - this.rotation;
+    sprite.scale.set(
+      (Math.max(source.texture.width, source.texture.height) *
+        size *
+        glints.size) /
+        asset.contentSize,
+    );
+    sprite.tint = hit.color;
+    sprite.alpha = Math.min(1, glints.intensity * hit.strength);
+  }
+
+  // тень корпуса в лучах фонарей (`lighting.shafts.shadows`): танк —
+  // круг с полудиагональю корпуса
+  _updateCaster() {
+    if (!this._lighting) {
+      return;
+    }
+
+    this._lighting.setCaster(this, {
+      x: this._worldX,
+      y: this._worldY,
+      z: this._z,
+      level: this._level,
+      radius: this._size * 2,
+    });
   }
 
   // атлас модели своей команды; null — модель выключена или атласа нет
@@ -1392,8 +1489,13 @@ export default class Tank extends Container {
   destroy(options) {
     this.destroySounds();
 
-    // источники света — состояние сессии сервиса: снимает их владелец
+    // источники света и тень в лучах — состояние сессии сервиса: снимает
+    // их владелец
     this._removeLights();
+    this._lighting?.setCaster(this, null);
+
+    // маска и блик — дети танка, их снимет `super.destroy`
+    this._glint = null;
 
     // тень движок не создавал и не уберёт: она сиблинг на сцене
     if (this._shadow) {

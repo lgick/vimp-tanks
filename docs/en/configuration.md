@@ -339,10 +339,13 @@ is drawn — [architecture.md](architecture.md#lighting-night).
 | `headlights` | Two cones per live tank: `length` (world units), `spread` (half-width at the far end as a share of the length), `intensity`, `color`, `offset` (headlight offset from the hull axis as a share of the hull half-width). The headlights have no glare sprite of their own |
 | `tankGlow` | A faint light under every live tank so enemies stay readable: `radius`, `intensity`, `color` |
 | `flash.explosion`, `flash.shot` | Short flashes: `radius`, `intensity`, `duration` (ms), `color` |
+| `glints` | Glint: an additive highlight on the side of a tank or prop facing the strongest source at it — a lamp, another tank's headlight or a flash (a tank's own headlights and every tank glow do not count). `enabled`, `intensity` (multiplier of the source's strength at the point), `size` (highlight size as a share of the object's size). The gradient is clipped by the object's silhouette; at most `maxLights` glints per tick, off-screen objects get none |
+| `shafts` | Light shafts in the air around every lamp with `head: true`, drawn additively into the lamp level's light map: `enabled`, `rays` (rays baked into the texture), `length` (shaft radius as a share of the lamp radius), `intensity`, `shadows` (tanks and props in the shafts cut dark wedges out of them), `maxShadowCasters` (nearest shadows per lamp). At most `maxLights` lamps with shafts per frame |
 
-Baked textures (`parts.bakedAssets.vimp`): `lightRadialTexture` and
-`lampHeadTexture` (component `Map`), `headlightConeTexture` (component
-`Tank`). The engine hands a baked asset to one component only, so the
+Baked textures (`parts.bakedAssets.vimp`): `lightRadialTexture`,
+`lampHeadTexture`, `glintTexture` and `lightShaftTexture` (component `Map`),
+`headlightConeTexture` (component `Tank`); `Tank` takes the glint texture
+from the service (`texture('glint')`). The engine hands a baked asset to one component only, so the
 service receives them through the parts (`registerTextures` merges a partial
 set); the head texture draws the lamp heads.
 
@@ -369,7 +372,10 @@ The service (`componentDependencies.lighting`: `Map`, `Tank`,
 `acquireMap`/`releaseMap` (per-key counter, owner-bound mask),
 `setLevelMask` (with `{ roof }`), `setVolumeTops`, `registerTextures`, `texture`,
 `addLight`/`updateLight`/`removeLight`, `flash`,
-`addEmissive`/`removeEmissive`, `isNight` and `render`.
+`addEmissive`/`removeEmissive`, `isNight`, `lightsAt` (the strongest
+sources at a world point of a level — lamps through a cell grid, cones,
+flashes), `onScreen`, `setCaster` (an object casting a shadow in the
+shafts) and `render`.
 
 ### Animations: `animations`
 
