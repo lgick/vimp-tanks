@@ -1004,6 +1004,23 @@ impl Predictor {
 
         if self.level_state.input_locked() {
             self.engine_load = 0.0;
+
+            // спад остатка скользкой поверхности в полёте — зеркало хоста
+            if let (Some(map), Some(shape)) = (&self.surface_map, &self.shape) {
+                surface::apply_slick(
+                    map,
+                    &self.surface_rules,
+                    &mut self.level_state,
+                    self.state.x,
+                    self.state.y,
+                    self.state.angle,
+                    shape.half_w,
+                    shape.half_h,
+                    SurfaceMix::NEUTRAL,
+                    dt,
+                );
+            }
+
             self.pre_step_sets(dt);
             self.resolve_world(dt);
             self.integrate(damping.0, damping.1, dt);
@@ -1033,6 +1050,22 @@ impl Predictor {
                 shape.half_h,
             ),
             _ => SurfaceMix::NEUTRAL,
+        };
+        // остаток масла после съезда — тот же вызов, что у хоста
+        let mix = match (&self.surface_map, &self.shape) {
+            (Some(map), Some(shape)) => surface::apply_slick(
+                map,
+                &self.surface_rules,
+                &mut self.level_state,
+                self.state.x,
+                self.state.y,
+                self.state.angle,
+                shape.half_w,
+                shape.half_h,
+                mix,
+                dt,
+            ),
+            _ => mix,
         };
         let (start_vx, start_vy, start_angvel) = (self.state.vx, self.state.vy, self.state.angvel);
 
@@ -1672,7 +1705,7 @@ mod tests {
                     "sand": { "accel": 0.6, "maxSpeed": 0.55, "drag": 1.2, "grip": 1.0, "brake": 1.0, "turn": 0.8 },
                     "mud": { "accel": 0.45, "maxSpeed": 0.4, "drag": 2.0, "grip": 0.9, "brake": 1.0, "turn": 0.7 },
                     "water": { "accel": 0.7, "maxSpeed": 0.6, "drag": 1.5, "grip": 0.8, "brake": 0.8, "turn": 0.85 },
-                    "oil": { "accel": 0.35, "maxSpeed": 1.0, "drag": 0.0, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5 },
+                    "oil": { "accel": 0.35, "maxSpeed": 1.0, "drag": 0.0, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5, "slickTime": 1.5 },
                     "conveyor": { "belt": 60 },
                     "boost": { "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20 }
                 }
@@ -4086,6 +4119,83 @@ mod parity {
         let traced = simulate_traced(&map, pose(250.0, 320.0, 0.0, 200.0, 0.0), 0, 120, &[(0, mask)]);
 
         expect_traced(&traced);
+    }
+
+    // масло по x < 320, дальше асфальт: поворот начинается на пятне и
+    // продолжается на остатке после съезда
+    #[test]
+    fn oil_exit_turn_keeps_residue_in_parity() {
+        let cfg = core_config();
+        let map = surface_map(|x, _| if x < 10 { 44 } else { 0 });
+        let traced = simulate_traced(&map, pose(250.0, 320.0, 0.0, 200.0, 0.0), 0, 200, &[
+            (0, key_bit(&cfg, "forward")),
+            (30, key_bit(&cfg, "forward") | key_bit(&cfg, "right")),
+        ]);
+
+        expect_traced(&traced);
+    }
+
+    // реконсиляция на кадре после съезда: история уровня хранит остаток, и
+    // реплей воспроизводит тот же спад, что хост
+    #[test]
+    fn oil_residue_reconcile_rewinds_the_timer() {
+        const TOTAL: usize = 90;
+
+        let cfg = core_config();
+        let map = surface_map(|x, _| if x < 10 { 44 } else { 0 });
+        let start = Pose { angvel: 0.5, ..pose(300.0, 320.0, 0.3, 250.0, 0.0) };
+        let mut game = GameState::new(engine_config(), &cfg);
+
+        game.load_map(&map).unwrap();
+        game.spawn_actor(1, "m1", 1, start.x, start.y, 0.0).unwrap();
+
+        {
+            let body = &mut game.world.bodies[game.sim.tanks[&1].body];
+
+            body.set_rotation(Rotation::new(start.angle), true);
+            body.set_linvel(Vector::new(start.vx, start.vy), true);
+            body.set_angvel(start.angvel, true);
+        }
+
+        let mut host = Vec::new();
+        let mut slick = Vec::new();
+
+        for i in 0..=TOTAL {
+            if i > 0 {
+                game.step(DT);
+            }
+
+            let tank = &game.sim.tanks[&1];
+
+            host.push(tank.prediction_state(&game.world.bodies[tank.body]).0);
+            slick.push(tank.level_state.slick_left);
+        }
+
+        let exit = (1..=TOTAL)
+            .find(|&i| slick[i] > 0.0 && slick[i] < slick[i - 1])
+            .expect("хост обязан съехать с масла");
+
+        assert!(exit + 5 < TOTAL, "съезд в середине прогона: {exit}");
+
+        let local_now = TOTAL as f64 * STEP_MS + STEP_MS * 0.5;
+        let mut p = Predictor::new(STEP_MS, &cfg.player_keys, &cfg.models, cfg.levels, cfg.surfaces.clone());
+
+        p.set_model("m1");
+        p.set_active(true);
+        apply_map(&mut p, &map);
+        p.on_server_state(host[0], false, 0.0, 0.0, local_now);
+
+        let frame = exit + 3;
+
+        p.on_server_state(host[frame], false, frame as f64 * STEP_MS, 0.0, local_now);
+
+        expect_scenario_thresholds(host[TOTAL], p.state);
+        assert!(
+            (p.level_state().slick_left - slick[TOTAL]).abs() < 1e-4,
+            "остаток реплики {} vs хоста {}",
+            p.level_state().slick_left,
+            slick[TOTAL]
+        );
     }
 
     #[test]

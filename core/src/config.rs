@@ -352,6 +352,9 @@ pub struct SurfaceType {
     pub boost_dv: Option<f32>,
     pub boost_max_speed: Option<f32>,
     pub min_entry_speed: Option<f32>,
+    /// Время остатка, с: после съезда с клетки гусеницы ещё столько
+    /// скользят, эффект спадает линейно. `None` — остатка нет.
+    pub slick_time: Option<f32>,
 }
 
 impl Default for SurfaceType {
@@ -368,6 +371,7 @@ impl Default for SurfaceType {
             boost_dv: None,
             boost_max_speed: None,
             min_entry_speed: None,
+            slick_time: None,
         }
     }
 }
@@ -498,6 +502,14 @@ impl SurfaceRules {
                         params.angular_drag, model.damping.angular
                     ));
                 }
+            }
+
+            if let Some(slick_time) = params.slick_time
+                && !(slick_time > 0.0 && slick_time.is_finite())
+            {
+                return Err(format!(
+                    "surfaces.types.{name}.slickTime must be > 0, got {slick_time}"
+                ));
             }
 
             if let SurfaceKind::Boost {
@@ -1282,6 +1294,22 @@ mod validate_tests {
 
         assert!(weaker.validate().is_ok());
         assert!(negative.validate().unwrap_err().contains("angularDrag"));
+    }
+
+    #[test]
+    fn slick_time_parses_and_must_be_positive() {
+        let oil = config_with_surfaces(serde_json::json!({ "types": { "oil": { "grip": 0.08, "slickTime": 1.5 } } }));
+        let plain = config_with_surfaces(serde_json::json!({ "types": { "sand": { "accel": 0.6 } } }));
+
+        assert!(oil.validate().is_ok());
+        assert_eq!(oil.surfaces.types["oil"].slick_time, Some(1.5));
+        assert_eq!(plain.surfaces.types["sand"].slick_time, None);
+
+        for value in [0.0, -1.0] {
+            let bad = config_with_surfaces(serde_json::json!({ "types": { "oil": { "slickTime": value } } }));
+
+            assert!(bad.validate().unwrap_err().contains("slickTime"), "slickTime {value}");
+        }
     }
 
     fn config_with_props(props: serde_json::Value) -> TanksConfig {

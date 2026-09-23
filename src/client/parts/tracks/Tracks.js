@@ -116,6 +116,12 @@ export default class Tracks extends Container {
     // начальная прозрачность следа (от 0 до 1), когда он только появляется
     this._trackInitialAlpha = 0.4;
 
+    // шлейф поверхности с `trail` (масло): после съезда отметки ещё
+    // `trail` секунд её цвета со спадающей альфой. Таймер свой: остаток
+    // ядра есть только у своего танка, у удалённых его не видно
+    this._trailKind = null;
+    this._trailLeft = 0;
+
     this._tickListener = ticker => this._internalUpdate(ticker.deltaMS);
     Ticker.shared.add(this._tickListener);
 
@@ -187,6 +193,8 @@ export default class Tracks extends Container {
       }
     }
 
+    this._stepTrail(deltaMs / 1000);
+
     // текущие скорости
     const deltaX = this._currentX - this._prevX;
     const deltaY = this._currentY - this._prevY;
@@ -256,6 +264,29 @@ export default class Tracks extends Container {
     this._prevAngularSpeed = currentAngularSpeed;
   }
 
+  // таймер шлейфа: на клетке с `trail` взводится полностью, вне её спадает.
+  // Клетка смотрится каждый тик, а не только при отметке: по прямой танк
+  // следов не оставляет, и проезд по маслу иначе не взводил бы шлейф
+  _stepTrail(dt) {
+    if (!this._surfaces) {
+      return;
+    }
+
+    const kind = this._surfaces.kindAt(
+      this._currentX,
+      this._currentY,
+      this._level,
+    );
+    const trail = kind && surfaceFx.tracks[kind]?.trail;
+
+    if (trail) {
+      this._trailKind = kind;
+      this._trailLeft = trail;
+    } else if (this._trailLeft > 0) {
+      this._trailLeft = Math.max(0, this._trailLeft - dt);
+    }
+  }
+
   createTrackMarksAtPreviousPosition() {
     const kind = this._surfaces
       ? this._surfaces.kindAt(this._prevX, this._prevY, this._level)
@@ -265,7 +296,15 @@ export default class Tracks extends Container {
       return;
     }
 
-    const style = (kind && surfaceFx.tracks[kind]) || null;
+    let style = (kind && surfaceFx.tracks[kind]) || null;
+    // доля шлейфа: 1 — на самой поверхности или без шлейфа
+    let fade = 1;
+
+    if (!style && this._trailLeft > 0) {
+      style = surfaceFx.tracks[this._trailKind];
+      fade = this._trailLeft / style.trail;
+    }
+
     const layer = this._markLayer(this._level);
 
     for (let i = -1; i <= 1; i += 2) {
@@ -288,7 +327,8 @@ export default class Tracks extends Container {
         this._prevRotation,
         this._trackWidth,
         this._trackLength,
-        Math.min(1, this._trackInitialAlpha * (style ? style.alpha : 1)),
+        Math.min(1, this._trackInitialAlpha * (style ? style.alpha : 1)) *
+          fade,
         this._assets.trackMarkTexture,
         style ? style.lifetime : 1,
       );

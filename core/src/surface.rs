@@ -419,6 +419,91 @@ pub fn tank_mix(
     }
 }
 
+/// Остаток скользкой поверхности: обновляет таймер состояния уровня и
+/// подтягивает `mix` к параметрам следа. Без следа — `mix` как есть
+/// (нейтральный путь бит-в-бит).
+///
+/// Пока хоть одна точка гусениц стоит на типе с `slickTime`, остаток полный
+/// (из нескольких — наибольший) и `mix` не трогается: он уже скользкий.
+/// После съезда остаток `t = slick_left / slickTime` тянет коэффициенты к
+/// параметрам следа и линейно спадает за `slickTime`. `max_speed`, `drag`
+/// и лента не трогаются. В полёте остаток спадает, но не применяется.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_slick(
+    map: &SurfaceMap,
+    rules: &SurfaceRules,
+    level_state: &mut LevelState,
+    x: f32,
+    y: f32,
+    angle: f32,
+    half_w: f32,
+    half_h: f32,
+    mix: SurfaceMix,
+    dt: f32,
+) -> SurfaceMix {
+    if level_state.airborne() {
+        decay_slick(level_state, dt);
+
+        return mix;
+    }
+
+    let mut on_slick: Option<(u8, f32)> = None;
+
+    for (px, py) in track_points(rules, x, y, angle, half_w, half_h) {
+        let Some((_, k)) = map.cell(level_state.level, px, py) else {
+            continue;
+        };
+        let Some(time) = map.types[k as usize - 1].0.slick_time else {
+            continue;
+        };
+
+        if on_slick.is_none_or(|(_, best)| time > best) {
+            on_slick = Some((k, time));
+        }
+    }
+
+    if let Some((k, time)) = on_slick {
+        level_state.slick_left = time;
+        level_state.slick_type = k;
+
+        return mix;
+    }
+
+    if level_state.slick_left <= 0.0 || level_state.slick_type == 0 {
+        return mix;
+    }
+
+    let params = &map.types[level_state.slick_type as usize - 1].0;
+    let Some(slick_time) = params.slick_time else {
+        return mix;
+    };
+    let t = level_state.slick_left / slick_time;
+    let lerp = |from: f32, to: f32| from + (to - from) * t;
+    let turn = lerp(1.0, params.turn);
+    let out = SurfaceMix {
+        accel_l: mix.accel_l.min(lerp(1.0, params.accel)),
+        accel_r: mix.accel_r.min(lerp(1.0, params.accel)),
+        angular_drag: mix.angular_drag.min(lerp(0.0, params.angular_drag)),
+        grip: mix.grip.min(lerp(1.0, params.grip)),
+        brake: mix.brake.min(lerp(1.0, params.brake)),
+        turn: if params.turn >= 1.0 { mix.turn.max(turn) } else { mix.turn.min(turn) },
+        ..mix
+    };
+
+    decay_slick(level_state, dt);
+
+    out
+}
+
+// спад остатка за шаг; на нуле след забывается
+fn decay_slick(level_state: &mut LevelState, dt: f32) {
+    level_state.slick_left = (level_state.slick_left - dt).max(0.0);
+
+    if level_state.slick_left <= 0.0 {
+        level_state.slick_type = 0;
+    }
+}
+
 /// Поверхность под центром тела карты (ящика, бочки): коэффициенты клетки и
 /// её вид. В полёте и на клетке без поверхности — `(NEUTRAL, Plain)`.
 /// `x`/`y` — ЦЕНТР тела, а не позиция Rapier (угол объекта).
@@ -551,6 +636,7 @@ mod tests {
             "types": {
                 "sand": { "accel": 0.6, "maxSpeed": 0.55, "drag": 1.2 },
                 "mud": { "accel": 0.45, "maxSpeed": 0.4, "drag": 2.0, "grip": 0.9, "turn": 0.7 },
+                "oil": { "accel": 0.35, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5, "slickTime": 1.5 },
                 "conveyor": { "belt": 60 },
                 "boost": { "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20 }
             }
@@ -604,7 +690,7 @@ mod tests {
         .unwrap();
 
         // порядок типов — `BTreeMap`: boost, conveyor, mud, sand
-        assert_eq!(map.type_at(0, center(0, 0).0, 5.0), Some(3));
+        assert_eq!(map.type_at(0, center(0, 0).0, 5.0), Some(4));
         assert_eq!(map.type_at(0, center(1, 0).0, 5.0), Some(0));
         assert_eq!(map.type_at(0, center(2, 0).0, 5.0), None);
         assert_eq!(map.type_at(1, center(0, 0).0, 5.0), None);
@@ -721,6 +807,73 @@ mod tests {
 
         assert_eq!((mix.belt_x, mix.belt_y), (-60.0, 0.0));
         assert_eq!(mix.accel_l, 1.0);
+    }
+
+    // масло в колонках 0..5 (x < 50), дальше асфальт
+    fn oil_patch() -> SurfaceMap {
+        let grid0 = grid(10, 10, |x, _| if x < 5 { 44 } else { 0 });
+
+        build_flat(&grid0, json!({ "0": { "44": "oil", "41": "sand" } })).unwrap()
+    }
+
+    fn slick_step(map: &SurfaceMap, state: &mut LevelState, x: f32, dt: f32) -> SurfaceMix {
+        let rules = rules();
+        let mix = tank_mix(map, &rules, state, x, 50.0, 0.0, 4.0, 3.0);
+
+        apply_slick(map, &rules, state, x, 50.0, 0.0, 4.0, 3.0, mix, dt)
+    }
+
+    #[test]
+    fn oil_residue_fades_linearly_after_leaving() {
+        let map = oil_patch();
+        let mut state = LevelState::default();
+        let on_oil = tank_mix(&map, &rules(), &state, 25.0, 50.0, 0.0, 4.0, 3.0);
+
+        // на масле таймер полный, `mix` — масляный как есть
+        assert_eq!(slick_step(&map, &mut state, 25.0, 0.75), on_oil);
+        assert_eq!(state.slick_left, 1.5);
+        assert_ne!(state.slick_type, 0);
+
+        // первый шаг после съезда — полный остаток, второй — половина
+        let first = slick_step(&map, &mut state, 80.0, 0.75);
+        let half = slick_step(&map, &mut state, 80.0, 0.75);
+
+        assert!((first.grip - 0.08).abs() < 1e-6, "{}", first.grip);
+        assert!((half.grip - (1.0 + (0.08 - 1.0) * 0.5)).abs() < 1e-6, "{}", half.grip);
+        assert!((half.turn - 1.3).abs() < 1e-6, "turn > 1 тянется вверх: {}", half.turn);
+        assert!((half.angular_drag + 0.25).abs() < 1e-6, "{}", half.angular_drag);
+        assert_eq!(half.max_speed, 1.0, "потолок скорости остаток не трогает");
+
+        // через slickTime — асфальт, след забыт
+        assert_eq!(slick_step(&map, &mut state, 80.0, 0.75), SurfaceMix::NEUTRAL);
+        assert_eq!((state.slick_left, state.slick_type), (0.0, 0));
+    }
+
+    #[test]
+    fn surface_without_slick_time_leaves_no_residue() {
+        let grid0 = grid(10, 10, |x, _| if x < 5 { 41 } else { 0 });
+        let map = build_flat(&grid0, json!({ "0": { "41": "sand" } })).unwrap();
+        let mut state = LevelState::default();
+
+        slick_step(&map, &mut state, 25.0, 0.1);
+
+        assert_eq!((state.slick_left, state.slick_type), (0.0, 0));
+        assert_eq!(slick_step(&map, &mut state, 80.0, 0.1), SurfaceMix::NEUTRAL);
+    }
+
+    #[test]
+    fn residue_decays_but_does_not_apply_in_flight() {
+        let map = oil_patch();
+        let mut state = LevelState::default();
+
+        slick_step(&map, &mut state, 25.0, 0.5);
+        state.transit = Transit::Airborne { vz: 0.0, from: 0, to: 0, peak: 0.0 };
+
+        // даже над маслом в полёте таймер не взводится
+        let mix = apply_slick(&map, &rules(), &mut state, 25.0, 50.0, 0.0, 4.0, 3.0, SurfaceMix::NEUTRAL, 0.5);
+
+        assert_eq!(mix, SurfaceMix::NEUTRAL);
+        assert_eq!(state.slick_left, 1.0);
     }
 
     // полоса бустера на восток в колонках 3..6

@@ -202,6 +202,39 @@ describe('Tracks: поверхности', () => {
     plain.destroy();
   });
 
+  it('после съезда с масла шлейф масляных следов спадает за trail', () => {
+    let kind = 'oil';
+    const surfaces = { kindAt: vi.fn(() => kind), dirAt: () => null };
+    const tracks = new Tracks(row(), assets, { renderer, surfaces });
+    const { trail, tint, alpha } = surfaceFx.tracks.oil;
+    const full = Math.min(1, 0.4 * alpha);
+
+    new Container().addChild(tracks);
+
+    // тик на масле взводит шлейф, даже если отметок не было
+    tracks._internalUpdate(16);
+    kind = null;
+    // половина шлейфа
+    tracks._internalUpdate((trail / 2) * 1000);
+    tracks.createTrackMarksAtPreviousPosition();
+
+    const half = marks(tracks).at(-1);
+
+    expect(half.tint).toBe(tint);
+    expect(half.alpha).toBeCloseTo(full * 0.5, 5);
+
+    // шлейф истёк — обычный след
+    tracks._internalUpdate((trail / 2) * 1000);
+    tracks.createTrackMarksAtPreviousPosition();
+
+    const plain = marks(tracks).at(-1);
+
+    expect(plain.tint).toBe(0xffffff);
+    expect(plain.alpha).toBeCloseTo(0.4, 5);
+
+    tracks.destroy();
+  });
+
   it('грязь темнит след', () => {
     const { tracks } = makeOn('mud');
 

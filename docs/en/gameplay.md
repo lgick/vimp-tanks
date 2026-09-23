@@ -273,7 +273,8 @@ flight feels none of them.
   is heavier.
 - **Water** (shallow) — moderate drag and a loss of thrust.
 - **Oil** — almost no lateral grip or braking and sharper turns: the tank
-  skids and spins.
+  skids and spins. The tracks stay oily after you drive off: the skid fades
+  out over 1.5 seconds, and the tank leaves oily marks for as long.
 - **Conveyor** — a moving floor along its arrow. A standing tank is carried:
   hard across the hull (the tracks' side grip holds it to the belt), barely
   along it.

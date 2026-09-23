@@ -497,6 +497,25 @@ impl Tank {
         if self.level_state.input_locked() {
             self.engine_load = 0.0;
 
+            // остаток скользкой поверхности в полёте спадает — тот же вызов,
+            // что у реплики до её раннего выхода
+            if let Some(map) = surfaces {
+                let position = body.translation();
+
+                surface::apply_slick(
+                    map,
+                    surface_rules,
+                    &mut self.level_state,
+                    position.x,
+                    position.y,
+                    body.rotation().angle(),
+                    self.width / 2.0,
+                    self.height / 2.0,
+                    SurfaceMix::NEUTRAL,
+                    dt,
+                );
+            }
+
             return shot_data;
         }
 
@@ -515,6 +534,21 @@ impl Tank {
                 body.rotation().angle(),
                 self.width / 2.0,
                 self.height / 2.0,
+            )
+        });
+        // остаток масла после съезда: таймер живёт в состоянии уровня
+        let mix = surfaces.map_or(mix, |map| {
+            surface::apply_slick(
+                map,
+                surface_rules,
+                &mut self.level_state,
+                position.x,
+                position.y,
+                body.rotation().angle(),
+                self.width / 2.0,
+                self.height / 2.0,
+                mix,
+                dt,
             )
         });
         let start_velocity = body.linvel();

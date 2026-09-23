@@ -168,6 +168,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   sets off neighbouring barrels after `chainDelay`, and a death from its blast
   is a suicide. Everything is restored at the start of each round, and the
   state survives the handoff dump.
+- Oil leaves the tracks slick for `slickTime` seconds after the tank drives
+  off it: a new optional surface field (`slickTime: 1.5` on `oil`), the skid
+  fading linearly; the client prediction replays it. Track marks stay oily
+  for as long (`surfaceFx.tracks.oil.trail`).
 
 ### Changed
 

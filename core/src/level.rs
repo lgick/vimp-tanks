@@ -69,6 +69,14 @@ pub struct LevelState {
     /// видит: считает флаг `step_layered`, маска только читает.
     #[serde(default)]
     pub clear_walls: bool,
+    /// Остаток скользкой поверхности, с (`surface::apply_slick`): полный,
+    /// пока гусеницы на ней, после съезда спадает до нуля. Живёт здесь,
+    /// чтобы история уровня предиктора откатывала его при реконсиляции.
+    #[serde(default)]
+    pub slick_left: f32,
+    /// Тип следа: индекс типа поверхности + 1, `0` — следа нет.
+    #[serde(default)]
+    pub slick_type: u8,
 }
 
 impl Default for LevelState {
@@ -80,6 +88,8 @@ impl Default for LevelState {
             prev_cell: (-1, -1),
             slope_vec: [0.0, 0.0],
             clear_walls: false,
+            slick_left: 0.0,
+            slick_type: 0,
         }
     }
 }
@@ -301,9 +311,15 @@ pub fn step_level(
     rules: &LevelRules,
     dt: f32,
 ) -> LevelEvent {
-    // одноуровневая карта: уровня как понятия нет
+    // одноуровневая карта: уровня как понятия нет. Остаток поверхности к
+    // уровню не относится и переживает сброс — иначе у реплики (у хоста на
+    // такой карте шага уровня нет вовсе) он обнулялся бы каждый шаг
     if !levels.is_layered() {
-        *state = LevelState::default();
+        *state = LevelState {
+            slick_left: state.slick_left,
+            slick_type: state.slick_type,
+            ..LevelState::default()
+        };
 
         return LevelEvent::None;
     }
@@ -992,12 +1008,28 @@ mod tests {
             prev_cell: (1, 1),
             clear_walls: false,
             slope_vec: [0.1, 0.0],
+            ..LevelState::default()
         };
 
         let event = step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &flat(), &rules(), DT);
 
         assert_eq!(event, LevelEvent::None);
         assert_eq!(state, LevelState::default());
+    }
+
+    #[test]
+    fn flat_map_keeps_the_surface_residue() {
+        let mut state = LevelState {
+            level: 1,
+            slick_left: 0.7,
+            slick_type: 3,
+            ..LevelState::default()
+        };
+
+        step_level(&mut state, 15.0, 15.0, [0.0, 0.0], &Footprint::point(), &flat(), &rules(), DT);
+
+        assert_eq!(state.level, 0);
+        assert_eq!((state.slick_left, state.slick_type), (0.7, 3));
     }
 
     #[test]
@@ -1652,6 +1684,7 @@ mod tests {
             prev_cell: (1, 1),
             slope_vec: [1.0, 0.0],
             clear_walls: false,
+            ..LevelState::default()
         }
     }
 

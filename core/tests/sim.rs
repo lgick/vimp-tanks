@@ -98,7 +98,7 @@ fn flat_config_json() -> serde_json::Value {
                 "sand": { "accel": 0.6, "maxSpeed": 0.55, "drag": 1.2, "grip": 1.0, "brake": 1.0, "turn": 0.8 },
                 "mud": { "accel": 0.45, "maxSpeed": 0.4, "drag": 2.0, "grip": 0.9, "brake": 1.0, "turn": 0.7 },
                 "water": { "accel": 0.7, "maxSpeed": 0.6, "drag": 1.5, "grip": 0.8, "brake": 0.8, "turn": 0.85 },
-                "oil": { "accel": 0.35, "maxSpeed": 1.0, "drag": 0.0, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5 },
+                "oil": { "accel": 0.35, "maxSpeed": 1.0, "drag": 0.0, "grip": 0.08, "brake": 0.1, "turn": 1.6, "angularDrag": -0.5, "slickTime": 1.5 },
                 "conveyor": { "belt": 60 },
                 "boost": { "boostDv": 160, "boostMaxSpeed": 340, "minEntrySpeed": 20 }
             }
@@ -2825,6 +2825,52 @@ fn oil_turn_keeps_more_sideways_speed_than_asphalt() {
     let asphalt = lateral(serde_json::Value::Null);
 
     assert!(oil > asphalt, "на масле танк заносит сильнее: {oil} vs {asphalt}");
+}
+
+// масло в колонках 0..6 (x < 192), дальше асфальт. Танк едет на восток,
+// через `delay` шагов после съезда (корма за краем пятна) жмёт поворот на
+// 36 шагов (0.3 с); результат — модуль боковой скорости
+fn lateral_after_oil_exit(game: serde_json::Value, delay: usize) -> f32 {
+    let mut core = make_core();
+
+    core.load_map(&surface_map_json(120, |x, _| if x < 6 { 44 } else { 0 }, game)).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 320.0, 0.0).unwrap();
+    core.apply_input(1, 1, "down", "forward");
+
+    let mut guard = 0;
+
+    // до первого шага строк игроков ещё нет
+    while guard == 0 || tank_row_of(&core, 1)[0] < 192.0 + 40.0 {
+        steps(&mut core, 1);
+        guard += 1;
+        assert!(guard < 600, "танк не съехал с масла");
+    }
+
+    steps(&mut core, delay);
+    core.apply_input(1, 2, "down", "right");
+    steps(&mut core, 36);
+
+    let row = tank_row_of(&core, 1);
+    let (sin, cos) = row[2].sin_cos();
+
+    (-row[4] * sin + row[5] * cos).abs()
+}
+
+#[test]
+fn oil_residue_keeps_sliding_after_leaving_patch() {
+    let oil = lateral_after_oil_exit(serde_json::json!({ "surfaces": { "0": { "44": "oil" } } }), 0);
+    let asphalt = lateral_after_oil_exit(serde_json::Value::Null, 0);
+
+    assert!(oil > asphalt, "после съезда с масла танк ещё заносит: {oil} vs {asphalt}");
+}
+
+#[test]
+fn oil_residue_expires() {
+    // slickTime 1.5 с = 180 шагов, плюс запас
+    let oil = lateral_after_oil_exit(serde_json::json!({ "surfaces": { "0": { "44": "oil" } } }), 190);
+    let asphalt = lateral_after_oil_exit(serde_json::Value::Null, 190);
+
+    assert!((oil - asphalt).abs() <= asphalt * 0.01 + 1e-3, "остаток истёк — как асфальт: {oil} vs {asphalt}");
 }
 
 #[test]
