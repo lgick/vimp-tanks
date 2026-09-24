@@ -17,6 +17,7 @@ import {
   queryLightGrid,
   shadowWedge,
   shaftSway,
+  rampWedgePolygon,
 } from '../../../src/client/lighting/lightMath.js';
 import { cellOfPoint } from '../../../src/client/parts/map/tileGrid.js';
 
@@ -324,5 +325,44 @@ describe('lightMath: клин тени в лучах', () => {
     expect(shaftSway(1, 12345, 0.08)).toBe(shaftSway(1, 12345, 0.08));
     expect(shaftSway(1, 12345, 0.08)).not.toBe(shaftSway(2, 12345, 0.08));
     expect(shaftSway(3, 500, 0)).toBeCloseTo(0);
+  });
+});
+
+describe('lightMath: контур клина рампы', () => {
+  // полоса вдоль x: клетки 2..5 × 1..2, подъём 0 → 1 к +x
+  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 5, row0: 1, row1: 2 };
+  const scale = { x: 1, y: 1 };
+
+  it('камера в нуле: подножие на месте, вершина сдвинута на уровень', () => {
+    const camera = { x: 0, y: 0 };
+    const points = rampWedgePolygon(lane, 10, scale, camera, 0.2, 1);
+
+    // 3 клетки × 1 отрезок: по 4 точки на кромку
+    expect(points).toHaveLength(16);
+    // первая точка — подножие (k = 0), мировая
+    expect(points.slice(0, 2)).toEqual([20, 10]);
+    // последняя точка первой кромки — вершина: k = shear, p · (1 + k)
+    expect(points[6]).toBeCloseTo(50 * 1.2);
+    expect(points[7]).toBeCloseTo(10 * 1.2);
+    // вторая кромка идёт обратно: начинается у вершины
+    expect(points[8]).toBeCloseTo(50 * 1.2);
+    expect(points[9]).toBeCloseTo(20 * 1.2);
+    expect(points.slice(14)).toEqual([20, 20]);
+  });
+
+  it('та же проекция, что у меша клина: точка вершины — offsetPoint с k уровня', () => {
+    const camera = { x: 100, y: -40 };
+    const points = rampWedgePolygon(lane, 10, scale, camera, 0.22, 4);
+    const top = points.slice(12 * 2, 12 * 2 + 2);
+
+    expect(top[0]).toBeCloseTo(50 + (50 - 100) * 0.22);
+    expect(top[1]).toBeCloseTo(10 + (10 + 40) * 0.22);
+  });
+
+  it('обратный знак — вершина у начала полосы', () => {
+    const points = rampWedgePolygon({ ...lane, sign: -1 }, 10, scale, { x: 0, y: 0 }, 0.2, 1);
+
+    expect(points[0]).toBeCloseTo(20 * 1.2);
+    expect(points[6]).toBeCloseTo(50);
   });
 });

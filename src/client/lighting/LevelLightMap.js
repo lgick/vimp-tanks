@@ -326,11 +326,15 @@ export default class LevelLightMap {
     overlay.filters = [];
     this.filter.destroy();
 
-    for (const sprite of this.pool) {
+    for (const sprite of [...this.pool, ...this.rampPool]) {
       sprite.texture = null;
     }
 
     this.pool = [];
+    this.rampPool = [];
+    this.rampLights.mask = null;
+    this.rampMask = null;
+    this.ramps = [];
 
     for (const entry of this.shaftPool) {
       entry.container.mask = null;

@@ -337,6 +337,7 @@ is drawn — [architecture.md](architecture.md#lighting-night).
 | `resolution` | Resolution of a level's light map relative to the screen (`0.5` by default). The map itself covers the map area plus a margin of its longer side and is clipped to the screen, so a window resize or a camera far from the map origin does not change it |
 | `maxLights` | Cap on visible sources per frame, after screen culling |
 | `headlights` | Two cones per live tank: `length` (world units), `spread` (half-width at the far end as a share of the length), `intensity`, `color`, `offset` (headlight offset from the hull axis as a share of the hull half-width). The headlights have no glare sprite of their own |
+| `rampSpill` | Light of an upper level on the ramps leading up to it (`0..1`, `1` by default): the headlights of a tank on the slab and lamps near the top of a ramp light its wedge, clipped to the wedge so the ground under the bridge stays dark. `0` — ramps catch no light from above |
 | `tankGlow` | A faint light under every live tank so enemies stay readable: `radius`, `intensity`, `color` |
 | `flash.explosion`, `flash.shot` | Short flashes: `radius`, `intensity`, `duration` (ms), `color` |
 | `glints` | Glint: an additive highlight on the side of a tank or prop facing the strongest source at it — a lamp, another tank's headlight or a flash (a tank's own headlights and every tank glow do not count). `enabled`, `intensity` (multiplier of the source's strength at the point), `size` (highlight size as a share of the object's size). The gradient is clipped by the object's silhouette; at most `maxLights` glints per tick, off-screen objects get none |
@@ -370,7 +371,7 @@ top of a building.
 The service (`componentDependencies.lighting`: `Map`, `Tank`,
 `ExplosionEffect`, `ShotEffect`) exposes `enabled`, `attachStage`,
 `acquireMap`/`releaseMap` (per-key counter, owner-bound mask),
-`setLevelMask` (with `{ roof }`), `setVolumeTops`, `registerTextures`, `texture`,
+`setLevelMask` (with `{ roof }`), `setVolumeTops`, `setRampWedges`, `registerTextures`, `texture`,
 `addLight`/`updateLight`/`removeLight`, `flash`,
 `addEmissive`/`removeEmissive`, `isNight`, `lightsAt` (the strongest
 sources at a world point of a level — lamps through a cell grid, cones,

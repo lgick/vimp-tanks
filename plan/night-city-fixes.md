@@ -17,7 +17,7 @@
 | 8 | Звук воды под гусеницами | 6 | ✅ выполнен |
 | 9 | Наклон корпуса на рампе: оси тангажа/крена и подъём края | 9 | ✅ выполнен |
 | 10 | Лучи фонарей в воздухе и засветы на предметах | 10 | ✅ выполнен |
-| 11 | Свет с верхнего уровня не освещает рампу | 11 | ⬜ |
+| 11 | Свет с верхнего уровня не освещает рампу | 11 | 🟡 код готов, ждёт ручной проверки |
 | 12 | Фары светят сквозь стены и на бока зданий | 12 | ⬜ |
 
 Выполненный этап отмечается «✅ выполнен» в заголовке и в таблице. Когда выполнены все — файл переносится
@@ -961,6 +961,25 @@ Pixi: `getFastGlobalBoundsMixin._getGlobalBoundsRecursive` для контейн
 6. Ручная проверка на `downtown`: фары с плиты вниз по рампе, фонари у верха рамп, земля под мостом не осветилась.
 7. CHANGELOG `### Fixed`: «Lights on an upper level now light the ramps leading up to it». Документация:
    `configuration.md` («Night lighting», новый параметр — если появится), `architecture.md` (сервис `lighting`), en+ru.
+
+### Ход выполнения
+
+- П. 1: полосы рамп отдаёт сервису `MapLayer` (`setRampWedges(level, rampLanes(...), owner)`, только восходящие
+  `from = level < to`; снимаются `releaseMap` вместе с масками). Контур клина — `lightMath.rampWedgePolygon`: та же
+  проекция, что у меша (`lerp(from, to, progress) · shear`, `volume.rampSegments` отрезков на клетку), перерисовка в
+  `LevelLightMap.place` на каждый трансформ сцены.
+- П. 2: `LevelLightMap.rampLights` + стенсил-маска `rampMask`, `setRamps`/`layoutRamps` (общий `layoutPool` с
+  `layout`). Сервис кладёт в `rampLights` уровня подножия источники уровня вершины; карта крыш их не получает.
+- П. 3: `lighting.rampSpill` (по умолчанию 1), спрайты на клиньях идут в счёт `maxLights`.
+- П. 4: источник, уже светящий в уровень подножия (танк на рампе, `levels [0, 1]`), в `rampLights` не кладётся —
+  двойного вклада нет. Фонарь уровня 1 у края плиты попадает в клин так же, как фары. Дыра `updateHoles` клин не
+  трогает: у оверлея уровня 0 дыры нет, а `rampLights` лежат в нём.
+- П. 5: тесты `lightMath` (контур клина, знак, совпадение с `offsetPoint`), `createLighting` (свет уровня 1 — в
+  `rampLights` уровня 0, не в обычные; без двойного вклада; `rampSpill`; `maxLights`; маска только восходящих
+  полос; `releaseMap`).
+- П. 7: CHANGELOG `### Fixed`; `configuration.md` (`rampSpill`, `setRampWedges`), `architecture.md`, en + ru.
+- `npx eslint .`, `npm test` (799), `npm run build`, `npx vimp-contract` — зелёные.
+- П. 6 — ручная проверка пользователем: **ожидает**.
 
 ---
 

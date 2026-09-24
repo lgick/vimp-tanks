@@ -1025,3 +1025,131 @@ describe('lighting: лучи фонарей и тени', () => {
     levelMap.destroy();
   });
 });
+
+describe('lighting: свет верхнего уровня на рампах', () => {
+  // рампа 0 → 1: клетки 2..5 × 1..2, в гриде уровня 0
+  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 5, row0: 1, row1: 2 };
+  const spyRamps = () => vi.spyOn(LevelLightMap.prototype, 'layoutRamps');
+  const lastRamps = (spy, level) => {
+    for (let i = spy.mock.calls.length - 1; i >= 0; i -= 1) {
+      if (spy.mock.contexts[i].level === level) {
+        return spy.mock.calls[i][0];
+      }
+    }
+
+    return null;
+  };
+
+  // карта с плитой уровня 1 и рампой 0 → 1 от части уровня 0
+  const withRamp = (cfg = lighting) => {
+    const env = setup(cfg);
+
+    env.service.registerTextures(textures());
+    env.parts = makeParts(env.service, 'a', nightLighting([]), { 1: [[6, 1]] });
+    env.service.setRampWedges(0, [lane], env.parts[0]);
+
+    return env;
+  };
+
+  const coneAt = (service, extra) =>
+    service.addLight({
+      kind: 'cone',
+      x: 200,
+      y: 40,
+      radius: 90,
+      rotation: Math.PI,
+      level: 1,
+      z: 1,
+      ...extra,
+    });
+
+  it('источник уровня 1 кладётся в rampLights уровня 0, а не в его обычные источники', () => {
+    const layout = spyLayout();
+    const rampSpy = spyRamps();
+    const { service } = withRamp();
+
+    coneAt(service);
+    frame(service);
+
+    expect(lastItems(layout, 1)).toHaveLength(1);
+    expect(lastItems(layout, 0)).toEqual([]);
+    expect(lastRamps(rampSpy, 0)).toHaveLength(1);
+    expect(lastRamps(rampSpy, 0)[0].alpha).toBeCloseTo(lighting.rampSpill);
+    // у плиты рамп нет
+    expect(lastRamps(rampSpy, 1)).toEqual([]);
+  });
+
+  it('танк на рампе (levels [0, 1]) не даёт двойного вклада в клин', () => {
+    const rampSpy = spyRamps();
+    const layout = spyLayout();
+    const { service } = withRamp();
+
+    coneAt(service, { level: 0, levels: [0, 1], z: 0.6 });
+    frame(service);
+
+    expect(lastItems(layout, 0)).toHaveLength(1);
+    expect(lastRamps(rampSpy, 0)).toEqual([]);
+  });
+
+  it('источник уровня 0 на рампы уровня 0 сверху не попадает', () => {
+    const rampSpy = spyRamps();
+    const { service } = withRamp();
+
+    coneAt(service, { level: 0, z: 0 });
+    frame(service);
+
+    expect(lastRamps(rampSpy, 0)).toEqual([]);
+  });
+
+  it('rampSpill ослабляет свет на клине, 0 — выключает', () => {
+    let rampSpy = spyRamps();
+    let env = withRamp({ ...lighting, rampSpill: 0.5 });
+
+    coneAt(env.service);
+    frame(env.service);
+    expect(lastRamps(rampSpy, 0)[0].alpha).toBeCloseTo(0.5);
+
+    vi.restoreAllMocks();
+    rampSpy = spyRamps();
+    env = withRamp({ ...lighting, rampSpill: 0 });
+    coneAt(env.service);
+    frame(env.service);
+    expect(lastRamps(rampSpy, 0)).toEqual([]);
+  });
+
+  it('лимит maxLights считает и спрайты на клиньях', () => {
+    const rampSpy = spyRamps();
+    const layout = spyLayout();
+    const { service } = withRamp({ ...lighting, maxLights: 1 });
+
+    coneAt(service);
+    frame(service);
+
+    expect(lastItems(layout, 1)).toHaveLength(1);
+    expect(lastRamps(rampSpy, 0)).toEqual([]);
+  });
+
+  it('маска — только клинья рамп, ведущих вверх с уровня; releaseMap снимает', () => {
+    const setRamps = vi.spyOn(LevelLightMap.prototype, 'setRamps');
+    const { service, parts } = withRamp();
+    const descending = { ...lane, from: 1, to: 0 };
+
+    service.setRampWedges(1, [descending], parts[1]);
+    frame(service);
+
+    const mapOf = level =>
+      setRamps.mock.contexts.find(context => context.level === level);
+    const ground = mapOf(0);
+
+    expect(ground.ramps).toEqual([lane]);
+    expect(ground.rampLights.mask).toBe(ground.rampMask);
+    // нисходящая полоса (`from > to`) освещена картой своего уровня
+    expect(mapOf(1).ramps).toEqual([]);
+
+    service.releaseMap('a', parts[0]);
+    frame(service);
+
+    expect(ground.ramps).toEqual([]);
+    expect(ground.rampLights.mask).toBeFalsy();
+  });
+});

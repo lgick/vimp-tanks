@@ -4,7 +4,7 @@ import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
 import { baseScale, tileGrid } from './tileGrid.js';
 import { createHole, dispose as disposeHole } from './holeOverlay.js';
-import { buildLayerAssets } from './layerAssets.js';
+import { buildLayerAssets, rampLanes } from './layerAssets.js';
 import { updateSeeThrough } from './layerSeeThrough.js';
 import {
   updateHeightMesh,
@@ -185,6 +185,22 @@ export default class MapLayer {
           cellsOfTiles(this._map, this._roof ? this._tiles : this._floor),
           this,
           { roof: this._roof },
+        );
+      }
+
+      // клинья рамп слоя, ведущих вверх: их освещает и свет уровня вершины
+      // (клин нарисован здесь, в части уровня подножия)
+      if (this._ramps.length) {
+        this._lighting.setRampWedges(
+          this._level,
+          rampLanes({
+            ramps: this._ramps,
+            rampRuns: this._rampRuns,
+            level: this._level,
+            baseScale: this._baseScale,
+            step: this._step,
+          }),
+          this,
         );
       }
 

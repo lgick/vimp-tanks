@@ -410,6 +410,17 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   textures (`lightRadialTexture`, `headlightConeTexture`, `lampHeadTexture`)
   and therefore batch, are culled against the screen and capped by
   `lighting.maxLights`. The layout runs once per stage transform per tick.
+- **Upper-level light on ramps.** A ramp wedge is drawn in the part of its
+  `from` level and darkened by that level's overlay, so the light of the
+  slab it leads to never reached it. A static layer with rising ramps hands
+  their lanes to the service (`setRampWedges`); the `from` level's map then
+  has a second source container, `rampLights`, under a stencil mask of the
+  wedges in the wedge mesh's own projection (`rampWedgePolygon`, redrawn on
+  every stage transform). Sources of the `to` level go there too, scaled by
+  `lighting.rampSpill` and counted against `maxLights`; a source already
+  lighting the `from` level (a tank on the ramp, `levels [0, 1]`) is not
+  added twice. The ground under the bridge stays dark — it is outside the
+  mask.
 - **Glints.** `Tank` and `MapObject` ask the service for the strongest
   source at their world point (`lightsAt`: lamps through a cell grid built
   once per map, headlight cones except the tank's own, flashes) and draw

@@ -13,6 +13,7 @@ import {
 import {
   lighting as lightingConfig,
   parallax as parallaxConfig,
+  volume as volumeConfig,
 } from '../../config/render.js';
 import { offsetPoint } from '../parallax.js';
 import LevelLightMap from './LevelLightMap.js';
@@ -100,6 +101,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   const roofMasks = new Map();
   // level -> Map(owner -> { cells, volume }) — вершины объёмов
   const tops = new Map();
+  // level -> Map(owner -> lanes) — клинья рамп, ведущих с уровня вверх
+  // (полосы `buildRampLanes`): на них светят источники уровня вершины
+  const ramps = new Map();
   let masksDirty = false;
 
   // ключ раскладки: трансформ сцены + тик (см. render)
@@ -278,6 +282,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     masks.clear();
     roofMasks.clear();
     tops.clear();
+    ramps.clear();
     masksDirty = false;
     mapKey = null;
   };
@@ -397,10 +402,16 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       );
     }
 
-    // вершины объёмов — в обычную карту своего уровня
+    // вершины объёмов и клинья рамп — в обычную карту своего уровня
     if (dirty) {
       for (const levelMap of map.levels.values()) {
         levelMap.setTops(topGroupsOf(levelMap.level), map.step, map.scale);
+        levelMap.setRamps(
+          [...(ramps.get(levelMap.level)?.values() || [])].flat(),
+          map.step,
+          map.scale,
+          volumeConfig.rampSegments,
+        );
       }
     }
   };
@@ -470,16 +481,40 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
   const layoutLights = (camera, screen, now) => {
     const perLevel = new Map();
+    // свет верхнего уровня на клиньях рамп: level подножия -> items
+    const perRamp = new Map();
     let count = 0;
 
     // источник с `levels` (танк на рампе) светит в карты нескольких уровней:
     // проекция одна (по `z`), лимит считается по добавленным спрайтам
-    const push = (light, factor) => {
-      const levels = (light.levels ?? [light.level]).filter(level =>
-        map.levels.has(level),
-      );
+    // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
+    // его источники в `rampLights`
+    const rampTargets = new Map();
 
-      if (count >= cfg.maxLights || levels.length === 0) {
+    for (const levelMap of map.levels.values()) {
+      for (const top of levelMap.rampLevels()) {
+        if (!rampTargets.has(top)) {
+          rampTargets.set(top, []);
+        }
+
+        rampTargets.get(top).push(levelMap.level);
+      }
+    }
+
+    const spill = cfg.rampSpill ?? 1;
+
+    const push = (light, factor) => {
+      const own = light.levels ?? [light.level];
+      const levels = own.filter(level => map.levels.has(level));
+      // подножия рамп, ведущих на уровни источника. Уровень, в чью карту
+      // источник уже светит (танк на рампе — `levels [0, 1]`), не
+      // получает его второй раз
+      const feet = spill > 0
+        ? own.flatMap(level => rampTargets.get(level) || [])
+            .filter(level => !own.includes(level))
+        : [];
+
+      if (count >= cfg.maxLights || (levels.length === 0 && feet.length === 0)) {
         return;
       }
 
@@ -513,6 +548,19 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         perLevel.get(level).push(item);
         count += 1;
       }
+
+      for (const level of new Set(feet)) {
+        if (count >= cfg.maxLights) {
+          return;
+        }
+
+        if (!perRamp.has(level)) {
+          perRamp.set(level, []);
+        }
+
+        perRamp.get(level).push({ ...item, alpha: item.alpha * spill });
+        count += 1;
+      }
     };
 
     // вспышки — первыми: они короткие и заметнее всего
@@ -541,6 +589,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     for (const levelMap of allLevelMaps()) {
       levelMap.place(camera, shear);
       levelMap.layout(perLevel.get(levelMap.level) || []);
+      // у карты крыш рамп нет: их свет — только в обычной карте подножия
+      levelMap.layoutRamps(
+        levelMap.roof ? [] : perRamp.get(levelMap.level) || [],
+      );
       levelMap.layoutShafts(shafts.get(levelMap.level) || []);
     }
   };
@@ -823,7 +875,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
 
       if (owner !== undefined) {
-        for (const registry of [masks, roofMasks, tops]) {
+        for (const registry of [masks, roofMasks, tops, ramps]) {
           for (const byOwner of registry.values()) {
             if (byOwner.delete(owner)) {
               masksDirty = true;
@@ -889,6 +941,32 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         tops.get(level).set(owner, { cells, volume });
       } else {
         tops.get(level).delete(owner);
+      }
+
+      masksDirty = true;
+    },
+
+    // вклад части в клинья рамп, ведущих с уровня `level` вверх: полосы
+    // `buildRampLanes` (клетки, `from`/`to`). На них светят источники
+    // уровня вершины. Нисходящие полосы не нужны: их клин нарисован в
+    // части верхнего уровня и освещён его картой. Снимается `releaseMap`
+    setRampWedges(level, lanes, owner) {
+      if (!enabled || !(level >= 0)) {
+        return;
+      }
+
+      if (!ramps.has(level)) {
+        ramps.set(level, new Map());
+      }
+
+      const rising = (lanes || []).filter(
+        lane => lane.from === level && lane.to > lane.from,
+      );
+
+      if (rising.length > 0) {
+        ramps.get(level).set(owner, rising);
+      } else {
+        ramps.get(level).delete(owner);
       }
 
       masksDirty = true;

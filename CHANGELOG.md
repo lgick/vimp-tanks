@@ -298,6 +298,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Lights on an upper level now light the ramps leading up to it: the
+  headlights of a tank on a slab and lamps near the top of a ramp light its
+  wedge, and only the wedge — the ground under the bridge stays dark. The
+  strength is `lighting.rampSpill` (`1` by default) in
+  `src/config/render.js`.
+
 - The client prediction no longer hands a non-finite pose to the renderer:
   a step or a replay that leaves NaN or infinity in the local tank's state
   resets the replica until the next frame. Such a pose used to reach the
