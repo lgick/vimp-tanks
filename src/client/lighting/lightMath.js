@@ -334,3 +334,45 @@ export function shaftSway(seed, timeMs, amount) {
       Math.sin(t * 0.61 + seed * 4.1) * 0.4)
   );
 }
+
+// --- свет верхнего уровня на рампах (этап 11) ---
+
+// Контур клина рампы в НАРИСОВАННЫХ координатах — та же проекция, что у меша
+// клина (`buildRampMeshes` + `updateHeightMesh`, extrusion.js): высота
+// вершины `lerp(from, to, progress)`, сдвиг `p + (p − cam) · k`. Высота
+// линейна вдоль прогона, а сдвиг от неё — нет, поэтому кромка режется на
+// `segmentsPerCell` отрезков на клетку, как меш. `lane` — полоса в клетках
+// (`buildRampLanes`). Возвращает `[x0, y0, …]`: одна кромка туда, другая
+// обратно
+export function rampWedgePolygon(lane, step, scale, camera, shear, segmentsPerCell) {
+  const alongX = lane.axis === 0;
+  const cells = alongX ? lane.col1 - lane.col0 : lane.row1 - lane.row0;
+  const segments = Math.max(1, cells * Math.max(1, Math.round(segmentsPerCell) || 1));
+  const x0 = lane.col0 * step * scale.x;
+  const x1 = lane.col1 * step * scale.x;
+  const y0 = lane.row0 * step * scale.y;
+  const y1 = lane.row1 * step * scale.y;
+  const project = (x, y, k) => [x + (x - camera.x) * k, y + (y - camera.y) * k];
+  const sideA = [];
+  const sideB = [];
+
+  for (let i = 0; i <= segments; i += 1) {
+    const t = i / segments;
+    const progress = lane.sign > 0 ? t : 1 - t;
+    const k = (lane.from + (lane.to - lane.from) * progress) * shear;
+
+    if (alongX) {
+      const x = x0 + (x1 - x0) * t;
+
+      sideA.push(project(x, y0, k));
+      sideB.push(project(x, y1, k));
+    } else {
+      const y = y0 + (y1 - y0) * t;
+
+      sideA.push(project(x0, y, k));
+      sideB.push(project(x1, y, k));
+    }
+  }
+
+  return [...sideA, ...sideB.reverse()].flat();
+}

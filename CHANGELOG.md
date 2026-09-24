@@ -298,6 +298,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The client prediction no longer hands a non-finite pose to the renderer:
+  a step or a replay that leaves NaN or infinity in the local tank's state
+  resets the replica until the next frame. Such a pose used to reach the
+  engine's camera and sound listener, blanking the picture for good
+  (`Cannot read properties of null (reading 'x')` in `Tank._applyModel`,
+  `setValueAtTime … non-finite` in Howler).
+
 - The client prediction no longer jerks on every head-on hit of a wall or a
   ramp's end guard: the replica resolves contacts with the engine's
   `rigid_body::step_bodies` (a port of the host's Rapier solver, with contact

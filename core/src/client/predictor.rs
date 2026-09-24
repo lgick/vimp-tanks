@@ -147,6 +147,13 @@ impl TankState {
             self.throttle,
         ]
     }
+
+    /// Все поля — конечные числа. NaN/inf в позе реплики уходит в камеру и
+    /// слушатель звука движка и навсегда гасит картинку: такой шаг не
+    /// отдаётся наружу, реплика сбрасывается до следующего кадра.
+    pub fn is_finite(&self) -> bool {
+        self.to_array().iter().all(|value| value.is_finite())
+    }
 }
 
 /// Предсказанное состояние для рендера (со сглаживающей визуальной ошибкой).
@@ -698,6 +705,14 @@ impl Predictor {
             // подписывается им же: реконсиль ищет снапшот по этому времени
             self.step_time = local_now - self.accumulator;
             self.step(keys);
+
+            // решатель разнёс позу (вырожденный контакт): рендерить её
+            // нельзя — реплика ждёт следующий авторитетный кадр, а тела
+            // предсказанного мира на следующем тике уйдут в интерполяцию
+            if !self.state.is_finite() {
+                self.reset();
+                return;
+            }
         }
     }
 
@@ -933,6 +948,13 @@ impl Predictor {
 
             self.step_time = t - offset;
             self.step(replay_keys | one_shot);
+        }
+
+        // реплей разнёс позу — то же, что в `update`: без предикта до
+        // следующего кадра. Прошлое предсказание в визуальную ошибку не идёт
+        if !self.state.is_finite() {
+            self.reset();
+            return;
         }
 
         // остаток времени доиграет update() своим аккумулятором. Квантование
@@ -1915,6 +1937,50 @@ mod tests {
 
         seed(&mut p, 100.0);
         assert!(p.has_state());
+    }
+
+    // NaN в позе реплики (вырожденный контакт решателя) не должен дойти
+    // до рендера: движок кладёт её в камеру и слушатель звука, и один NaN
+    // гасит картинку навсегда
+    #[test]
+    fn non_finite_step_resets_instead_of_rendering() {
+        let mut p = make_predictor();
+
+        seed(&mut p, 0.0);
+        p.update(0.0);
+        assert!(p.has_state());
+
+        p.state.vx = f32::NAN;
+        p.update(STEP_MS * 2.0);
+
+        assert!(!p.has_state());
+        assert!(p.render_state().is_none());
+
+        // следующий кадр возвращает предикт без ошибки сглаживания
+        seed(&mut p, STEP_MS * 3.0);
+        p.update(STEP_MS * 3.0);
+
+        let state = p.render_state().unwrap();
+
+        assert!(state.x.is_finite() && state.y.is_finite());
+    }
+
+    #[test]
+    fn non_finite_replay_resets_instead_of_rendering() {
+        let mut p = make_predictor();
+
+        seed(&mut p, 0.0);
+        p.update(0.0);
+
+        // кадр с NaN в скорости: реплей до «сейчас» разносит позу
+        let mut state = [0.0; 8];
+
+        state[3] = f32::INFINITY;
+        p.on_server_state(state, false, 0.0, 0.0, STEP_MS * 4.0);
+
+        assert!(!p.has_state());
+        assert!(p.render_state().is_none());
+        assert!(p.visual_error.iter().all(|value| *value == 0.0));
     }
 
     #[test]

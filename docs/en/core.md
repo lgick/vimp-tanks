@@ -467,6 +467,14 @@ obstacle. The render row repeats the model block in full, `angvel` included —
 without the angular velocity (frame v5) the remote hull would not finish its
 turn while in contact.
 
+**A non-finite replica is dropped.** After every step of `update` and
+after the replay in `on_server_state`, `Predictor` checks the local tank's
+state (`TankState::is_finite`). A NaN or an infinity there would reach the
+engine's camera and sound listener and blank the picture for good, so
+instead the predictor calls `reset()`: nothing is rendered until the next
+player block, and the predicted bodies return to interpolation on the next
+tick.
+
 ## The shot's raycast world
 
 `shot.rs` owns none of the moving geometry: the tracer's ray is cast against

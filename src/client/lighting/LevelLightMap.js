@@ -9,7 +9,7 @@ import {
 import { levelZ } from '../levelZ.js';
 import { applyParallax } from '../parallax.js';
 import { createHole, dispose as disposeHole } from '../parts/map/holeOverlay.js';
-import { LIGHT_OVERLAY_BASE_Z } from './lightMath.js';
+import { LIGHT_OVERLAY_BASE_Z, rampWedgePolygon } from './lightMath.js';
 
 const WHITE = 0xffffff;
 
@@ -37,6 +37,13 @@ const WHITE = 0xffffff;
 //   L >= 1  фон БЕЛЫЙ (умножение на белый картинку не меняет), поверх —
 //           маска этажа цвета `ambient` в проекции уровня, затем источники.
 //           Вне этажа карта остаётся белой, и уровень 0 не темнеет дважды.
+//
+// Свет верхнего уровня на рампах (`setRamps`, `layoutRamps`): у карты
+// уровня `from` рамп, ведущих вверх, — второй контейнер источников
+// `rampLights` с маской «клинья этих рамп» в проекции клина. В него
+// кладутся источники уровня `to`: клин нарисован в части уровня `from` и
+// затемнён её оверлеем, а свет плиты `to` без маски осветил бы и землю под
+// мостом.
 //
 // Над источниками — лучи фонарей в воздухе (`layoutShafts`) с просветами-
 // тенями предметов.
@@ -77,6 +84,14 @@ export default class LevelLightMap {
 
     this.lights = new Container();
     this.overlay.addChild(this.lights);
+
+    // свет верхнего уровня, обрезанный клиньями рамп (стенсил-маска):
+    // маска заводится вместе с первыми рампами
+    this.rampLights = new Container();
+    this.overlay.addChild(this.rampLights);
+    this.rampMask = null;
+    this.ramps = [];
+    this.rampPool = [];
 
     // лучи фонарей в воздухе: по контейнеру на фонарь — спрайт лучей и
     // клинья теней предметов. Тени — ИНВЕРСНАЯ стенсил-маска контейнера:
@@ -172,11 +187,48 @@ export default class LevelLightMap {
     }
   }
 
+  // клинья рамп, ведущих с этого уровня вверх: полосы в клетках
+  // (`buildRampLanes`) и то, что нужно их проекции. Контур пересчитывает
+  // `place` — у клина своя высота на каждую вершину
+  setRamps(lanes, step, scale, segments) {
+    this.ramps = lanes;
+    this.rampGeometry = { step, scale, segments };
+
+    if (lanes.length && !this.rampMask) {
+      this.rampMask = new Graphics();
+      this.overlay.addChild(this.rampMask);
+      this.rampLights.mask = this.rampMask;
+    } else if (!lanes.length && this.rampMask) {
+      this.rampLights.mask = null;
+      this.rampMask.destroy();
+      this.rampMask = null;
+    }
+  }
+
+  // уровни вершин рамп: источники этих уровней идут в `rampLights`
+  rampLevels() {
+    return new Set(this.ramps.map(lane => lane.to));
+  }
+
   // проекция уровня для маски и вершин объёмов; фон и область фильтра —
   // мировые и от камеры не зависят
   place(camera, shear) {
     if (this.mask) {
       applyParallax(this.mask, camera, this.level * shear, 1);
+    }
+
+    if (this.rampMask) {
+      const { step, scale, segments } = this.rampGeometry;
+
+      this.rampMask.clear();
+
+      for (const lane of this.ramps) {
+        this.rampMask.poly(
+          rampWedgePolygon(lane, step, scale, camera, shear, segments),
+        );
+      }
+
+      this.rampMask.fill(WHITE);
     }
 
     for (const { graphics, volume } of this.topGroups) {
@@ -188,32 +240,12 @@ export default class LevelLightMap {
   // сервисом — `{ texture, x, y, anchorX, anchorY, scaleX, scaleY,
   // rotation, color, alpha }`
   layout(items) {
-    while (this.pool.length < items.length) {
-      const sprite = new Sprite();
+    layoutPool(this.pool, this.lights, items);
+  }
 
-      sprite.blendMode = 'add';
-      this.pool.push(sprite);
-      this.lights.addChild(sprite);
-    }
-
-    for (let i = 0; i < this.pool.length; i += 1) {
-      const sprite = this.pool[i];
-      const item = items[i];
-
-      if (!item) {
-        sprite.visible = false;
-        continue;
-      }
-
-      sprite.visible = true;
-      sprite.texture = item.texture;
-      sprite.anchor.set(item.anchorX, item.anchorY);
-      sprite.position.set(item.x, item.y);
-      sprite.scale.set(item.scaleX, item.scaleY);
-      sprite.rotation = item.rotation;
-      sprite.tint = item.color;
-      sprite.alpha = item.alpha;
-    }
+  // источники верхнего уровня на клиньях рамп — тот же формат, что `layout`
+  layoutRamps(items) {
+    layoutPool(this.rampPool, this.rampLights, items);
   }
 
   // раскладка лучей кадра: `items` — `{ texture, x, y, scale, rotation,
@@ -309,5 +341,36 @@ export default class LevelLightMap {
     this.topGroups = [];
 
     overlay.destroy({ children: true, texture: false, textureSource: false });
+  }
+}
+
+// спрайты источников переиспользуются между кадрами: число видимых
+// источников меняется, объекты — нет
+function layoutPool(pool, container, items) {
+  while (pool.length < items.length) {
+    const sprite = new Sprite();
+
+    sprite.blendMode = 'add';
+    pool.push(sprite);
+    container.addChild(sprite);
+  }
+
+  for (let i = 0; i < pool.length; i += 1) {
+    const sprite = pool[i];
+    const item = items[i];
+
+    if (!item) {
+      sprite.visible = false;
+      continue;
+    }
+
+    sprite.visible = true;
+    sprite.texture = item.texture;
+    sprite.anchor.set(item.anchorX, item.anchorY);
+    sprite.position.set(item.x, item.y);
+    sprite.scale.set(item.scaleX, item.scaleY);
+    sprite.rotation = item.rotation;
+    sprite.tint = item.color;
+    sprite.alpha = item.alpha;
   }
 }
