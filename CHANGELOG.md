@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-25
+
 ### ⚠️ Breaking
 
 - The `c1`/`c2` dynamic map row grew by one byte: `state` (`u8`,
