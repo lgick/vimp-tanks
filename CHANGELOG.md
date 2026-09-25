@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.6] - 2026-09-25
+
 ### Added
 
 - `ClientCore.shot_segments(x, y, dx, dy, range, level)`: the level
