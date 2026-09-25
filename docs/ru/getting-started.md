@@ -11,7 +11,10 @@
 - **Node.js 24**, npm;
 - **Rust-тулчейн** (`rustup` + `wasm-pack`) — обязателен для сборки
   WASM-ядра этого плагина, которое грузят браузерный хост движка и каждый
-  клиент.
+  клиент;
+- **ffmpeg** (`brew install ffmpeg`) — нужен `npm run audio:process`,
+  единственному шагу, который делает звуки игры. Без него в игре не будет
+  звука вообще.
 
 ## Установка
 
@@ -72,20 +75,29 @@ npm run core:build       # оба WASM-таргета (web + nodejs)
 npm run core:build:web   # браузер/Worker → core/pkg-web/
 npm run core:build:node  # Node.js (тесты) → core/pkg-node/
 npm run core:test        # cargo test --workspace (crate этого репозитория)
+npm run audio:process    # звуки → build/sounds/ (ffmpeg) — до build, иначе звука не будет
 npm run build            # полная сборка плагина: JS-бандлы client+host, ассеты, manifest.json → dist/
 npm run art:placeholders # перерисовать арт-заглушки downtown (city.png, prop_*.png) → assets/img/
 ```
 
 `npm run build` производит `dist/manifest.json` (`GameManifest`),
 JS-бандлы клиента/хоста, экспортированный JSON карт, картинки карт
-(`assets/img/` → `dist/img/`) и обработанные
-звуковые ассеты (`npm run audio:process`, нужен ffmpeg) — всё, что мастер
+(`assets/img/` → `dist/img/`) и звуковые ассеты — всё, что мастер
 движка отдаёт под `/games/tanks/*` и что динамически импортируют Worker
 хоста/клиент. Если собран `core/pkg-node/`, `build:manifest` дополнительно
 копирует его в `dist/core-node/` и объявляет `entries.wasmNode` на эту
 копию: публикуется только `dist`, поэтому манифест с путём наружу работал
 бы в чекауте и ломался в установленном пакете (`npm run check:pack`
 страхует это и висит на `prepack`).
+
+> **Сначала `npm run audio:process` — без него в игре не будет звука.**
+> `npm run build` звуки не обрабатывает: он лишь копирует `build/sounds/` в
+> `dist/sounds/`, а этот каталог под `.gitignore` и появляется только от
+> `npm run audio:process` (ffmpeg). Поэтому на свежем чекауте `build:assets`
+> останавливается с `build/sounds/ not found. Run 'npm run audio:process'
+> first.` В отличие от игр из `create-vimp-game`, заглушек звуков у танков
+> нет. Перезапускайте его при каждой правке `assets/audio-raw/`; CI гонит
+> его перед каждой сборкой.
 
 ## Игра локально (`npm run dev`)
 
@@ -96,7 +108,7 @@ JS-бандлы клиента/хоста, экспортированный JSON
 
 ```bash
 npm run core:build      # WASM (для dev нужен только core/pkg-web/)
-npm run audio:process   # звуки → build/sounds/ (нужен ffmpeg; необязательно)
+npm run audio:process   # звуки → build/sounds/ (нужен ffmpeg) — без него звука нет
 npm run dev             # dev-сервер Vite, открывает вкладку
 ```
 
@@ -115,8 +127,9 @@ VITE_MAP='terraces' npm run dev    # на три уровня
 
 - **картинки карт** — `build/img/`, их стейджит `predev` из `assets/img/`,
   поэтому они на месте всегда и карта рисуется с первого запуска;
-- **звуки** — `build/sounds/`, продукт `npm run audio:process`. Без ffmpeg
-  они просто молчат; матч работает в любом случае.
+- **звуки** — `build/sounds/`, продукт `npm run audio:process`. Без этого
+  шага (или без ffmpeg) в игре **нет звука вообще** — сам матч при этом
+  идёт.
 
 Громкость трогает только `npm run audio:process`: он прогоняет цепочку
 фильтров ffmpeg (обрезка тишины + `loudnorm` к `I = -16` LUFS) для каждого

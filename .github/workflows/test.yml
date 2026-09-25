@@ -97,6 +97,9 @@ jobs:
         with:
           shared-key: wasm-core
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # ядро собирается в начале джоба: упавший позже JS-тест не должен
+          # оставлять следующий релиз без кэша и с холодной сборкой
+          cache-on-failure: true
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -113,6 +116,16 @@ jobs:
 
       - name: JS↔WASM integration tests (реальное ядро танков)
         run: npx vitest run --project integration
+
+      # build:assets → copy-game-sounds.js требует build/sounds/ — его делает
+      # audio:process (ffmpeg, нормализация громкости assets/audio-raw/), а
+      # каталог под .gitignore. Заглушки звуков, как в шаблоне скаффолдера, у
+      # танков нет — тот же конвейер, что в release.yml
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Process game audio
+        run: npm run audio:process
 
       # headless-прогон отладочных сценариев на собранном плагине: ловит
       # класс отказов, невидимый юнит-тестам (пустая сцена, перепутанные

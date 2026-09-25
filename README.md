@@ -15,6 +15,7 @@ git clone https://github.com/lgick/vimp-tanks.git
 cd vimp-tanks
 npm install
 npm run core:build   # WASM core (needs the Rust toolchain: rustup + wasm-pack)
+npm run audio:process # sounds → build/sounds/ (needs ffmpeg) — without it no sound
 npm run build         # full plugin bundle → dist/
 ```
 
