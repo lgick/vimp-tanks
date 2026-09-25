@@ -1294,6 +1294,47 @@ describe('lighting: фары и стены', () => {
     expect(lastItems(layout, 0)).toHaveLength(1);
   });
 
+  it('отсвет раскладывается после фонарей и не вытесняет их из maxLights', () => {
+    const context = setup({ ...lighting, maxLights: 2 });
+    const { service } = context;
+
+    service.registerTextures(textures());
+    service.acquireMap('w', nightLighting([{ cell: [5, 5], radius: 50 }]), STEP, 1, size);
+    service.setVolumeTops(0, column, 1, {});
+    service.addLight({
+      kind: 'cone',
+      level: 0,
+      x: 40,
+      y: 48,
+      z: 0,
+      radius: 90,
+      spread: 0.5,
+      rotation: 0,
+      intensity: 0.9,
+    });
+
+    const layout = spyLayout();
+
+    frame(service);
+
+    const items = lastItems(layout, 0);
+
+    expect(items).toHaveLength(2);
+    // конус и фонарь (центр клетки [5, 5] — 176, 176); пятна отсвета нет
+    expect(items.some(entry => entry.x === 176 && entry.y === 176)).toBe(true);
+    expect(items.some(entry => entry.texture === coneTexture(service))).toBe(true);
+  });
+
+  it('конус за экраном не считает веер', () => {
+    const { service, cone } = scene();
+    const layout = spyLayout();
+
+    service.updateLight(cone, { x: 5000, y: 5000 });
+    frame(service);
+
+    expect(lastItems(layout, 0)).toEqual([]);
+  });
+
   it('стоящая фара не пересчитывает веер; сдвинутая — пересчитывает', () => {
     const { service, cone } = scene();
     const layout = spyLayout();
@@ -1437,6 +1478,47 @@ describe('lighting: фары и рампы', () => {
     expect(reach).toBeGreaterThan(120);
   });
 
+  it('фара на одной рампе: соседняя горка по-прежнему загораживает свет', () => {
+    const context = setup();
+    const { service } = context;
+    // встречная горка: у x = 100 её борт на высоте ≈ 0.8
+    const other = { ...lane, sign: -1, row0: 8, row1: 11 };
+
+    service.registerTextures(textures());
+    service.acquireMap('r', nightLighting([]), STEP, 1, size);
+    service.setRampWedges(0, [lane, other], {});
+    // фара у подножия первой горки (z ≈ 0.2) светит на юг, в борт второй
+    // (y = 256)
+    service.addLight({
+      kind: 'cone',
+      level: 0,
+      x: 100,
+      y: 180,
+      z: 0.2,
+      rotation: Math.PI / 2,
+      radius: 90,
+      spread: 0.5,
+      intensity: 0.9,
+    });
+
+    const layout = spyLayout();
+
+    frame(service);
+
+    const item = coneItem(layout, service);
+
+    expect(item.fan).not.toBeNull();
+
+    // лучи над второй горкой (x 64..256) кончаются на её борту
+    const over = ends(item.fan.shape.points).filter(([x]) => x > 70 && x < 250);
+
+    expect(over.length).toBeGreaterThan(0);
+
+    for (const [, y] of over) {
+      expect(y).toBeLessThanOrEqual(256 + 1e-3);
+    }
+  });
+
   it('фара на самой рампе светит как раньше', () => {
     const { service } = scene({ x: 150, y: 144, z: 0.4, rotation: Math.PI / 2 });
     const layout = spyLayout();
@@ -1454,5 +1536,57 @@ describe('lighting: фары и рампы', () => {
 
     expect(service.lightsAt(200, 80, 0)).toHaveLength(1);
     expect(service.lightsAt(200, 120, 0)).toEqual([]);
+  });
+});
+
+describe('LevelLightMap: веера', () => {
+  const make = () =>
+    new LevelLightMap({
+      level: 0,
+      ambient: 0x3a4260,
+      resolution: 0.5,
+      area: { x: 0, y: 0, width: 100, height: 100 },
+    });
+  const fanItem = shape => ({
+    texture: Texture.WHITE,
+    color: 0xffffff,
+    alpha: 1,
+    fan: { shape, x: 0, y: 0, scale: 1 },
+  });
+  // вершина и `rays` концов лучей
+  const shape = (rays, closed) => ({
+    points: new Float32Array((rays + 1) * 2),
+    uvs: new Float32Array((rays + 1) * 2),
+    closed,
+  });
+
+  it('индексы меняются со сменой замкнутости, даже при том же их числе', () => {
+    const map = make();
+
+    // замкнутый из 4 лучей и открытый из 5 — по 4 треугольника
+    map.layout([fanItem(shape(4, true))]);
+
+    const [mesh] = map.fanPool;
+
+    expect([...mesh.geometry.indices]).toEqual([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1]);
+
+    map.layout([fanItem(shape(5, false))]);
+    expect([...mesh.geometry.indices]).toEqual([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
+
+    map.destroy();
+  });
+
+  it('destroy уничтожает геометрию вееров', () => {
+    const map = make();
+
+    map.layout([fanItem(shape(4, true))]);
+
+    const [mesh] = map.fanPool;
+    const geometry = mesh.geometry;
+    const destroy = vi.spyOn(geometry, 'destroy');
+
+    map.destroy();
+
+    expect(destroy).toHaveBeenCalled();
   });
 });

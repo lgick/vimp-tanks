@@ -27,6 +27,7 @@ import {
   coneFan,
   fanUvs,
   firstHit,
+  lightStrength,
   rampBlocks,
   flashFactor,
   flicker,
@@ -439,9 +440,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   };
 
   // Препятствия свету фары `light` на её уровне: `isBlocked` для
-  // `castRay`; null — ни стен, ни рамп на уровне нет. Правила рамп
-  // (`rampBlocks`) не действуют на фару, стоящую на самой рампе: танк на
-  // склоне светит как раньше
+  // `castRay`; null — ни стен, ни рамп на уровне нет. На полосу, где
+  // стоит сама фара, правила рамп (`rampBlocks`) не действуют: танк на
+  // склоне светит по нему как раньше
   const obstaclesFor = light => {
     const level = light.level ?? 0;
     const grid = map.blockers.get(level) || null;
@@ -450,26 +451,20 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     const cellH = map.step * map.scale.y;
     const indexOf = (col, row) =>
       col >= 0 && col < cols && row >= 0 && row < rows ? row * cols + col : -1;
-    let ramp = map.rampCells.get(level) || null;
-
-    if (ramp) {
-      const origin = indexOf(
-        Math.floor(light.x / cellW),
-        Math.floor(light.y / cellH),
-      );
-
-      if (origin >= 0 && ramp.cells[origin] > 0) {
-        ramp = null;
-      }
-    }
+    const ramp = map.rampCells.get(level) || null;
 
     if (!grid && !ramp) {
       return null;
     }
 
-    const laneAt = index => (index >= 0 && ramp.cells[index] > 0
+    const laneAt = index => (ramp && index >= 0 && ramp.cells[index] > 0
       ? ramp.lanes[ramp.cells[index] - 1]
       : null);
+    // полоса, на которой стоит сама фара: танк на склоне светит по ней
+    // как раньше, а соседние горки загораживают его свет по общим правилам
+    const home = laneAt(
+      indexOf(Math.floor(light.x / cellW), Math.floor(light.y / cellH)),
+    );
     return (col, row, prevCol, prevRow, x, y) => {
       const index = indexOf(col, row);
 
@@ -481,9 +476,16 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         return false;
       }
 
+      const lane = laneAt(index);
+      const prevLane = laneAt(indexOf(prevCol, prevRow));
+
+      if (home && (lane === home || prevLane === home)) {
+        return false;
+      }
+
       return rampBlocks({
-        lane: laneAt(index),
-        prevLane: laneAt(indexOf(prevCol, prevRow)),
+        lane,
+        prevLane,
         col,
         row,
         prevCol,
@@ -706,21 +708,13 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       const length = light.radius * view.scale;
       const halfWidth = length * (light.spread ?? 0.5);
       const reach = length * stage.scale.x;
-      const occlusion = occlusionOf(light, asset);
 
       return {
         reach,
         view,
-        // конус упёрся в стену: рисуется веером по полигону видимости
-        fan: occlusion?.shape
-          ? {
-              shape: occlusion.shape,
-              x: view.x - light.x * view.scale,
-              y: view.y - light.y * view.scale,
-              scale: view.scale,
-            }
-          : null,
-        hit: occlusion?.hit || null,
+        // веер и упор оси — `occludeItem`, уже после отсечения по экрану
+        fan: null,
+        hit: null,
         texture: asset.texture,
         anchorX: asset.margin / asset.texture.width,
         anchorY: 0.5,
@@ -782,6 +776,34 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     };
   };
 
+  // Окклюзия конуса, прошедшего отсечение по экрану: веер по полигону
+  // видимости, если конус упёрся в стену, и точка упора оси для отсвета.
+  // Считать её до отсечения значило бы гонять лучи для всех танков карты
+  const occludeItem = (item, light) => {
+    if (light.kind !== 'cone') {
+      return;
+    }
+
+    const occlusion = occlusionOf(light, textures.cone);
+
+    if (!occlusion) {
+      return;
+    }
+
+    const { view } = item;
+
+    if (occlusion.shape) {
+      item.fan = {
+        shape: occlusion.shape,
+        x: view.x - light.x * view.scale,
+        y: view.y - light.y * view.scale,
+        scale: view.scale,
+      };
+    }
+
+    item.hit = occlusion.hit;
+  };
+
   const layoutLights = (camera, screen, now) => {
     const perLevel = new Map();
     // свет верхнего уровня на клиньях рамп: level подножия -> items
@@ -838,6 +860,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
       item.x = item.view.x;
       item.y = item.view.y;
+      occludeItem(item, light);
 
       for (const level of levels) {
         if (count >= cfg.maxLights) {
@@ -865,13 +888,16 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         count += 1;
       }
 
-      // фара упёрлась в стену: свет не пропадает, а отскакивает пятном
+      // фара упёрлась в стену: свет не пропадает, а отскакивает пятном.
+      // Пятна раскладываются после фонарей: вторичный свет не вытесняет
+      // из `maxLights` уличные фонари
       const bounce = item.hit ? bounceOf(light, item.hit) : null;
 
       if (bounce) {
-        push(bounce, factor);
+        bounces.push({ light: bounce, factor });
       }
     };
+    const bounces = [];
 
     // вспышки — первыми: они короткие и заметнее всего
     for (let i = flashes.length - 1; i >= 0; i -= 1) {
@@ -891,6 +917,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
     for (const lamp of map.lamps) {
       push(lamp, flicker(lamp.seed, now, lamp.flicker));
+    }
+
+    for (const { light, factor } of bounces) {
+      push(light, factor);
     }
 
     const shafts = layoutShafts(camera, screen, now);
@@ -1121,10 +1151,12 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     }
 
     for (const light of lights) {
+      // стены — после дешёвой проверки дальности и угла конуса
       if (
         light.kind === 'cone' &&
         !exclude?.includes(light) &&
         onLevel(light) &&
+        lightStrength(light, x, y) > 0 &&
         reachesPoint(light, x, y)
       ) {
         candidates.push({ light, factor: 1 });

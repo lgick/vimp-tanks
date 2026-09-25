@@ -454,8 +454,9 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   by direction (`lightMath.rampBlocks`): a ray entering through the foot
   lights the slope and stops where it leaves the lane; one entering
   through a side or the top end stops if the wedge there is higher than
-  the headlight by more than `RAMP_CLEARANCE`. A headlight standing on a
-  ramp is exempt.
+  the headlight by more than `RAMP_CLEARANCE`. The lane the headlight
+  itself stands on is exempt; neighbouring ramps still block it. The fan
+  and the bounce are computed only for cones that pass the screen cull.
 - **Glints.** `Tank` and `MapObject` ask the service for the strongest
   source at their world point (`lightsAt`: lamps through a cell grid built
   once per map, headlight cones except the tank's own, flashes) and draw

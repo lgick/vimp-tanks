@@ -349,8 +349,10 @@ export default class LevelLightMap {
       sprite.texture = null;
     }
 
+    // геометрию вееров Mesh.destroy не уничтожает — только отвязывает
     for (const mesh of [...this.fanPool, ...this.rampFanPool]) {
       mesh.texture = Texture.EMPTY;
+      mesh.geometry.destroy();
     }
 
     this.pool = [];
@@ -419,6 +421,7 @@ function layoutFans(pool, container, items) {
 
     mesh.blendMode = 'add';
     mesh.shape = null;
+    mesh.topology = null;
     pool.push(mesh);
     container.addChild(mesh);
   }
@@ -439,12 +442,12 @@ function layoutFans(pool, container, items) {
     if (mesh.shape !== shape) {
       const geometry = mesh.geometry;
       const rays = shape.points.length / 2 - 1;
-      // треугольник на пару соседних лучей, у замкнутого — и последний
-      // с первым
-      const triangles = rays - 1 + (shape.closed && rays > 2 ? 1 : 0);
+      const topology = `${rays}:${Boolean(shape.closed)}`;
 
-      if (geometry.indices.length !== triangles * 3) {
+      // индексы зависят только от числа лучей и замкнутости веера
+      if (mesh.topology !== topology) {
         geometry.indices = fanIndices(rays, shape.closed);
+        mesh.topology = topology;
       }
 
       geometry.positions = shape.points;
