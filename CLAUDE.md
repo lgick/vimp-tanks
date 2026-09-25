@@ -98,4 +98,9 @@ assert no game rules — such claims belong in `core/tests/sim.rs`.
 
 This repo has no deployment of its own — it publishes `@vimp-games/tanks` (npm,
 ships `dist/`) for the engine's master/host/client to consume. CI builds
-and tests the crate + JS; see `.github/workflows/test.yml`.
+and tests the crate + JS; see `.github/workflows/test.yml`. Publishing itself
+is manual prep (bump `version`, changelog, `cargo update -p vimp-engine-core`
+if the engine moved) followed by triggering
+`.github/workflows/release.yml` (`workflow_dispatch`), which builds the WASM
+core + `dist/` and publishes via npm OIDC Trusted Publishing — no npm token
+stored in CI.
