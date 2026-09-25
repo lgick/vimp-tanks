@@ -38,3 +38,20 @@ describe('config: lighting.glints / lighting.shafts', () => {
     expect(typeof bakers.lightShaftTexture).toBe('function');
   });
 });
+
+// Фары и стены (`lighting.headlights.occlusion`, `.bounce`)
+describe('config: lighting.headlights.occlusion / bounce', () => {
+  it('окклюзия включена по умолчанию, лучей веера не меньше двух', () => {
+    expect(lighting.headlights.occlusion.enabled).toBe(true);
+    expect(lighting.headlights.occlusion.rays).toBeGreaterThanOrEqual(2);
+  });
+
+  it('отсвет: сила, радиус и дальность положительны, дальность не длиннее фары', () => {
+    const { bounce, length } = lighting.headlights;
+
+    expect(bounce.intensity).toBeGreaterThan(0);
+    expect(bounce.radius).toBeGreaterThan(0);
+    expect(bounce.maxDistance).toBeGreaterThan(0);
+    expect(bounce.maxDistance).toBeLessThanOrEqual(length);
+  });
+});

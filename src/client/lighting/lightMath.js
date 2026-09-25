@@ -376,3 +376,234 @@ export function rampWedgePolygon(lane, step, scale, camera, shear, segmentsPerCe
 
   return [...sideA, ...sideB.reverse()].flat();
 }
+
+// --- фары и стены (этап 12) ---
+
+// Расстояние от точки `(ox, oy)` по единичному направлению `(dx, dy)` до
+// входа в первую занятую клетку (клетка `cellW × cellH` в мировых
+// единицах) — обход сетки по граням клеток (DDA, Amanatides–Woo). Нет
+// стены ближе `maxDist` — `maxDist`; начало в занятой клетке — 0.
+// `isBlocked(col, row, prevCol, prevRow, x, y)` — занята ли клетка при
+// входе в неё из соседней `(prevCol, prevRow)` в точке `(x, y)` (рампе
+// важно, через какой край и на какой высоте в неё вошли); для клетки
+// начала соседней нет
+export function castRay(ox, oy, dx, dy, maxDist, isBlocked, cellW, cellH) {
+  let col = Math.floor(ox / cellW);
+  let row = Math.floor(oy / cellH);
+
+  if (isBlocked(col, row, null, null, ox, oy)) {
+    return 0;
+  }
+
+  const stepCol = dx > 0 ? 1 : -1;
+  const stepRow = dy > 0 ? 1 : -1;
+  const deltaX = dx !== 0 ? Math.abs(cellW / dx) : Infinity;
+  const deltaY = dy !== 0 ? Math.abs(cellH / dy) : Infinity;
+  let nextX = Infinity;
+  let nextY = Infinity;
+
+  if (dx !== 0) {
+    nextX = ((dx > 0 ? col + 1 : col) * cellW - ox) / dx;
+  }
+
+  if (dy !== 0) {
+    nextY = ((dy > 0 ? row + 1 : row) * cellH - oy) / dy;
+  }
+
+  for (;;) {
+    const prevCol = col;
+    const prevRow = row;
+    let t;
+
+    if (nextX < nextY) {
+      t = nextX;
+      col += stepCol;
+      nextX += deltaX;
+    } else {
+      t = nextY;
+      row += stepRow;
+      nextY += deltaY;
+    }
+
+    if (!(t < maxDist)) {
+      return maxDist;
+    }
+
+    if (isBlocked(col, row, prevCol, prevRow, ox + dx * t, oy + dy * t)) {
+      return Math.max(0, t);
+    }
+  }
+}
+
+// на сколько уровней клин рампы может быть выше фары в точке, где луч
+// входит в него через борт или верхний торец, и всё ещё её пропускать:
+// низкий край у подножия ловит свет и сбоку
+export const RAMP_CLEARANCE = 0.2;
+
+// Рампа как препятствие свету уровня её подножия. `lane` — полоса клетки,
+// в которую входит луч, `prevLane` — полоса клетки, из которой он вышел
+// (null — не рампа); полосы — `buildRampLanes` (клетки, `axis`, `sign`,
+// `from`, `to`). `(x, y)` — точка входа, `z` — высота фары в уровнях.
+// Правила (источник вне рампы):
+//   - вошёл через подножие (шаг вдоль оси в сторону подъёма) — склон
+//     освещён, луч идёт по полосе;
+//   - вошёл через борт или верхний торец — стоп, если клин в точке входа
+//     выше фары больше чем на `clearance`;
+//   - вышел из полосы — стоп: склон — конечная поверхность, пол за горкой
+//     и под её торцом свет не получает
+export function rampBlocks({
+  lane,
+  prevLane,
+  col,
+  row,
+  prevCol,
+  prevRow,
+  x,
+  y,
+  z,
+  cellW,
+  cellH,
+  clearance = RAMP_CLEARANCE,
+}) {
+  if (prevLane && prevLane !== lane) {
+    return true;
+  }
+
+  if (!lane || prevLane === lane || prevCol === null || prevCol === undefined) {
+    return false;
+  }
+
+  const alongX = lane.axis === 0;
+  const step = alongX ? col - prevCol : row - prevRow;
+
+  if (step === lane.sign) {
+    return false;
+  }
+
+  const a0 = alongX ? lane.col0 * cellW : lane.row0 * cellH;
+  const a1 = alongX ? lane.col1 * cellW : lane.row1 * cellH;
+  const along = alongX ? x : y;
+  const span = a1 - a0 || 1;
+  const t = Math.min(1, Math.max(0, (along - a0) / span));
+  const progress = lane.sign > 0 ? t : 1 - t;
+  const height = lane.from + (lane.to - lane.from) * progress;
+
+  return height - (z || 0) > clearance;
+}
+
+// Точка упора оси: первая стена на луче не дальше `length` —
+// `{ distance, x, y }`, иначе null
+export function firstHit(ox, oy, dx, dy, length, isBlocked, cellW, cellH) {
+  const distance = castRay(ox, oy, dx, dy, length, isBlocked, cellW, cellH);
+
+  if (distance >= length) {
+    return null;
+  }
+
+  return { distance, x: ox + dx * distance, y: oy + dy * distance };
+}
+
+// Полигон видимости конуса фары — веер из вершины `(x, y)` до ближней стены
+// или до края прямоугольника текстуры: `alongMax` вперёд по оси `rotation`,
+// `alongBack` назад (размытие за фарой), `acrossMax` поперёк. Вперёд —
+// `rays` лучей поровну на ±90° от оси: размытый край текстуры у самой фары
+// шире клина на постоянный отступ, и веер на угол клина срезал бы его —
+// конус у стены становился резким. Назад — несколько лучей, замыкающих
+// веер: без них на линии через вершину поперёк оси обрывалось размытие за
+// фарой. Результат — `{ points, clipped, closed }`: `points` — `[x, y, x0,
+// y0, …]` (вершина, затем концы лучей по кругу) в мировых единицах,
+// `clipped` — хоть один луч упёрся в стену (иначе конус целый и рисуется
+// прежним спрайтом), `closed` — веер замкнут (`fanIndices`)
+export function coneFan(
+  { x, y, rotation, alongMax, alongBack = 0, acrossMax, rays },
+  isBlocked,
+  cellW,
+  cellH,
+) {
+  const count = Math.max(2, Math.round(rays) || 2);
+  const closed = alongBack > 0;
+  const back = closed ? Math.max(3, Math.round(count / 8)) : 0;
+  const offsets = [];
+
+  for (let i = 0; i < count; i += 1) {
+    offsets.push(-Math.PI / 2 + (Math.PI * i) / (count - 1));
+  }
+
+  for (let j = 0; j < back; j += 1) {
+    offsets.push(Math.PI / 2 + (Math.PI * (j + 1)) / (back + 1));
+  }
+
+  const points = new Float32Array((offsets.length + 1) * 2);
+  let clipped = false;
+
+  points[0] = x;
+  points[1] = y;
+
+  offsets.forEach((offset, i) => {
+    const angle = rotation + offset;
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    const along = Math.cos(offset);
+    const across = Math.abs(Math.sin(offset));
+    let reach = across > 1e-9 ? acrossMax / across : Infinity;
+
+    if (along > 1e-9) {
+      reach = Math.min(reach, alongMax / along);
+    } else if (along < -1e-9) {
+      reach = Math.min(reach, alongBack / -along);
+    }
+
+    const distance = castRay(x, y, dx, dy, reach, isBlocked, cellW, cellH);
+
+    if (distance < reach - 1e-6) {
+      clipped = true;
+    }
+
+    points[(i + 1) * 2] = x + dx * distance;
+    points[(i + 1) * 2 + 1] = y + dy * distance;
+  });
+
+  return { points, clipped, closed };
+}
+
+// UV точек веера в текстуре конуса — та же раскладка, что у спрайта
+// (`itemOf`): вершина — в `(margin, height / 2)` текстуры, ось — по `+x`,
+// `sx`/`sy` — мировых единиц на пиксель текстуры вдоль и поперёк оси
+export function fanUvs(points, { x, y, rotation, sx, sy, margin, width, height }) {
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const uvs = new Float32Array(points.length);
+
+  for (let i = 0; i < points.length; i += 2) {
+    const rx = points[i] - x;
+    const ry = points[i + 1] - y;
+    const along = rx * cos + ry * sin;
+    const across = ry * cos - rx * sin;
+
+    uvs[i] = (margin + along / sx) / width;
+    uvs[i + 1] = (height / 2 + across / sy) / height;
+  }
+
+  return uvs;
+}
+
+// индексы веера из `count` лучей: треугольники (вершина, луч i, луч i + 1);
+// `closed` — ещё и последний луч с первым
+export function fanIndices(count, closed = false) {
+  const open = Math.max(0, count - 1);
+  const indices = new Uint32Array((open + (closed && count > 2 ? 1 : 0)) * 3);
+
+  for (let i = 0; i < open; i += 1) {
+    indices[i * 3] = 0;
+    indices[i * 3 + 1] = i + 1;
+    indices[i * 3 + 2] = i + 2;
+  }
+
+  if (closed && count > 2) {
+    indices[open * 3] = 0;
+    indices[open * 3 + 1] = count;
+    indices[open * 3 + 2] = 1;
+  }
+
+  return indices;
+}

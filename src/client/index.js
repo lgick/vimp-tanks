@@ -97,7 +97,10 @@ export default {
         levelView,
         lighting,
         // «танк выстрелил»: эффект выстрела будит отдачу у танка стрелка
-        shots: createShotEvents(),
+        shots: createShotEvents({
+          segments: (x, y, dx, dy, range, level) =>
+            core.shot_segments(x, y, dx, dy, range, level),
+        }),
         // «взрыв»: эффект взрыва будит реакцию танков в его радиусе
         blasts: createBlastEvents(),
         mapDynamics: {

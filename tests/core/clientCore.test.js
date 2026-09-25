@@ -597,5 +597,30 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(tracer[8]).toBe(1); // startLevel — мост
       expect(tracer[9]).toBe(0); // endLevel — луч упал на землю
     });
+
+    it('shot_segments: луч с моста — плита до кромки, дальше земля', () => {
+      const client = makeClientCore();
+
+      // без карты — один сегмент уровня стрелка
+      expect([...client.shot_segments(352, 300, 1, 0, 500, 1)]).toEqual([
+        0, 500, 1,
+      ]);
+
+      client.set_map(layeredMap);
+
+      const flat = [...client.shot_segments(352, 300, 1, 0, 500, 1)];
+      const segments = [];
+
+      for (let i = 0; i < flat.length; i += 3) {
+        segments.push({ t0: flat[i], t1: flat[i + 1], level: flat[i + 2] });
+      }
+
+      // кромка плиты на x = 416: 64 единицы от дула
+      expect(segments[0].level).toBe(1);
+      expect(segments[0].t0).toBe(0);
+      expect(segments[0].t1).toBeCloseTo(64, 0);
+      expect(segments.at(-1).level).toBe(0);
+      expect(segments.at(-1).t1).toBeCloseTo(500, 3);
+    });
   });
 });

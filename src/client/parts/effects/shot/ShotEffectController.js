@@ -1,10 +1,12 @@
 import { Container } from 'pixi.js';
 import TracerEffect from './TracerEffect.js';
+import { tracerPieces } from './tracerPieces.js';
 import ImpactEffect from './ImpactEffect.js';
 import MuzzleFlashEffect from './MuzzleFlashEffect.js';
 import { levelZ } from '../../../levelZ.js';
 import { cameraCenter } from '../../../camera.js';
 import { applyParallax } from '../../../parallax.js';
+import { EMISSIVE_BASE_Z } from '../../../lighting/lightMath.js';
 import {
   parallax as parallaxConfig,
   lighting as lightingConfig,
@@ -38,10 +40,11 @@ export default class ShotEffectController extends Container {
     this.soundPositionY = data[W1_BODY_Y];
     this.hit = data[W1_WAS_HIT];
 
-    // 2.5D: трассер рисуется целиком на уровне КОНЦА луча — ломать линию
-    // на кромке плиты отложено (plan/README.md), а осколки обязаны лежать
-    // там же, где луч закончился, иначе они провалятся под мост. Уровень
-    // начала (`W1_START_LEVEL`) нужен только вспышке выстрела на стволе
+    // 2.5D: осколки и вспышка — на уровне КОНЦА луча, иначе осколки
+    // провалятся под мост. Трассер режется по сегментам уровней ядра и
+    // рисуется кусками на своих уровнях (`_layerFor`): луч с моста идёт над
+    // плитой и падает за кромкой. Уровень начала (`W1_START_LEVEL`) нужен
+    // сегментам и вспышке выстрела на стволе
     this.endLevel = data[W1_END_LEVEL] || 0;
     this.startLevel = data[W1_START_LEVEL] || 0;
     this.zIndex = levelZ(SHOT_BASE_Z, this.endLevel);
@@ -105,12 +108,24 @@ export default class ShotEffectController extends Container {
         const camera = cameraCenter(this.parent, this._renderer);
 
         applyParallax(this, camera, this.endLevel * parallaxConfig.shear, 1);
+
+        for (const [level, layer] of this.layers) {
+          if (this._levelView) {
+            layer.alpha = this._levelView.alphaFor(level, layer.refX, layer.refY);
+            layer.tint = this._levelView.tintFor(level);
+          }
+
+          applyParallax(layer, camera, level * parallaxConfig.shear, 1);
+        }
+
         this._followMuzzle();
         this._placeFlash(camera);
       };
     }
 
     this.tracer = null;
+    // контейнеры кусков трассера по уровням (см. _layerFor): level -> Container
+    this.layers = new Map();
     this.impact = null;
     // вспышка у дула; пока её нет, ждать нечего
     this.flash = null;
@@ -176,16 +191,69 @@ export default class ShotEffectController extends Container {
       this.flash.run();
     }
 
+    const pieces = tracerPieces(
+      this._shots?.path?.(
+        this.startPositionX,
+        this.startPositionY,
+        this.endPositionX,
+        this.endPositionY,
+        this.startLevel,
+      ),
+      dist,
+      this.endLevel,
+    );
+
     this.tracer = new TracerEffect(
       this.startPositionX,
       this.startPositionY,
       this.endPositionX,
       this.endPositionY,
       this._onTracerComplete.bind(this),
+      undefined,
+      {
+        pieces,
+        layerFor: level => this._layerFor(level, pieces),
+      },
     );
 
     this.addChild(this.tracer);
     this.tracer.run();
+  }
+
+  // Контейнер куска трассера уровня `level`. Днём кусок уровня конца
+  // рисуется в самом контроллере, как раньше. Остальные уровни — соседние
+  // контейнеры на сцене со своими zIndex и проекцией. Ночью трассер — свет:
+  // под картой освещённости (multiply) вдали от фар он гас до `ambient`, и
+  // дальний выстрел «не появлялся», поэтому все его куски — над картой
+  // своего уровня (эмиссив). Осколки и вспышка остаются под ней
+  _layerFor(level, pieces) {
+    const night = Boolean(this._lighting?.isNight?.());
+
+    if ((!night && level === this.endLevel) || !this.parent) {
+      return this;
+    }
+
+    let layer = this.layers.get(level);
+
+    if (!layer) {
+      const piece = pieces.find(entry => entry.level === level);
+      const mid = piece ? (piece.from + piece.to) / 2 : 0;
+      const dx = this.endPositionX - this.startPositionX;
+      const dy = this.endPositionY - this.startPositionY;
+      const total = Math.hypot(dx, dy) || 1;
+
+      layer = new Container();
+      layer.label = `shot-tracer-${level}`;
+      layer.eventMode = 'none';
+      layer.zIndex = levelZ(night ? EMISSIVE_BASE_Z : SHOT_BASE_Z, level);
+      // точка, по которой слой уступает видимость игроку под плитой
+      layer.refX = this.startPositionX + (dx / total) * mid;
+      layer.refY = this.startPositionY + (dy / total) * mid;
+      this.parent.addChild(layer);
+      this.layers.set(level, layer);
+    }
+
+    return layer;
   }
 
   // Танк едет, эффект живёт в мире: за время пролёта трассера корпус
@@ -337,6 +405,12 @@ export default class ShotEffectController extends Container {
       this.tracer.destroy();
       this.tracer = null;
     }
+
+    for (const layer of this.layers.values()) {
+      layer.destroy({ children: true });
+    }
+
+    this.layers.clear();
 
     if (this.impact) {
       this.impact.destroy();

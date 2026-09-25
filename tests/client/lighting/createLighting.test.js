@@ -1153,3 +1153,306 @@ describe('lighting: свет верхнего уровня на рампах', (
     expect(ground.rampLights.mask).toBeFalsy();
   });
 });
+
+// Фары и стены (этап 12): конус у стены рисуется веером по полигону
+// видимости, ось, упёршаяся в стену, даёт отсвет; засвет за стеной не
+// считается. Клетка 32 × 32, стены — вершины объёмов уровня (`setVolumeTops`)
+describe('lighting: фары и стены', () => {
+  const size = { cols: 20, rows: 20 };
+  // столбец клеток 3 (x 96..128) — стена
+  const column = Array.from({ length: 20 }, (_, row) => [3, row]);
+
+  const scene = ({ cfg = lighting, walls = column } = {}) => {
+    const context = setup(cfg);
+    const { service } = context;
+
+    service.registerTextures(textures());
+    service.acquireMap('w', nightLighting([]), STEP, 1, size);
+    service.setVolumeTops(0, walls, 1, {});
+
+    const cone = service.addLight({
+      kind: 'cone',
+      level: 0,
+      x: 40,
+      y: 48,
+      z: 0,
+      radius: 90,
+      spread: 0.5,
+      rotation: 0,
+      intensity: 0.9,
+      color: 0xfff1c4,
+    });
+
+    return { ...context, cone };
+  };
+  const withHeadlights = (patch, extra = {}) => ({
+    ...lighting,
+    ...extra,
+    headlights: { ...lighting.headlights, ...patch },
+  });
+  const coneTexture = service => service.texture('cone').texture;
+  const radialTexture = service => service.texture('radial').texture;
+
+  it('конус упёрся в стену — веер, в чистом поле — прежний спрайт', () => {
+    const { service } = scene();
+    const layout = spyLayout();
+
+    frame(service);
+
+    const [item] = lastItems(layout, 0).filter(
+      entry => entry.texture === coneTexture(service),
+    );
+
+    expect(item.fan).not.toBeNull();
+
+    // концы лучей не дальше грани стены x = 96
+    const { points } = item.fan.shape;
+
+    for (let i = 2; i < points.length; i += 2) {
+      expect(points[i]).toBeLessThanOrEqual(96 + 1e-3);
+    }
+
+    const open = scene({ walls: [[15, 15]] });
+    const openLayout = spyLayout();
+
+    frame(open.service);
+
+    const [free] = lastItems(openLayout, 0).filter(
+      entry => entry.texture === coneTexture(open.service),
+    );
+
+    expect(free.fan).toBeNull();
+  });
+
+  it('отсвет — только при упоре оси в стену', () => {
+    const { service } = scene();
+    const layout = spyLayout();
+
+    frame(service);
+
+    const bounces = lastItems(layout, 0).filter(
+      entry => entry.texture === radialTexture(service),
+    );
+
+    expect(bounces).toHaveLength(1);
+    // центр — перед стеной, на оси фары
+    expect(bounces[0].x).toBeLessThan(96);
+    expect(bounces[0].y).toBeCloseTo(48);
+
+    // ось мимо стены (фара смотрит вниз, вдоль стены): отсвета нет
+    const side = scene();
+    const sideLayout = spyLayout();
+
+    side.service.updateLight(side.cone, { rotation: Math.PI / 2 });
+    frame(side.service);
+
+    expect(
+      lastItems(sideLayout, 0).filter(
+        entry => entry.texture === radialTexture(side.service),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('стена дальше maxDistance — без отсвета, но веер есть', () => {
+    const { service } = scene({
+      cfg: withHeadlights({
+        bounce: { ...lighting.headlights.bounce, maxDistance: 30 },
+      }),
+    });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const items = lastItems(layout, 0);
+
+    expect(items.filter(entry => entry.texture === radialTexture(service))).toHaveLength(0);
+    expect(items.find(entry => entry.fan)).toBeDefined();
+  });
+
+  it('окклюзия выключена — прежнее поведение: спрайт, без отсвета', () => {
+    const { service } = scene({
+      cfg: withHeadlights({
+        occlusion: { ...lighting.headlights.occlusion, enabled: false },
+      }),
+    });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const items = lastItems(layout, 0);
+
+    expect(items).toHaveLength(1);
+    expect(items[0].fan).toBeNull();
+  });
+
+  it('отсвет идёт в счёт maxLights', () => {
+    const { service } = scene({ cfg: { ...lighting, maxLights: 1 } });
+    const layout = spyLayout();
+
+    frame(service);
+
+    expect(lastItems(layout, 0)).toHaveLength(1);
+  });
+
+  it('стоящая фара не пересчитывает веер; сдвинутая — пересчитывает', () => {
+    const { service, cone } = scene();
+    const layout = spyLayout();
+    const fanOf = () =>
+      lastItems(layout, 0).find(entry => entry.fan).fan.shape;
+
+    frame(service);
+
+    const first = fanOf();
+
+    frame(service);
+    expect(fanOf()).toBe(first);
+
+    service.updateLight(cone, { x: 50 });
+    frame(service);
+    expect(fanOf()).not.toBe(first);
+  });
+
+  it('карта освещённости рисует веер мешем с текстурой конуса', () => {
+    const { service } = scene();
+    const layout = spyLayout();
+
+    frame(service);
+
+    const ground = layout.mock.contexts.find(map => map.level === 0);
+    const [mesh] = ground.fanPool;
+
+    expect(mesh.visible).toBe(true);
+    expect(mesh.parent).toBe(ground.lights);
+    expect(mesh.texture).toBe(coneTexture(service));
+    expect(mesh.blendMode).toBe('add');
+    // лучи вперёд, замыкающие назад (rays / 8, не меньше 3) и вершина
+    const { rays } = lighting.headlights.occlusion;
+
+    expect(mesh.geometry.positions.length).toBe(
+      (rays + Math.max(3, Math.round(rays / 8)) + 1) * 2,
+    );
+    // веер замкнут: треугольник на каждую пару соседних лучей по кругу
+    expect(mesh.geometry.indices.length).toBe(
+      (rays + Math.max(3, Math.round(rays / 8))) * 3,
+    );
+    // спрайта конуса нет — только отсвет
+    expect(
+      ground.pool.filter(sprite => sprite.visible && sprite.texture === coneTexture(service)),
+    ).toHaveLength(0);
+  });
+
+  it('засвет: фара за стеной точку не освещает', () => {
+    const { service } = scene();
+
+    frame(service);
+    Ticker.shared.lastTime += 16;
+
+    // перед стеной — светит, за стеной — нет
+    expect(service.lightsAt(80, 48, 0)).toHaveLength(1);
+    expect(service.lightsAt(120, 48, 0)).toEqual([]);
+
+    const open = scene({ walls: [[15, 15]] });
+
+    frame(open.service);
+    Ticker.shared.lastTime += 16;
+    expect(open.service.lightsAt(120, 48, 0)).toHaveLength(1);
+  });
+});
+
+// Горка — препятствие фарам своего подножия (этап 14): полоса x 64..256,
+// y 96..192, подъём на восток с уровня 0 на 1; клетка 32
+describe('lighting: фары и рампы', () => {
+  const size = { cols: 20, rows: 20 };
+  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 8, row0: 3, row1: 6 };
+
+  const scene = light => {
+    const context = setup();
+    const { service } = context;
+
+    service.registerTextures(textures());
+    service.acquireMap('r', nightLighting([]), STEP, 1, size);
+    service.setRampWedges(0, [lane], {});
+
+    const cone = service.addLight({
+      kind: 'cone',
+      level: 0,
+      z: 0,
+      radius: 90,
+      spread: 0.5,
+      intensity: 0.9,
+      color: 0xfff1c4,
+      ...light,
+    });
+
+    return { ...context, cone };
+  };
+  const coneItem = (layout, service) =>
+    lastItems(layout, 0).find(entry => entry.texture === service.texture('cone').texture);
+  const ends = points => {
+    const list = [];
+
+    for (let i = 2; i < points.length; i += 2) {
+      list.push([points[i], points[i + 1]]);
+    }
+
+    return list;
+  };
+
+  it('сбоку у верха горки — свет кончается на борту', () => {
+    const { service } = scene({ x: 200, y: 48, rotation: Math.PI / 2 });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const item = coneItem(layout, service);
+
+    expect(item.fan).not.toBeNull();
+
+    for (const [, y] of ends(item.fan.shape.points)) {
+      expect(y).toBeLessThanOrEqual(96 + 1e-3);
+    }
+  });
+
+  it('за верхним торцом — свет кончается на торце', () => {
+    const { service } = scene({ x: 300, y: 144, rotation: Math.PI });
+    const layout = spyLayout();
+
+    frame(service);
+
+    for (const [x] of ends(coneItem(layout, service).fan.shape.points)) {
+      expect(x).toBeGreaterThanOrEqual(256 - 1e-3);
+    }
+  });
+
+  it('от подножия вверх по склону — склон освещён', () => {
+    const { service } = scene({ x: 40, y: 144, rotation: 0 });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const item = coneItem(layout, service);
+    const reach = Math.max(...ends(item.fan?.shape.points ?? [0, 0, 999, 0]).map(([x]) => x));
+
+    // ось уходит далеко за подножие x = 64
+    expect(reach).toBeGreaterThan(120);
+  });
+
+  it('фара на самой рампе светит как раньше', () => {
+    const { service } = scene({ x: 150, y: 144, z: 0.4, rotation: Math.PI / 2 });
+    const layout = spyLayout();
+
+    frame(service);
+
+    expect(coneItem(layout, service).fan).toBeNull();
+  });
+
+  it('засвет: фара сбоку горки не светит на её склон', () => {
+    const { service } = scene({ x: 200, y: 48, rotation: Math.PI / 2 });
+
+    frame(service);
+    Ticker.shared.lastTime += 16;
+
+    expect(service.lightsAt(200, 80, 0)).toHaveLength(1);
+    expect(service.lightsAt(200, 120, 0)).toEqual([]);
+  });
+});

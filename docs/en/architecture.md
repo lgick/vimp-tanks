@@ -146,6 +146,15 @@ appears at the original hit point. One effect is
 created per shot — the local one is predicted and the authoritative echo is
 filtered by the core — so every shot kicks exactly once. Ids are compared as
 strings: the part context and the tracer row may carry different types.
+The bus also cuts a shot into level segments (`path(...)` over
+`ClientCore.shot_segments` — the same `shot_levels::ray_segments` the host
+judges hits by). `tracerPieces` turns them into non-overlapping pieces: in
+the edge window the earlier segment wins, and the last piece takes the
+row's end level. `TracerEffect` draws every piece in its level's container,
+with that level's projection and zIndex. A shot from a bridge runs above
+the slab and drops beyond the edge; before, the whole line was drawn at the
+end level, under the slab. By day the end-level piece stays in the
+controller.
 
 `blasts` (`src/client/blastEvents.js`) is the same kind of bus for
 explosions: `ExplosionEffect` (bomb or barrel) reports `{ x, y, radius,
@@ -383,7 +392,12 @@ live tank carries a faint `tankGlow`), the radar does not change, and
 - **Emissive layer.** Per level a container at `levelZ(45, L)` with additive
   sprites drawn over the darkness: neon signs (`parts/map/NeonSign.js`).
   Their transparency is `levelView.alphaFor`. Without night `addEmissive`
-  returns `false`, and the caller keeps its sprite.
+  returns `false`, and the caller keeps its sprite. A shot tracer is light
+  too: at night every tracer piece goes into a sibling container at
+  `levelZ(45, L)` of its own level (that level's projection and
+  transparency), otherwise a long shot faded to `ambient` beyond the
+  headlights and never showed; the debris and the muzzle flash stay under
+  the light map.
 - **Lamp heads.** Lights set into the road: per level a container at
   `levelZ(1.5, L)` (`LAMP_HEAD_BASE_Z`) — above the road and the track marks,
   below the effects and the tank, so a tank driving over a lamp covers it.
@@ -421,6 +435,27 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   lighting the `from` level (a tank on the ramp, `levels [0, 1]`) is not
   added twice. The ground under the bridge stays dark — it is outside the
   mask.
+- **Headlights and walls.** The cells of a level's volumes (building,
+  canal and railing walls — what `setVolumeTops` hands over) form its
+  obstacle grid, rebuilt with the masks. A headlight cone of that level
+  casts `headlights.occlusion.rays` rays across its texture rectangle
+  (`lightMath.coneFan`, a grid DDA `castRay`); when any ray stops at a wall
+  the cone is drawn as a fan mesh over that visibility polygon with the
+  same texture (`fanUvs`), in the light map's `lights`/`rampLights`
+  container, projected by the mesh transform — no stencil mask per cone.
+  An unclipped cone stays the old sprite. The fan is cached per source
+  until it moves, turns or the grid changes. Since the fan stops at the
+  wall's footprint, neither the floor behind it nor the volume's side faces
+  drawn over the footprint get the light. Where the cone axis hits a wall
+  (`firstHit`) no farther than `headlights.bounce.maxDistance`, a radial
+  bounce spot is added in front of it. `lightsAt` skips a cone whose line
+  of sight to the point is blocked, so there are no glints behind walls.
+  Ramps rising from the light's level (`setRampWedges`) are obstacles too,
+  by direction (`lightMath.rampBlocks`): a ray entering through the foot
+  lights the slope and stops where it leaves the lane; one entering
+  through a side or the top end stops if the wedge there is higher than
+  the headlight by more than `RAMP_CLEARANCE`. A headlight standing on a
+  ramp is exempt.
 - **Glints.** `Tank` and `MapObject` ask the service for the strongest
   source at their world point (`lightsAt`: lamps through a cell grid built
   once per map, headlight cones except the tank's own, flashes) and draw

@@ -31,7 +31,19 @@ export function tracerSpan({
 }
 
 export default class TracerEffect extends BaseEffect {
-  constructor(startX, startY, endX, endY, onComplete, config = tracerConfig) {
+  // `options.pieces` — куски луча по уровням `[{ from, to, level }]`
+  // (`tracerPieces`), `options.layerFor(level)` — контейнер, в котором
+  // рисуется кусок уровня (своя проекция и zIndex). Без них — один кусок
+  // во весь луч внутри самого эффекта
+  constructor(
+    startX,
+    startY,
+    endX,
+    endY,
+    onComplete,
+    config = tracerConfig,
+    options = {},
+  ) {
     super(onComplete);
 
     this.startPositionX = startX;
@@ -40,10 +52,26 @@ export default class TracerEffect extends BaseEffect {
     this.endPositionY = endY;
     this.config = config;
 
-    // свечение складывается со сценой: трассер — это свет, а не краска
-    this.graphics = new Graphics();
-    this.graphics.blendMode = 'add';
-    this.addChild(this.graphics);
+    // свечение складывается со сценой: трассер — это свет, а не краска.
+    // По графике на уровень: в чужом контейнере она не ребёнок эффекта и
+    // уничтожается им самим
+    this._layerFor = options.layerFor || null;
+    this.pieces = options.pieces?.length
+      ? options.pieces
+      : [{ from: 0, to: Infinity, level: null }];
+    this._graphics = new Map();
+
+    for (const { level } of this.pieces) {
+      if (!this._graphics.has(level)) {
+        const graphics = new Graphics();
+
+        graphics.blendMode = 'add';
+        (this._layerFor?.(level) || this).addChild(graphics);
+        this._graphics.set(level, graphics);
+      }
+    }
+
+    this.graphics = this._graphics.values().next().value;
 
     this.elapsedTime = 0;
     this.progress = 0;
@@ -92,8 +120,14 @@ export default class TracerEffect extends BaseEffect {
     this._draw();
   }
 
+  _clear() {
+    for (const graphics of this._graphics.values()) {
+      graphics.clear();
+    }
+  }
+
   _draw() {
-    this.graphics.clear();
+    this._clear();
 
     const { tail, head } = tracerSpan({
       progress: this.progress,
@@ -121,26 +155,23 @@ export default class TracerEffect extends BaseEffect {
     this._draw();
 
     if (this.elapsedTime >= this.animationDuration) {
-      this.graphics.clear();
+      this._clear();
       this._completeEffect();
     }
   }
 
   // хвост гаснет к дулу: подотрезки с растущей к голове альфой (по квадрату). Сначала
   // все слои свечения, потом ядро — иначе свечение следующего подотрезка
-  // легло бы поверх ядра предыдущего
+  // легло бы поверх ядра предыдущего. Подотрезок, пересекающий границу
+  // уровней, режется по ней: каждая часть — в графику своего уровня
   _drawTrail(tail, head, alpha) {
     const { color, coreColor, coreWidth, glowWidth, glowAlpha } = this.config;
     const steps = Math.max(1, this.config.fadeSteps);
-    const point = distance => [
-      this.startPositionX + this.nx * distance,
-      this.startPositionY + this.ny * distance,
-    ];
     const pieces = [];
 
     for (let i = 0; i < steps; i += 1) {
-      const from = point(lerp(tail, head, i / steps));
-      const to = point(lerp(tail, head, (i + 1) / steps));
+      const from = lerp(tail, head, i / steps);
+      const to = lerp(tail, head, (i + 1) / steps);
 
       // квадрат: яркость собрана у головы, хвост быстро сходит на нет —
       // так выглядит смазанная в движении точка, а не ровная полоса
@@ -149,8 +180,10 @@ export default class TracerEffect extends BaseEffect {
       pieces.push({ from, to, fade: share * share });
     }
 
-    for (const { from, to, fade } of pieces) {
-      this.graphics
+    const parts = this._split(pieces);
+
+    for (const { graphics, from, to, fade } of parts) {
+      graphics
         .moveTo(from[0], from[1])
         .lineTo(to[0], to[1])
         .stroke({
@@ -161,8 +194,8 @@ export default class TracerEffect extends BaseEffect {
         });
     }
 
-    for (const { from, to, fade } of pieces) {
-      this.graphics
+    for (const { graphics, from, to, fade } of parts) {
+      graphics
         .moveTo(from[0], from[1])
         .lineTo(to[0], to[1])
         .stroke({
@@ -174,11 +207,47 @@ export default class TracerEffect extends BaseEffect {
     }
   }
 
-  destroy(options) {
-    if (this.graphics) {
-      this.graphics.clear();
+  // подотрезки `[{ from, to, fade }]` (дистанции от дула) → части по кускам
+  // уровней `{ graphics, from: [x, y], to: [x, y], fade }`
+  _split(segments) {
+    const point = distance => [
+      this.startPositionX + this.nx * distance,
+      this.startPositionY + this.ny * distance,
+    ];
+    const parts = [];
+
+    for (const { from, to, fade } of segments) {
+      for (const piece of this.pieces) {
+        const a = Math.max(from, piece.from);
+        const b = Math.min(to, piece.to);
+
+        if (b - a > 1e-6) {
+          parts.push({
+            graphics: this._graphics.get(piece.level),
+            from: point(a),
+            to: point(b),
+            fade,
+          });
+        }
+      }
     }
 
+    return parts;
+  }
+
+  destroy(options) {
+    for (const graphics of this._graphics.values()) {
+      if (!graphics.destroyed) {
+        graphics.clear();
+
+        // графика в чужом контейнере — не ребёнок эффекта
+        if (graphics.parent !== this) {
+          graphics.destroy();
+        }
+      }
+    }
+
+    this._graphics.clear();
     super.destroy(options);
   }
 }

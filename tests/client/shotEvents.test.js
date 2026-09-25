@@ -61,3 +61,27 @@ describe('createShotEvents', () => {
     expect(shots.muzzle('7')).toBe(null);
   });
 });
+
+describe('shotEvents: сегменты луча (path)', () => {
+  it('без ядра — null', () => {
+    expect(createShotEvents().path(0, 0, 100, 0, 1)).toBeNull();
+  });
+
+  it('зовёт ядро с единичным направлением и длиной луча, разбирает плоский ответ', () => {
+    const segments = vi.fn(() => [0, 30, 1, 30, 50, 0]);
+    const shots = createShotEvents({ segments });
+
+    expect(shots.path(10, 20, 10, 70, 1)).toEqual([
+      { t0: 0, t1: 30, level: 1 },
+      { t0: 30, t1: 50, level: 0 },
+    ]);
+    expect(segments).toHaveBeenCalledWith(10, 20, 0, 1, 50, 1);
+  });
+
+  it('луч нулевой длины — null, ядро не зовётся', () => {
+    const segments = vi.fn();
+
+    expect(createShotEvents({ segments }).path(5, 5, 5, 5, 0)).toBeNull();
+    expect(segments).not.toHaveBeenCalled();
+  });
+});

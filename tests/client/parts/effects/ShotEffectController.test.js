@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Container, Texture } from 'pixi.js';
 import ShotEffectController from '../../../../src/client/parts/effects/shot/ShotEffectController.js';
+import { parallax } from '../../../../src/config/render.js';
 
 // Проверяется проводка якоря попадания, а не отрисовка: контроллер обязан
 // пересчитать точку удара по ТЕКУЩЕМУ трансформу задетого ящика и уметь
@@ -309,5 +310,129 @@ describe('ShotEffectController: привязка к дулу', () => {
     controller.onRender();
 
     expect(controller.tracer.startPositionY).toBe(20);
+  });
+});
+
+describe('ShotEffectController: трассер по уровням', () => {
+  // выстрел с моста (уровень 1) вдаль: плита — первые 300 единиц луча,
+  // дальше луч падает на землю (уровень 0)
+  const row = [10, 20, 910, 20, 0, 0, false, 1, 1, 0];
+  const night = isNight => ({ flash: vi.fn(), isNight: () => isNight });
+  const bridge = () => ({
+    fired: vi.fn(),
+    muzzle: () => null,
+    path: vi.fn(() => [
+      { t0: 0, t1: 300, level: 1 },
+      { t0: 300, t1: 900, level: 0 },
+    ]),
+  });
+  const graphicsIn = container =>
+    container.children.filter(child => child.constructor.name === 'Graphics');
+
+  it('сегменты берутся у сервиса shots от дула с уровня стрелка', () => {
+    const shots = bridge();
+    const controller = makeController(row, { shots });
+
+    controller.run();
+
+    expect(shots.path).toHaveBeenCalledWith(10, 20, 910, 20, 1);
+    expect(controller.tracer.pieces).toEqual([
+      { from: 0, to: 300, level: 1 },
+      { from: 300, to: 900, level: 0 },
+    ]);
+  });
+
+  it('днём кусок моста — в слое уровня 1 над плитой, кусок земли — в контроллере', () => {
+    const controller = makeController(row, { shots: bridge() });
+
+    controller.run();
+
+    const layer = controller.layers.get(1);
+
+    expect(layer.parent).toBe(controller.parent);
+    // levelZ(SHOT_BASE_Z = 2, 1)
+    expect(layer.zIndex).toBe(102);
+    expect(controller.layers.has(0)).toBe(false);
+    expect(graphicsIn(layer)).toHaveLength(1);
+    expect(graphicsIn(controller)).toHaveLength(1);
+  });
+
+  it('линия режется на кромке: у каждого уровня своя часть', () => {
+    const controller = makeController(row, { shots: bridge() });
+
+    controller.run();
+    controller.tracer._update(controller.tracer.animationDuration * 0.9);
+
+    const [bridgeGraphics] = graphicsIn(controller.layers.get(1));
+    const [groundGraphics] = graphicsIn(controller);
+
+    // голова уже за кромкой: рисуют оба уровня
+    expect(bridgeGraphics.bounds.maxX).toBeLessThanOrEqual(310 + 1);
+    expect(groundGraphics.bounds.minX).toBeGreaterThanOrEqual(310 - 1);
+  });
+
+  it('ночью все куски — над картой освещённости своего уровня', () => {
+    const controller = makeController(row, {
+      shots: bridge(),
+      lighting: night(true),
+    });
+
+    controller.run();
+
+    // levelZ(EMISSIVE_BASE_Z = 45, L)
+    expect(controller.layers.get(1).zIndex).toBe(145);
+    expect(controller.layers.get(0).zIndex).toBe(45);
+    expect(graphicsIn(controller)).toHaveLength(0);
+    // осколки и вспышка остаются в контроллере, под картой освещённости
+    expect(controller.flash.parent).toBe(controller);
+  });
+
+  it('слой повторяет проекцию своего уровня и прозрачность по своему куску', () => {
+    const alphaFor = vi.fn(() => 0.3);
+    const levelView = { alphaFor, tintFor: () => 0xb0b0c0 };
+    const controller = makeController(row, {
+      shots: bridge(),
+      levelView,
+      renderer: { screen: { width: 800, height: 600 } },
+    });
+
+    controller.run();
+    controller.onRender();
+
+    const layer = controller.layers.get(1);
+
+    expect(layer.alpha).toBe(0.3);
+    expect(layer.tint).toBe(0xb0b0c0);
+    // середина куска моста: 150 единиц от дула
+    expect(alphaFor).toHaveBeenCalledWith(1, 160, 20);
+    expect(layer.scale.x).toBeCloseTo(1 + parallax.shear);
+  });
+
+  it('без сервиса сегментов — один кусок на уровне конца в контроллере', () => {
+    const controller = makeController(row);
+
+    controller.run();
+
+    expect(controller.tracer.pieces).toEqual([{ from: 0, to: 900, level: 0 }]);
+    expect(controller.layers.size).toBe(0);
+  });
+
+  it('уничтожение снимает слои со сцены', () => {
+    const controller = makeController(row, {
+      shots: bridge(),
+      lighting: night(true),
+    });
+    const stage = controller.parent;
+
+    controller.run();
+
+    const layers = [...controller.layers.values()];
+
+    controller.destroy();
+
+    for (const layer of layers) {
+      expect(layer.destroyed).toBe(true);
+      expect(stage.children).not.toContain(layer);
+    }
   });
 });

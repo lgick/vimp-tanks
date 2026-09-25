@@ -18,6 +18,12 @@ import {
   shadowWedge,
   shaftSway,
   rampWedgePolygon,
+  castRay,
+  firstHit,
+  coneFan,
+  fanUvs,
+  fanIndices,
+  rampBlocks,
 } from '../../../src/client/lighting/lightMath.js';
 import { cellOfPoint } from '../../../src/client/parts/map/tileGrid.js';
 
@@ -364,5 +370,257 @@ describe('lightMath: контур клина рампы', () => {
 
     expect(points[0]).toBeCloseTo(20 * 1.2);
     expect(points[6]).toBeCloseTo(50);
+  });
+});
+
+// Фары и стены (этап 12): клетка 10 × 10, стена — набор клеток
+describe('lightMath: castRay / firstHit', () => {
+  const CELL = 10;
+  const wall = cells => {
+    const set = new Set(cells.map(([col, row]) => `${col},${row}`));
+
+    return (col, row) => set.has(`${col},${row}`);
+  };
+
+  it('пустое поле — луч до конца', () => {
+    expect(castRay(5, 5, 1, 0, 100, wall([]), CELL, CELL)).toBe(100);
+    expect(firstHit(5, 5, 1, 0, 100, wall([]), CELL, CELL)).toBeNull();
+  });
+
+  it('стена поперёк — расстояние до её грани', () => {
+    const blocked = wall([[3, 0]]);
+
+    expect(castRay(5, 5, 1, 0, 100, blocked, CELL, CELL)).toBeCloseTo(25);
+    // влево та же стена не мешает
+    expect(castRay(5, 5, -1, 0, 100, blocked, CELL, CELL)).toBe(100);
+
+    const hit = firstHit(5, 5, 1, 0, 100, blocked, CELL, CELL);
+
+    expect(hit.distance).toBeCloseTo(25);
+    expect(hit.x).toBeCloseTo(30);
+    expect(hit.y).toBeCloseTo(5);
+  });
+
+  it('стена дальше maxDist не видна', () => {
+    expect(castRay(5, 5, 1, 0, 20, wall([[3, 0]]), CELL, CELL)).toBe(20);
+  });
+
+  it('диагональ и вертикаль: вход в клетку по ближней грани', () => {
+    const d = Math.SQRT1_2;
+
+    expect(castRay(5, 5, d, d, 100, wall([[2, 2]]), CELL, CELL)).toBeCloseTo(
+        15 * Math.SQRT2,
+    );
+    expect(castRay(5, 5, 0, -1, 100, wall([[0, -2]]), CELL, CELL)).toBeCloseTo(
+      15,
+    );
+  });
+
+  it('начало в стене — 0', () => {
+    expect(castRay(5, 5, 1, 0, 100, wall([[0, 0]]), CELL, CELL)).toBe(0);
+  });
+});
+
+describe('lightMath: coneFan / fanUvs / fanIndices', () => {
+  const CELL = 10;
+  const wall = cells => {
+    const set = new Set(cells.map(([col, row]) => `${col},${row}`));
+
+    return (col, row) => set.has(`${col},${row}`);
+  };
+  const cone = { x: 5, y: 55, rotation: 0, alongMax: 100, acrossMax: 50, rays: 9 };
+  const ends = points => {
+    const list = [];
+
+    for (let i = 2; i < points.length; i += 2) {
+      list.push([points[i], points[i + 1]]);
+    }
+
+    return list;
+  };
+
+  it('пустое поле — полный конус, не обрезан', () => {
+    const { points, clipped } = coneFan(cone, wall([]), CELL, CELL);
+
+    expect(clipped).toBe(false);
+    expect(points.length).toBe(20);
+    expect([points[0], points[1]]).toEqual([5, 55]);
+
+    // концы лучей — на краю прямоугольника текстуры перед вершиной
+    for (const [x, y] of ends(points)) {
+      const onFar = Math.abs(x - 105) < 1e-3;
+      const onSide = Math.abs(Math.abs(y - 55) - 50) < 1e-3;
+
+      expect(onFar || onSide).toBe(true);
+    }
+
+    // крайние лучи — поперёк оси, у вершины: размытый край не срезан
+    expect(points[2]).toBeCloseTo(5);
+    expect(points[3]).toBeCloseTo(5);
+    expect(points[18]).toBeCloseTo(5);
+    expect(points[19]).toBeCloseTo(105);
+    // ось — до дальнего края
+    expect(points[10]).toBeCloseTo(105);
+  });
+
+  it('стена поперёк — все лучи кончаются на её грани', () => {
+    const column = Array.from({ length: 20 }, (_, row) => [4, row]);
+    const { points, clipped } = coneFan(cone, wall(column), CELL, CELL);
+
+    expect(clipped).toBe(true);
+
+    for (const [x] of ends(points)) {
+      expect(x).toBeLessThanOrEqual(40 + 1e-3);
+    }
+
+    // ось упёрлась в грань стены
+    expect(points[10]).toBeCloseTo(40, 3);
+  });
+
+  it('стена сбоку — срезан только край', () => {
+    const row = Array.from({ length: 20 }, (_, col) => [col, 3]);
+    const { points, clipped } = coneFan(cone, wall(row), CELL, CELL);
+    const list = ends(points);
+
+    expect(clipped).toBe(true);
+    // крайний луч вверх (−y) упёрся в ряд 3 — его нижняя грань y = 40
+    expect(list[0][1]).toBeCloseTo(40, 3);
+    // ось и нижняя половина — до края прямоугольника
+    expect(list[4][0]).toBeCloseTo(105, 3);
+    expect(list[8][1]).toBeCloseTo(105, 3);
+  });
+
+  it('вплотную к стене — веер схлопывается в точку', () => {
+    const { points, clipped } = coneFan(cone, wall([[0, 5]]), CELL, CELL);
+
+    expect(clipped).toBe(true);
+
+    for (const [x, y] of ends(points)) {
+      expect(x).toBe(5);
+      expect(y).toBe(55);
+    }
+  });
+
+  it('fanUvs: вершина — в (margin, середина), ось — вдоль u', () => {
+    const uvs = fanUvs(new Float32Array([10, 20, 30, 20, 10, 25]), {
+      x: 10,
+      y: 20,
+      rotation: 0,
+      sx: 0.5,
+      sy: 0.25,
+      margin: 4,
+      width: 48,
+      height: 40,
+    });
+
+    expect(uvs[0]).toBeCloseTo(4 / 48);
+    expect(uvs[1]).toBeCloseTo(0.5);
+    // 20 вдоль → 40 пикселей
+    expect(uvs[2]).toBeCloseTo(44 / 48);
+    expect(uvs[3]).toBeCloseTo(0.5);
+    // 5 поперёк (+y при rotation 0) → 20 пикселей вниз
+    expect(uvs[4]).toBeCloseTo(4 / 48);
+    expect(uvs[5]).toBeCloseTo(40 / 40);
+  });
+
+  it('fanUvs: поворот учитывается', () => {
+    const uvs = fanUvs(new Float32Array([0, 0, 0, 10]), {
+      x: 0,
+      y: 0,
+      rotation: Math.PI / 2,
+      sx: 1,
+      sy: 1,
+      margin: 0,
+      width: 20,
+      height: 20,
+    });
+
+    // точка по оси повёрнутой фары (+y) — вдоль u
+    expect(uvs[2]).toBeCloseTo(0.5);
+    expect(uvs[3]).toBeCloseTo(0.5);
+  });
+
+  it('fanIndices: треугольники от вершины по соседним лучам', () => {
+    expect([...fanIndices(3)]).toEqual([0, 1, 2, 0, 2, 3]);
+  });
+
+  it('fanIndices: замкнутый веер — последний луч с первым', () => {
+    expect([...fanIndices(3, true)]).toEqual([0, 1, 2, 0, 2, 3, 0, 3, 1]);
+  });
+
+  it('alongBack: веер замкнут назад до края текстуры за фарой', () => {
+    const { points, clipped, closed } = coneFan(
+      { ...cone, alongBack: 4 },
+      wall([]),
+      CELL,
+      CELL,
+    );
+    const list = ends(points);
+
+    expect(closed).toBe(true);
+    expect(clipped).toBe(false);
+    // 9 лучей вперёд и 3 назад
+    expect(list).toHaveLength(12);
+
+    // задние лучи — не дальше 4 за вершиной по оси
+    for (const [x] of list.slice(9)) {
+      expect(x).toBeCloseTo(1, 3);
+    }
+  });
+});
+
+// Рампа как препятствие свету подножия: полоса x 20..60, y 0..30, подъём на
+// восток с уровня 0 на 1; клетка 10 × 10
+describe('lightMath: rampBlocks', () => {
+  const CELL = 10;
+  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 6, row0: 0, row1: 3 };
+  const laneAt = (col, row) =>
+    col >= 2 && col < 6 && row >= 0 && row < 3 ? lane : null;
+  const enter = (col, row, prevCol, prevRow, x, y, z = 0) =>
+    rampBlocks({
+      lane: laneAt(col, row),
+      prevLane: laneAt(prevCol, prevRow),
+      col,
+      row,
+      prevCol,
+      prevRow,
+      x,
+      y,
+      z,
+      cellW: CELL,
+      cellH: CELL,
+    });
+
+  it('вход через подножие и ход по полосе — свет проходит', () => {
+    expect(enter(2, 1, 1, 1, 20, 15)).toBe(false);
+    expect(enter(3, 1, 2, 1, 30, 15)).toBe(false);
+  });
+
+  it('вход через борт у верха — стоп, у подножия — проходит', () => {
+    expect(enter(4, 0, 4, -1, 45, 0)).toBe(true);
+    expect(enter(2, 0, 2, -1, 21, 0)).toBe(false);
+  });
+
+  it('вход через верхний торец — стоп', () => {
+    expect(enter(5, 1, 6, 1, 60, 15)).toBe(true);
+  });
+
+  it('фара выше клина проходит через борт', () => {
+    expect(enter(4, 0, 4, -1, 45, 0, 1)).toBe(false);
+  });
+
+  it('выход из полосы — стоп: склон конечен', () => {
+    expect(enter(6, 1, 5, 1, 60, 15)).toBe(true);
+    expect(enter(3, 3, 3, 2, 35, 30)).toBe(true);
+  });
+
+  it('castRay: снизу по склону до торца, сбоку — до борта', () => {
+    const isBlocked = (col, row, prevCol, prevRow, x, y) =>
+      prevCol !== null && enter(col, row, prevCol, prevRow, x, y);
+
+    expect(castRay(5, 15, 1, 0, 200, isBlocked, CELL, CELL)).toBeCloseTo(55);
+    expect(castRay(45, -15, 0, 1, 200, isBlocked, CELL, CELL)).toBeCloseTo(15);
+    // мимо горки — до конца
+    expect(castRay(5, 45, 1, 0, 200, isBlocked, CELL, CELL)).toBe(200);
   });
 });

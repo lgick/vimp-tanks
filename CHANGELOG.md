@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `ClientCore.shot_segments(x, y, dx, dy, range, level)`: the level
+  segments of a shot ray, as the host cuts it.
+
+### Fixed
+
+- Headlights no longer shine through walls or onto building sides; they
+  stop at walls and bounce off them (`lighting.headlights.occlusion`,
+  `lighting.headlights.bounce`).
+- At night, long-range shots are visible again: the tracer is drawn above
+  the night light map instead of fading into the dark beyond the headlights.
+- A shot fired from a bridge or the overpass is visible again: the tracer is
+  drawn per level — above the slab while over it, below beyond the edge —
+  instead of entirely at the level where the ray ends, under the slab.
+- Headlights of a tank beside a ramp or behind its top end no longer light
+  the slope; only light coming up from the foot does.
+
 ## [0.21.0] - 2026-09-25
 
 ### ⚠️ Breaking

@@ -194,6 +194,24 @@ impl ClientCore {
             .and_then(|map| map.dir_at(level, x, y))
             .map_or(-1, i32::from)
     }
+
+    /// Сегменты луча выстрела по уровням — те же `shot_levels::ray_segments`,
+    /// по которым хост судит попадание: `(x, y)` — дуло, `(dx, dy)` —
+    /// единичное направление, `range` — длина луча, `level` — уровень
+    /// стрелка. Плоско: `[t0, t1, level, …]`, `t` — мировые единицы вдоль
+    /// луча. Трассер режется по ним на куски, и каждый рисуется на своём
+    /// уровне: луч с моста идёт над плитой и падает за кромкой. Карты нет
+    /// или она одноуровневая — один сегмент `[0, range, level]`.
+    pub fn shot_segments(&self, x: f32, y: f32, dx: f32, dy: f32, range: f32, level: u8) -> Vec<f32> {
+        let Some(levels) = self.state.game().levels() else {
+            return vec![0.0, range, f32::from(level)];
+        };
+
+        shot_levels::ray_segments(levels, [x, y], [dx, dy], range, level)
+            .iter()
+            .flat_map(|segment| [segment.t0, segment.t1, f32::from(segment.level)])
+            .collect()
+    }
 }
 
 /// Прогон рампы за WASM-границей: те же поля, что у `RampRun` движка, но в

@@ -2,6 +2,8 @@ import {
   AlphaFilter,
   Container,
   Graphics,
+  Mesh,
+  MeshGeometry,
   Rectangle,
   Sprite,
   Texture,
@@ -9,7 +11,11 @@ import {
 import { levelZ } from '../levelZ.js';
 import { applyParallax } from '../parallax.js';
 import { createHole, dispose as disposeHole } from '../parts/map/holeOverlay.js';
-import { LIGHT_OVERLAY_BASE_Z, rampWedgePolygon } from './lightMath.js';
+import {
+  LIGHT_OVERLAY_BASE_Z,
+  fanIndices,
+  rampWedgePolygon,
+} from './lightMath.js';
 
 const WHITE = 0xffffff;
 
@@ -44,6 +50,10 @@ const WHITE = 0xffffff;
 // кладутся источники уровня `to`: клин нарисован в части уровня `from` и
 // затемнён её оверлеем, а свет плиты `to` без маски осветил бы и землю под
 // мостом.
+//
+// Конус фары, упёршийся в стену (`fan` у источника), рисуется не спрайтом, а
+// веером-мешем по полигону видимости с той же текстурой: свет кончается на
+// стене без стенсил-масок на каждый конус.
 //
 // Над источниками — лучи фонарей в воздухе (`layoutShafts`) с просветами-
 // тенями предметов.
@@ -92,6 +102,7 @@ export default class LevelLightMap {
     this.rampMask = null;
     this.ramps = [];
     this.rampPool = [];
+    this.rampFanPool = [];
 
     // лучи фонарей в воздухе: по контейнеру на фонарь — спрайт лучей и
     // клинья теней предметов. Тени — ИНВЕРСНАЯ стенсил-маска контейнера:
@@ -108,6 +119,8 @@ export default class LevelLightMap {
     // спрайты источников переиспользуются между кадрами: число видимых
     // источников меняется, объекты — нет
     this.pool = [];
+    // веера конусов, упёршихся в стену (`item.fan`)
+    this.fanPool = [];
 
     // проходной фильтр: разрешение карты и режим наложения на сцену
     this.filter = new AlphaFilter({ alpha: 1 });
@@ -240,12 +253,18 @@ export default class LevelLightMap {
   // сервисом — `{ texture, x, y, anchorX, anchorY, scaleX, scaleY,
   // rotation, color, alpha }`
   layout(items) {
-    layoutPool(this.pool, this.lights, items);
+    layoutPool(this.pool, this.lights, items.filter(item => !item.fan));
+    layoutFans(this.fanPool, this.lights, items.filter(item => item.fan));
   }
 
   // источники верхнего уровня на клиньях рамп — тот же формат, что `layout`
   layoutRamps(items) {
-    layoutPool(this.rampPool, this.rampLights, items);
+    layoutPool(this.rampPool, this.rampLights, items.filter(item => !item.fan));
+    layoutFans(
+      this.rampFanPool,
+      this.rampLights,
+      items.filter(item => item.fan),
+    );
   }
 
   // раскладка лучей кадра: `items` — `{ texture, x, y, scale, rotation,
@@ -330,8 +349,14 @@ export default class LevelLightMap {
       sprite.texture = null;
     }
 
+    for (const mesh of [...this.fanPool, ...this.rampFanPool]) {
+      mesh.texture = Texture.EMPTY;
+    }
+
     this.pool = [];
     this.rampPool = [];
+    this.fanPool = [];
+    this.rampFanPool = [];
     this.rampLights.mask = null;
     this.rampMask = null;
     this.ramps = [];
@@ -376,5 +401,62 @@ function layoutPool(pool, container, items) {
     sprite.rotation = item.rotation;
     sprite.tint = item.color;
     sprite.alpha = item.alpha;
+  }
+}
+
+// Веера конусов: меш на источник. `item.fan` — `{ shape, x, y, scale }`:
+// `shape` (`points` и `uvs` в мировых единицах) один на все кадры, пока фара
+// стоит; проекцию высоты даёт трансформ меша `p·scale + (x, y)` — ровно
+// `offsetPoint`
+function layoutFans(pool, container, items) {
+  while (pool.length < items.length) {
+    const geometry = new MeshGeometry({
+      positions: new Float32Array(6),
+      uvs: new Float32Array(6),
+      indices: fanIndices(2),
+    });
+    const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
+
+    mesh.blendMode = 'add';
+    mesh.shape = null;
+    pool.push(mesh);
+    container.addChild(mesh);
+  }
+
+  for (let i = 0; i < pool.length; i += 1) {
+    const mesh = pool[i];
+    const item = items[i];
+
+    if (!item) {
+      mesh.visible = false;
+      continue;
+    }
+
+    const { fan } = item;
+    const { shape } = fan;
+
+    // буферы переписываются только на смене веера
+    if (mesh.shape !== shape) {
+      const geometry = mesh.geometry;
+      const rays = shape.points.length / 2 - 1;
+      // треугольник на пару соседних лучей, у замкнутого — и последний
+      // с первым
+      const triangles = rays - 1 + (shape.closed && rays > 2 ? 1 : 0);
+
+      if (geometry.indices.length !== triangles * 3) {
+        geometry.indices = fanIndices(rays, shape.closed);
+      }
+
+      geometry.positions = shape.points;
+      geometry.uvs = shape.uvs;
+      mesh.shape = shape;
+    }
+
+    mesh.visible = true;
+    mesh.texture = item.texture;
+    mesh.position.set(fan.x, fan.y);
+    mesh.scale.set(fan.scale);
+    mesh.tint = item.color;
+    mesh.alpha = item.alpha;
   }
 }
