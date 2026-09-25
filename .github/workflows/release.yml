@@ -72,6 +72,17 @@ jobs:
       - name: Build core (web + nodejs)
         run: npm run core:build
 
+      # build:assets → copy-game-sounds.js requires build/sounds/, produced
+      # by audio:process (ffmpeg loudness normalization of assets/audio-raw/)
+      # — gitignored, so a fresh checkout never has it. This game predates
+      # the scaffold template's placeholder-sound fallback, so there is
+      # nothing to fall back to; the real pipeline has to run here.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Process game audio
+        run: npm run audio:process
+
       - name: Build plugin (dist/ + manifest)
         run: npm run build
 
