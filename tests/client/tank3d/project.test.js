@@ -199,6 +199,16 @@ describe('modelLean', () => {
     expect(x).toBeCloseTo(0, 6);
     expect(y).toBeLessThan(0);
   });
+
+  // кадр без трансформа сцены: центра камеры нет вовсе, и проекции нет —
+  // как у `offsetPoint` нет сдвига. Падать на таком кадре нельзя: он
+  // приходит из `onRender`
+  it('камеры нет — наклона нет, и без падения', () => {
+    const { x, y } = lean({ x: 5000, camera: null });
+
+    expect(x).toBe(0);
+    expect(y).toBe(0);
+  });
 });
 
 describe('faceShade', () => {

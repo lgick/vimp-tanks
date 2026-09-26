@@ -13,7 +13,9 @@ import { signedArea, PART_ORDER } from './model.js';
  * @param {object} p
  * @param {number} p.x              мировая точка танка
  * @param {number} p.y
- * @param {{x: number, y: number}} p.camera
+ * @param {{x: number, y: number}|null} p.camera  null — центра камеры нет
+ *   (сцена без масштаба, парт ещё не на сцене): наклона нет, как у
+ *   `offsetPoint` нет сдвига (src/client/parallax.js)
  * @param {number} p.heading         курс, рад (поворот контейнера)
  * @param {number} p.shear           parallax.shear
  * @param {number} p.levelHeight     мировых единиц на уровень
@@ -33,6 +35,12 @@ export function modelLean({
   topHeight,
   gain = 1,
 }) {
+  // кадр без центра камеры — кадр без проекции: модель обязана обновиться
+  // (поза, свет граней, порядок частей), просто без наклона
+  if (!camera) {
+    return { x: 0, y: 0 };
+  }
+
   let lx = ((x - camera.x) * shear * gain) / levelHeight;
   let ly = ((y - camera.y) * shear * gain) / levelHeight;
   const top = Math.hypot(lx, ly) * topHeight;

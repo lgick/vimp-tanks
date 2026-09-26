@@ -179,6 +179,25 @@ describe('levelView: проекция 2.5D в формуле прозрачно�
     expect(view.camera()).toEqual(expect.objectContaining({ x: 50, y: 0 }));
   });
 
+  // Кадр, где сцена есть, а центра нет (масштаб сцены обнулён движком), —
+  // аномалия, и потребители проекции её терпят молча (`offsetPoint`,
+  // `modelLean`). Один раз сказать в консоль — единственный способ прижать
+  // причину на проде; поток предупреждений там бесполезен
+  it('сцена без масштаба: предупреждение один раз на сессию', () => {
+    const view = createLevelView(seeThrough);
+    const stage = new Container();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    stage.scale.set(0);
+    view.attachStage(stage, { screen: { width: 800, height: 600 } });
+
+    expect(view.camera()).toBe(null);
+    expect(view.camera()).toBe(null);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    warn.mockRestore();
+  });
+
   it('сцену берёт ПЕРВЫЙ позвавший: у радара своя проекция', () => {
     const view = createLevelView(seeThrough);
     const stage = new Container();
@@ -190,6 +209,31 @@ describe('levelView: проекция 2.5D в формуле прозрачно�
     view.attachStage(other, { screen: { width: 200, height: 200 } });
 
     expect(view.camera()).toEqual(expect.objectContaining({ x: 400, y: 300 }));
+  });
+
+  // Движок вправе пересобрать полотно, а сервис живёт со ядром: на мёртвой
+  // сцене `stage.scale` в PixiJS обнулён, и читать трансформ там — падение
+  // прямо в `onRender`. Держать её вечно тоже нельзя: проекция 2.5D
+  // выключилась бы до конца матча
+  it('уничтоженная сцена: центра нет, а новую сцену сервис принимает', () => {
+    const view = createLevelView(seeThrough);
+    const stage = new Container();
+    const fresh = new Container();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    stage.scale.set(1);
+    view.attachStage(stage, { screen: { width: 800, height: 600 } });
+    stage.destroy();
+
+    expect(() => view.camera()).not.toThrow();
+    expect(view.camera()).toBe(null);
+
+    fresh.scale.set(1);
+    view.attachStage(fresh, { screen: { width: 400, height: 200 } });
+
+    expect(view.camera()).toEqual(expect.objectContaining({ x: 200, y: 100 }));
+
+    warn.mockRestore();
   });
 
   it('без камеры (до первого кадра) точки остаются мировыми', () => {

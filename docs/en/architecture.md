@@ -224,6 +224,24 @@ The consequences the parts implement themselves:
   before the tank used the previous frame's centre. Raw world points would
   drift the entity's fade circle away from the drawn hole the further the
   player is from the screen centre and the higher the entity sits.
+  **`levelView.camera()` may return `null`**, and that is part of the
+  contract: there is no centre until the scene has been handed to the
+  service, and none in a frame without a scene transform (the engine owns the
+  stage's scale). Every consumer of the projection must read `null` as "no
+  projection this frame" and carry on: `offsetPoint` and `applyParallax`
+  (`src/client/parallax.js`) and `modelLean`
+  (`src/client/tank3d/project.js`) do — no lean — and so do the early exits
+  in `MapLayer`, `createLighting` and the shot's muzzle flash. Dereferencing
+  such a centre throws inside `onRender`, that is, kills the whole scene. A
+  frame where the scene is already there but the centre is not is printed to
+  the console once per session (`console.warn` with the stage transform, a
+  destroyed flag and the canvas size): it is the anomalous one, and the
+  consumers' silent tolerance would never surface it. A DESTROYED stage is a
+  case of its own (the engine may rebuild the canvas, while the service lives
+  as long as the core): a dead PixiJS container has its `position` and `scale`
+  nulled, so both `cameraCenter` and the service check `destroyed` BEFORE
+  reading the transform, and `attachStage` — the one exception to "the first
+  caller and forever" — takes a new scene in place of a dead one.
 - **Touchdown is detected in one place.** `src/client/landing.js` holds the
   single detector — the frame where `vz` goes from non-zero to exactly zero
   — and both `Tank` (the hull squash and the thud) and `Dust` (the puff from

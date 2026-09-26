@@ -41,6 +41,10 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
     key: null,
     stage: deps.stage || null,
     renderer: deps.renderer || null,
+    // предупреждение об отсутствующем центре камеры выдано (один раз на
+    // сессию): кадров без камеры бывает много подряд, и поток в консоли
+    // на проде бесполезен
+    warned: false,
   };
 
   // Кеш живёт на ОДНОМ состоянии сцены, а не на тике общего тикера. Ключ
@@ -60,8 +64,47 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
   //
   // Трансформ сцены во время отрисовки не меняется, поэтому ключ по нему
   // даёт и единый центр на всю отрисовку, и свежесть между отрисовками.
+  // Центра камеры не бывает только в кадре без трансформа сцены, и путь, по
+  // которому такой кадр возникает, — дело движка (масштаб сцены ставит он).
+  // Потребители проекции `null` терпят (`offsetPoint`, `modelLean`), поэтому
+  // тихо он бы и остался; один раз сказать в консоль — единственный способ
+  // прижать причину на проде, где идут опубликованные сборки
+  const warnNoCamera = () => {
+    if (state.warned) {
+      return;
+    }
+
+    state.warned = true;
+    const stage = state.stage;
+    const screen = state.renderer?.screen;
+
+    console.warn(
+      '[tanks] levelView: центра камеры нет — кадр без трансформа сцены',
+      {
+        // уничтоженная сцена — отдельная причина, и по трансформу её не
+        // отличить от просто обнулённого масштаба: у мёртвого контейнера
+        // трансформ обнулён весь
+        destroyed: stage ? stage.destroyed : null,
+        position: stage ? { x: stage.position?.x, y: stage.position?.y } : null,
+        scale: stage ? { x: stage.scale?.x, y: stage.scale?.y } : null,
+        screen: screen ? { width: screen.width, height: screen.height } : null,
+      },
+    );
+  };
+
   const camera = () => {
+    // сцены ещё нет — штатное начало кадра (парт спрашивает сервис до того,
+    // как первый парт полотна отдал ему сцену), и говорить тут не о чем
     if (!state.stage) {
+      return null;
+    }
+
+    // мёртвая сцена: у уничтоженного контейнера PixiJS `position` и `scale`
+    // обнулены, и читать трансформ ниже нельзя. Аномалия — говорим о ней,
+    // а ждём новую сцену от `attachStage`
+    if (state.stage.destroyed) {
+      warnNoCamera();
+
       return null;
     }
 
@@ -93,6 +136,11 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
         height,
       };
       state.camera = cameraCenter(state.stage, state.renderer);
+
+      // сцена есть, а центра нет — это и есть аномальный кадр
+      if (state.camera === null) {
+        warnNoCamera();
+      }
     }
 
     return state.camera;
@@ -104,14 +152,24 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
     // сцену позже своего конструктора. Привязывается ПЕРВЫЙ, кто позвал, и
     // звать вправе только парты игрового полотна (`Tank`, `Map`): у радара
     // своя сцена и своя проекция.
+    //
+    // Исключение из «первый и навсегда» — УНИЧТОЖЕННАЯ сцена: сервис живёт
+    // столько же, сколько ядро, а полотно движок вправе пересобрать. Держать
+    // мёртвую сцену значило бы отдавать `null` до конца матча, то есть
+    // выключить проекцию 2.5D целиком
     attachStage(stage, renderer) {
-      if (state.stage || !stage || !renderer) {
+      if (!stage || !renderer) {
+        return;
+      }
+
+      if (state.stage && !state.stage.destroyed) {
         return;
       }
 
       state.stage = stage;
       state.renderer = renderer;
       state.key = null;
+      state.camera = null;
     },
 
     // центр камеры этого кадра в мировых единицах; null — сцены ещё нет

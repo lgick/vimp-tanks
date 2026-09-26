@@ -1378,6 +1378,20 @@ describe('Tank: 3D-модель', () => {
     expect(shades[deck]).toBeCloseTo(1, 6);
   });
 
+  // кадр без трансформа сцены (`cameraCenter` отдаёт null): падать нельзя —
+  // зовут из `onRender`, — а модель обязана обновиться, иначе тень по
+  // силуэту остаётся без позы
+  it('кадр без центра камеры: модель без наклона, без падения', () => {
+    const tank = make();
+    const update = vi.spyOn(tank._model, 'update');
+
+    tank.parent.scale.set(0);
+
+    expect(() => tank.onRender()).not.toThrow();
+    expect(update).toHaveBeenCalled();
+    expect(tank._modelPose).toBeDefined();
+  });
+
   it('отдача откатывает ствол модели, башня стоит', () => {
     const shots = createShotEvents();
     const tank = make(modelAssets, 100, { shots });

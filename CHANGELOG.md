@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The client no longer dies mid-match in a frame that has no camera centre
+  (`TypeError: Cannot read properties of null (reading 'x')` inside
+  `onRender`): the live tank's 3D projection and the shot's muzzle flash now
+  read a missing centre as "no projection this frame", the way `offsetPoint`
+  and the map layers always have.
+- A destroyed stage no longer throws the same way one frame earlier: a dead
+  PixiJS container has its transform nulled, so the camera centre is read as
+  missing, and `levelView.attachStage` now takes a new scene in place of a
+  dead one instead of keeping the 2.5D projection off for the rest of the
+  match.
+- A frame where the scene is attached but has no camera centre is now
+  reported once per session (`console.warn` with the stage transform, a
+  destroyed flag and the canvas size) instead of passing silently.
+
 ## [0.22.6] - 2026-09-25
 
 ### Added

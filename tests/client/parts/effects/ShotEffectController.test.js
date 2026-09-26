@@ -257,6 +257,33 @@ describe('ShotEffectController: вспышка у дула', () => {
     expect(controller.flash.dirY).toBeCloseTo(0, 6);
   });
 
+  // Кадр без трансформа сцены: центра камеры нет вовсе (`cameraCenter`), и
+  // `applyParallax` сбрасывает трансформ контроллера в единичный — дети
+  // рисуются по сырым мировым точкам. Вспышка обязана лечь ровно в точку
+  // вылета (случай `ratio === 1`), а не остаться в проекции прошлого кадра,
+  // и падать в `onRender` нельзя
+  it('кадр без центра камеры: вспышка в точке вылета, без падения', () => {
+    // выстрел с моста вниз: уровни начала и конца разные, то есть перенос
+    // вспышки в этом кадре вообще требуется
+    const controller = makeController([10, 20, 110, 20, 0, 0, false, 1, 1, 0], {
+      renderer: { screen: { width: 800, height: 600 } },
+    });
+
+    controller.run();
+    // кадр с камерой: вспышка уезжает в проекцию уровня начала луча
+    controller.onRender();
+
+    expect(controller.flash.x).not.toBeCloseTo(10, 6);
+
+    // движок обнулил масштаб сцены — центра камеры больше нет
+    controller.parent.scale.set(0);
+
+    expect(() => controller.onRender()).not.toThrow();
+    expect(controller.flash.x).toBeCloseTo(10, 6);
+    expect(controller.flash.y).toBeCloseTo(20, 6);
+    expect(controller.flash.scale.x).toBeCloseTo(1, 6);
+  });
+
   it('контроллер ждёт конца вспышки', () => {
     soundManager.registerSound = vi.fn(() => null);
 

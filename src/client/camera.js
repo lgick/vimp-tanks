@@ -6,10 +6,19 @@
 //
 // null — пока парт не добавлен на сцену или рендерер недоступен: звать
 // раньше первого кадра нормально, а гадать за движок — нет.
+//
+// Уничтоженная сцена — тот же случай «камеры нет», и проверять её надо ДО
+// трансформа: `destroy()` в PixiJS обнуляет `position` и `scale`, то есть
+// чтение `parent.scale.x` там роняло бы кадр. Пережить уничтоженную сцену
+// сервис `levelView` может: он держит первую отданную ему сцену.
 export function cameraCenter(parent, renderer) {
   const screen = renderer?.screen;
 
-  if (!parent || !screen || !parent.scale.x || !parent.scale.y) {
+  if (!parent || parent.destroyed || !screen) {
+    return null;
+  }
+
+  if (!parent.scale.x || !parent.scale.y) {
     return null;
   }
 

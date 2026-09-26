@@ -297,6 +297,18 @@ export default class ShotEffectController extends Container {
       return;
     }
 
+    // Кадр без центра камеры: проекции нет ни у кого, и `applyParallax`
+    // сбросил трансформ самого контроллера в единичный — дети рисуются по
+    // сырым мировым точкам. Оставить вспышку в проекции ПРОШЛОГО кадра
+    // значило бы увести её от дула на величину параллакса, поэтому здесь
+    // тот же случай, что `ratio === 1`: вспышка ровно в точке вылета
+    if (!camera) {
+      this.flash.position.set(this.startPositionX, this.startPositionY);
+      this.flash.scale.set(1);
+
+      return;
+    }
+
     const ratio =
       (1 + this.startLevel * parallaxConfig.shear) /
       (1 + this.endLevel * parallaxConfig.shear);
