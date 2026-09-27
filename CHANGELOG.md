@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.7] - 2026-09-27
+
 ### Added
 
 - The build emits hidden source maps (`dist/*.map`), so the engine's
