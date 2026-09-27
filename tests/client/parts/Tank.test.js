@@ -326,6 +326,7 @@ describe('Tank: уровни 2.5D', () => {
     }),
     alphaFor: () => 1,
     tintFor: () => 0xffffff,
+    setDiagnostics: vi.fn(),
   });
 
   // localPlayer — движковый сервис: сравнивает id сущности со своим gameId
@@ -419,6 +420,24 @@ describe('Tank: уровни 2.5D', () => {
     expect(levelView.set).toHaveBeenCalledWith(1, 320, 640, 1);
   });
 
+  // журнал ошибок движка: сервис игры создаётся до полотна и движковых
+  // сервисов не видит, поэтому `diagnostics` ему отдаёт парт
+  it('отдаёт levelView сервис diagnostics движка', () => {
+    const levelView = makeLevelView();
+    const diagnostics = { warn: vi.fn() };
+
+    makeTankAt(0, { levelView, diagnostics });
+
+    expect(levelView.setDiagnostics).toHaveBeenCalledWith(diagnostics);
+  });
+
+  it('без diagnostics (старый движок) отдаёт null и не падает', () => {
+    const levelView = makeLevelView();
+
+    expect(() => makeTankAt(0, { levelView })).not.toThrow();
+    expect(levelView.setDiagnostics).toHaveBeenCalledWith(null);
+  });
+
   it('чужой танк в levelView не пишет', () => {
     const levelView = makeLevelView();
     const tank = makeTankAt(0, {
@@ -491,6 +510,7 @@ describe('Tank: признаки уровня и высоты', () => {
       attachStage: (stage, viewRenderer) =>
         view.attachStage(stage, viewRenderer),
       camera: () => view.camera(),
+      setDiagnostics: () => {},
       alphaFor: () => 1,
       tintFor: () => 0xffffff,
     };
@@ -1446,6 +1466,7 @@ describe('Tank: 3D-модель', () => {
       const tank = make(modelAssets, 100, {
         levelView: {
           set() {},
+          setDiagnostics() {},
           attachStage: (stage, viewRenderer) =>
             view.attachStage(stage, viewRenderer),
           camera: () => view.camera(),
@@ -1802,7 +1823,21 @@ describe('Tank: засвет (lighting.glints) и тень в лучах', () =>
   const glintAsset = () => ({ texture: sized(72, 72), contentSize: 64 });
 
   // m1: [x, y, angle, gun, vx, vy, load, condition, size, team, angvel, z, level]
-  const row = (condition = 100) => [0, 0, 0, 0, 0, 0, 0, condition, 10, 1, 0, 0, 0];
+  const row = (condition = 100) => [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    condition,
+    10,
+    1,
+    0,
+    0,
+    0,
+  ];
 
   // фонарь в клетке [1, 1] (центр 48, 48): танк в нуле — внутри радиуса
   const setupNight = ({ night = true, glint = true } = {}) => {

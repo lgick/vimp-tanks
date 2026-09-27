@@ -198,6 +198,74 @@ describe('levelView: проекция 2.5D в формуле прозрачно�
     warn.mockRestore();
   });
 
+  // Журнал клиентских ошибок движка (сервис `diagnostics`, vimp-engine
+  // ≥ 0.35.0): то же одноразовое предупреждение уходит и туда — на проде
+  // консоль игрока никто не читает
+  describe('журнал движка (diagnostics)', () => {
+    const zeroScale = view => {
+      const stage = new Container();
+
+      stage.scale.set(0);
+      view.attachStage(stage, { screen: { width: 800, height: 600 } });
+    };
+
+    it('предупреждение уходит в журнал один раз, тем же объектом', () => {
+      const view = createLevelView(seeThrough);
+      const diagnostics = { warn: vi.fn() };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      view.setDiagnostics(diagnostics);
+      zeroScale(view);
+      view.camera();
+      view.camera();
+
+      expect(diagnostics.warn).toHaveBeenCalledTimes(1);
+      expect(diagnostics.warn).toHaveBeenCalledWith(
+        'tanks.camera.missing',
+        warn.mock.calls[0][1],
+      );
+      expect(warn.mock.calls[0][1]).toEqual(
+        expect.objectContaining({
+          destroyed: false,
+          scale: { x: 0, y: 0 },
+          screen: { width: 800, height: 600 },
+        }),
+      );
+
+      warn.mockRestore();
+    });
+
+    it('первый непустой сервис побеждает', () => {
+      const view = createLevelView(seeThrough);
+      const first = { warn: vi.fn() };
+      const second = { warn: vi.fn() };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      view.setDiagnostics(null);
+      view.setDiagnostics(first);
+      view.setDiagnostics(second);
+      zeroScale(view);
+      view.camera();
+
+      expect(first.warn).toHaveBeenCalledTimes(1);
+      expect(second.warn).not.toHaveBeenCalled();
+
+      warn.mockRestore();
+    });
+
+    it('без сервиса (старый движок) — только консоль', () => {
+      const view = createLevelView(seeThrough);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      zeroScale(view);
+
+      expect(() => view.camera()).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      warn.mockRestore();
+    });
+  });
+
   it('сцену берёт ПЕРВЫЙ позвавший: у радара своя проекция', () => {
     const view = createLevelView(seeThrough);
     const stage = new Container();

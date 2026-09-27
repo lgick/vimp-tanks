@@ -332,6 +332,9 @@ export default class Tank extends Container {
           })
         : null;
     this._levelView = dependencies.levelView || null;
+    // журнал ошибок движка (необязательный сервис): отдаём его levelView —
+    // сам сервис игры создаётся до полотна и движковых сервисов не видит
+    this._levelView?.setDiagnostics(dependencies.diagnostics ?? null);
 
     // Ночь (сервис игры, src/client/lighting/): два конуса фар и слабый
     // свет под корпусом — источники сессии, переживают смену карты. Блика

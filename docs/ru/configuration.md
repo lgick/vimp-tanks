@@ -166,7 +166,13 @@
   ShotEffect; `rampRuns` → Map; `surfaces` → Dust, Tracks, Tank;
   `levelView` → Tank, Map, MapRadar, Smoke, Bomb,
   ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` → Tank,
-  ShotEffect). `mapDynamics` —
+  ShotEffect; `diagnostics` → Tank, Map).
+  `diagnostics` — журнал клиентских ошибок движка (vimp-engine ≥ 0.35.0,
+  [API плагина](https://github.com/lgick/vimp-engine/blob/main/docs/ru/plugin-api.md)):
+  `Tank` и `MapLayer` отдают его `levelView` для одноразового предупреждения
+  «центра камеры нет». Сервис необязательный и в `requires` манифеста
+  намеренно не записан: на старом движке парты получают `undefined`, и
+  предупреждение остаётся только в консоли. `mapDynamics` —
   геометрия динамики карты из клиентского ядра (`toWorld(key, localX, localY)`
   поверх `ClientCore.map_dynamics_to_world`), которую в пул кладёт сам плагин
   (`hooks.services`, см. [architecture.md](architecture.md)): эффект выстрела

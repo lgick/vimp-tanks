@@ -67,6 +67,10 @@ export default defineConfig(({ command, mode }) => {
       // ставит false и выбрасывает default export entry-модуля
       // (GameManifest ClientPlugin/HostPlugin) как "неиспользуемый".
       assetsInlineLimit: 0,
+      // скрытые source maps (vimp plan/client-reports): *.map ложатся в dist/ и
+      // уезжают в npm, но бандлы на них не ссылаются. Бокс движка расшифровывает
+      // по ним стеки журнала клиентских ошибок и наружу их не отдаёт
+      sourcemap: 'hidden',
       rollupOptions: {
         input: entry,
         preserveEntrySignatures: 'strict',

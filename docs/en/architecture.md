@@ -236,7 +236,13 @@ The consequences the parts implement themselves:
   frame where the scene is already there but the centre is not is printed to
   the console once per session (`console.warn` with the stage transform, a
   destroyed flag and the canvas size): it is the anomalous one, and the
-  consumers' silent tolerance would never surface it. A DESTROYED stage is a
+  consumers' silent tolerance would never surface it. The same one-time
+  warning also goes to the engine's client error log as
+  `tanks.camera.missing` with the same object when the engine provides the
+  `diagnostics` service (vimp-engine ≥ 0.35.0): the game service is built
+  before the canvas and does not see engine services, so `Tank` and
+  `MapLayer` hand it over (`levelView.setDiagnostics`, the first non-empty
+  one wins); on an older engine only the console warning remains. A DESTROYED stage is a
   case of its own (the engine may rebuild the canvas, while the service lives
   as long as the core): a dead PixiJS container has its `position` and `scale`
   nulled, so both `cameraCenter` and the service check `destroyed` BEFORE

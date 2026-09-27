@@ -45,6 +45,9 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
     // сессию): кадров без камеры бывает много подряд, и поток в консоли
     // на проде бесполезен
     warned: false,
+    // журнал клиентских ошибок движка (сервис пула `diagnostics`): сервис
+    // игры создаётся до полотна, и его отдают парты (`setDiagnostics`)
+    diagnostics: null,
   };
 
   // Кеш живёт на ОДНОМ состоянии сцены, а не на тике общего тикера. Ключ
@@ -78,18 +81,21 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
     const stage = state.stage;
     const screen = state.renderer?.screen;
 
+    const payload = {
+      // уничтоженная сцена — отдельная причина, и по трансформу её не
+      // отличить от просто обнулённого масштаба: у мёртвого контейнера
+      // трансформ обнулён весь
+      destroyed: stage ? stage.destroyed : null,
+      position: stage ? { x: stage.position?.x, y: stage.position?.y } : null,
+      scale: stage ? { x: stage.scale?.x, y: stage.scale?.y } : null,
+      screen: screen ? { width: screen.width, height: screen.height } : null,
+    };
+
     console.warn(
       '[tanks] levelView: центра камеры нет — кадр без трансформа сцены',
-      {
-        // уничтоженная сцена — отдельная причина, и по трансформу её не
-        // отличить от просто обнулённого масштаба: у мёртвого контейнера
-        // трансформ обнулён весь
-        destroyed: stage ? stage.destroyed : null,
-        position: stage ? { x: stage.position?.x, y: stage.position?.y } : null,
-        scale: stage ? { x: stage.scale?.x, y: stage.scale?.y } : null,
-        screen: screen ? { width: screen.width, height: screen.height } : null,
-      },
+      payload,
     );
+    state.diagnostics?.warn('tanks.camera.missing', payload);
   };
 
   const camera = () => {
@@ -170,6 +176,15 @@ export function createLevelView(cfg = seeThrough, deps = {}) {
       state.renderer = renderer;
       state.key = null;
       state.camera = null;
+    },
+
+    // журнал клиентских ошибок движка (сервис пула `diagnostics`, vimp-engine
+    // ≥ 0.35.0): его отдают парты, у которых он есть в dependencies. Первый
+    // непустой — навсегда; на старом движке сервиса нет, и остаётся console.warn
+    setDiagnostics(diagnostics) {
+      if (!state.diagnostics && diagnostics) {
+        state.diagnostics = diagnostics;
+      }
     },
 
     // центр камеры этого кадра в мировых единицах; null — сцены ещё нет

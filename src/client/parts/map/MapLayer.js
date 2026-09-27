@@ -36,6 +36,9 @@ export default class MapLayer {
     // где локальный игрок (сервис игры, src/client/levelView.js): нужен
     // только слоям уровня >= 1 — они уступают ему видимость
     this._levelView = dependencies.levelView || null;
+    // журнал ошибок движка (необязательный сервис): отдаём его levelView —
+    // карта может появиться раньше танка (наблюдатель)
+    this._levelView?.setDiagnostics(dependencies.diagnostics ?? null);
 
     // прогоны рамп из ядра (сервис игры, src/client/index.js): по ним слой
     // строит клин горки. Источник один с физикой — второй обход грида на

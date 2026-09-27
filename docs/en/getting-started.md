@@ -89,6 +89,15 @@ copy: `dist` is the only published content, so a manifest pointing outside
 it would work in this checkout and break in the installed package
 (`npm run check:pack` guards that, and it also runs on `prepack`).
 
+Both bundles are built with hidden source maps (`sourcemap: 'hidden'`):
+`dist/*.map` ship in the npm package, but the bundles carry no
+`sourceMappingURL`, and the manifest does not list them. The engine's server
+reads them from disk to symbolicate the game's stack frames in its client
+error log (`client-<hash>.js:84:46108` → a file and line under
+`src/client/`) and never serves `*.map` in production. An engine older than
+0.35.0 serves the game's `dist/` as a whole, so there the maps are
+downloadable — acceptable for an open-source repo, but worth knowing.
+
 > **Run `npm run audio:process` first — without it the game has no sound.**
 > `npm run build` does not process sounds: it only copies `build/sounds/`
 > into `dist/sounds/`, and that directory is gitignored and produced by

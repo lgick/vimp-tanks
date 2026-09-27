@@ -167,7 +167,13 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   `mapDynamics` → ShotEffect; `rampRuns` → Map; `surfaces` → Dust, Tracks,
   Tank; `levelView` → Tank, Map, MapRadar,
   Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` →
-  Tank, ShotEffect).
+  Tank, ShotEffect; `diagnostics` → Tank, Map).
+  `diagnostics` is the engine's client error log (vimp-engine ≥ 0.35.0,
+  [plugin API](https://github.com/lgick/vimp-engine/blob/main/docs/en/plugin-api.md)):
+  `Tank` and `MapLayer` hand it to `levelView` for its one-time "no camera
+  centre" warning. It is optional and deliberately not listed in the
+  manifest's `requires`: on an older engine the parts get `undefined` and the
+  warning stays in the console only.
   `mapDynamics` is the map-dynamics geometry from the client core
   (`toWorld(key, localX, localY)` over `ClientCore.map_dynamics_to_world`),
   handed to the pool by the plugin itself (`hooks.services`, see

@@ -28,6 +28,12 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
   // обязаны знать ОБА списка — иначе контрактный чекер (правило C4) не
   // отличит игровой сервис от опечатки, а парт молча получит undefined и
   // перестанет рисовать клин горки
+  // журнал ошибок движка — необязательный движковый сервис: его получают
+  // парты, отдающие его levelView, а в requires манифеста его нет
+  it('diagnostics объявлен для Tank и Map', () => {
+    expect(deps.diagnostics).toEqual(['Tank', 'Map']);
+  });
+
   it('rampRuns объявлен и в componentDependencies, и в serviceNames', () => {
     expect(deps.rampRuns).toEqual(['Map']);
     expect(clientPlugin.serviceNames).toContain('rampRuns');

@@ -93,6 +93,35 @@ describe('MapLayer: база URL картинок', () => {
 
 // 2.5D: слой уровня 1 (плита моста) обязан лежать выше любого наземного
 // слоя, а под локальным игроком — становиться полупрозрачным.
+// журнал ошибок движка: слой отдаёт `diagnostics` сервису levelView —
+// карта может появиться раньше танка (наблюдатель)
+describe('MapLayer: сервис diagnostics', () => {
+  const makeView = () => ({ setDiagnostics: vi.fn() });
+
+  it('отдаёт levelView сервис diagnostics движка', () => {
+    const levelView = makeView();
+    const diagnostics = { warn: vi.fn() };
+
+    new Map(
+      staticData,
+      {},
+      { renderer, assetsBase: '/build/', levelView, diagnostics },
+    );
+
+    expect(levelView.setDiagnostics).toHaveBeenCalledWith(diagnostics);
+  });
+
+  it('без diagnostics (старый движок) отдаёт null и не падает', () => {
+    const levelView = makeView();
+
+    expect(
+      () =>
+        new Map(staticData, {}, { renderer, assetsBase: '/build/', levelView }),
+    ).not.toThrow();
+    expect(levelView.setDiagnostics).toHaveBeenCalledWith(null);
+  });
+});
+
 describe('Map: слои 2.5D', () => {
   const bridgeData = {
     ...staticData,
@@ -1032,7 +1061,12 @@ describe('Map: параллакс и объём слоя', () => {
       const k = parallax.shear;
 
       // игрок на земле там, где нарисована клетка крыши
-      view.set(0, CELL.x + (CELL.x - CAM_X) * k, CELL.y + (CELL.y - CAM_Y) * k, 0);
+      view.set(
+        0,
+        CELL.x + (CELL.x - CAM_X) * k,
+        CELL.y + (CELL.y - CAM_Y) * k,
+        0,
+      );
 
       const roof = readyRoof(view);
 
@@ -1048,7 +1082,12 @@ describe('Map: параллакс и объём слоя', () => {
       const under = createLevelView({ ...seeThrough, mode: 'layer' });
 
       near.set(0, CELL.x, CELL.y, 0);
-      under.set(0, CELL.x + (CELL.x - CAM_X) * k, CELL.y + (CELL.y - CAM_Y) * k, 0);
+      under.set(
+        0,
+        CELL.x + (CELL.x - CAM_X) * k,
+        CELL.y + (CELL.y - CAM_Y) * k,
+        0,
+      );
 
       const nearRoof = readyRoof(near);
       const underRoof = readyRoof(under);
@@ -1175,7 +1214,9 @@ describe('MapLayer: корень слоя и анимации', () => {
   });
 
   it('слой с анимированным тайлом регистрирует onRender, чужой слой — нет', () => {
-    const game = { animatedTiles: { 1: { kind: 'frames', frames: [0], fps: 4 } } };
+    const game = {
+      animatedTiles: { 1: { kind: 'frames', frames: [0], fps: 4 } },
+    };
     const own = makeMap({ ...staticData, game }, '/build/');
     const other = makeMap({ ...staticData, tiles: [2], game }, '/build/');
 
@@ -1186,11 +1227,19 @@ describe('MapLayer: корень слоя и анимации', () => {
   it('вывеска и декаль достаются только слою с совпадающими (level, layer)', () => {
     const game = {
       signs: [{ cell: [0, 0], level: 1, layer: 2, text: 'A', size: 10 }],
-      decals: [{ cell: [0, 0], level: 0, layer: 1, frame: 0, kind: 'rotate', rps: 1 }],
+      decals: [
+        { cell: [0, 0], level: 0, layer: 1, frame: 0, kind: 'rotate', rps: 1 },
+      ],
     };
     const ground = makeMap({ ...staticData, game }, '/build/');
-    const roof = makeMap({ ...staticData, level: 1, layer: 2, game }, '/build/');
-    const wall = makeMap({ ...staticData, level: 1, layer: 1, game }, '/build/');
+    const roof = makeMap(
+      { ...staticData, level: 1, layer: 2, game },
+      '/build/',
+    );
+    const wall = makeMap(
+      { ...staticData, level: 1, layer: 1, game },
+      '/build/',
+    );
 
     expect(ground._mode._animationSpec.decals).toHaveLength(1);
     expect(ground._mode._animationSpec.signs).toHaveLength(0);
@@ -1211,7 +1260,9 @@ describe('MapLayer: корень слоя и анимации', () => {
     );
     bakeTileLayer.mockClear();
 
-    const game = { animatedTiles: { 7: { kind: 'frames', frames: [0], fps: 4 } } };
+    const game = {
+      animatedTiles: { 7: { kind: 'frames', frames: [0], fps: 4 } },
+    };
 
     makeMap({ ...staticData, tiles: [1, 7], game }, '/build/');
     resolveLoad(Texture.EMPTY);

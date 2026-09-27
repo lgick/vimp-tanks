@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The build emits hidden source maps (`dist/*.map`), so the engine's
+  client error log shows game stack frames as source files and lines.
+- The one-time "no camera centre" warning also goes to the engine's
+  `diagnostics` service when the engine provides it.
+
 ### Fixed
 
 - The client no longer dies mid-match in a frame that has no camera centre
