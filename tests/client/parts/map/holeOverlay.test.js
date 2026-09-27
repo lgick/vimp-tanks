@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { Ticker } from 'pixi.js';
 import {
   createHole,
   advance,
   apply,
   dispose,
+  tickRate,
 } from '../../../../src/client/parts/map/holeOverlay.js';
 import { seeThrough, parallax } from '../../../../src/config/render.js';
 
@@ -120,5 +122,46 @@ describe('holeOverlay', () => {
     expect(object.filters).toHaveLength(0);
     expect(hole.attached).toBe(false);
     expect(hole.filter).toBe(null);
+  });
+
+  describe('tickRate', () => {
+    const savedTime = Ticker.shared.lastTime;
+    const savedDelta = Ticker.shared.deltaMS;
+
+    afterEach(() => {
+      Ticker.shared.lastTime = savedTime;
+      Ticker.shared.deltaMS = savedDelta;
+    });
+
+    it('tickRate: первая отрисовка тика шагает, повторные — 0', () => {
+      const hole = createHole();
+
+      Ticker.shared.lastTime += 16;
+      Ticker.shared.deltaMS = 100;
+
+      expect(tickRate(hole, 2)).toBeCloseTo(0.2);
+      expect(tickRate(hole, 2)).toBe(0);
+      expect(tickRate(hole, 2)).toBe(0);
+    });
+
+    it('tickRate: следующий тик снова шагает', () => {
+      const hole = createHole();
+
+      Ticker.shared.deltaMS = 100;
+      Ticker.shared.lastTime += 16;
+      tickRate(hole, 2);
+      Ticker.shared.lastTime += 16;
+
+      expect(tickRate(hole, 2)).toBeCloseTo(0.2);
+    });
+
+    it('tickRate: не больше 1 при длинном тике', () => {
+      const hole = createHole();
+
+      Ticker.shared.lastTime += 16;
+      Ticker.shared.deltaMS = 5000;
+
+      expect(tickRate(hole, 2)).toBe(1);
+    });
   });
 });

@@ -219,6 +219,21 @@ export default class MapLayer {
       }
     }
 
+    // высоты объёмов по клеткам (сервис игры, src/client/volumes.js): по
+    // ним выстрел в стену кончается на её видимой грани. Днём тоже —
+    // освещение тут ни при чём
+    this._volumes = dependencies.volumes || null;
+
+    if (this._volume > 0) {
+      this._volumes?.setLayerVolume(
+        this._level,
+        cellsOfTiles(this._map, this._tiles),
+        this._volume,
+        this,
+        { step: this._step, scale: data.scale },
+      );
+    }
+
     // прозрачность считает только плита моста, параллакс — она же и любой
     // слой с объёмом: вешать колбэк на плоский слой уровня 0 значило бы
     // звать его каждый кадр ради выхода по первой же строке. На ночной
@@ -312,6 +327,22 @@ export default class MapLayer {
     };
   }
 
+  // Прозрачность крыши для её вывесок: эмиссив живёт вне контейнера слоя,
+  // фильтра дыры и alpha слоя не видит и гаснет по этому числу. 'layer' —
+  // alpha самого слоя; 'hole' — alpha в центре дыры (вывеска гаснет вся, а
+  // не кругом). null — слой не крыша
+  _roofAlpha() {
+    if (!this._roof || !this._levelView) {
+      return null;
+    }
+
+    if (this._levelView.mode === 'layer') {
+      return this._container.alpha;
+    }
+
+    return 1 + (this._levelView.cfg.minAlpha - 1) * this._hole.strength;
+  }
+
   // Каждый кадр у статического слоя: видимость (плита моста) и параллакс —
   // и слоя, и его срезов. Зовётся из колбэка `onRender` парта-диспетчера
   // (`Map.js`): там он кладётся СВОЙСТВОМ, потому что `onRender` у
@@ -338,25 +369,20 @@ export default class MapLayer {
       this._lighting.render();
     }
 
-    if (this._animations) {
-      // вывески на крыше гаснут вместе с ней, а не по кругу вокруг игрока
-      const roofAlpha =
-        this._roof && this._levelView
-          ? 1 + (this._levelView.cfg.minAlpha - 1) * this._hole.strength
-          : null;
-
-      updateLayerAnimations(this._animations, {
-        camera,
-        levelView: this._levelView,
-        screen: this._renderer?.screen,
-        roofAlpha,
-      });
-    }
-
     // прозрачность считает плита моста и любой слой с перекрывателем: у
     // второго объём гаснет уже на уровне игрока
     if (this._level >= 1 || this._occluder) {
       updateSeeThrough(this._seeThroughView(), camera);
+    }
+
+    if (this._animations) {
+      updateLayerAnimations(this._animations, {
+        camera,
+        levelView: this._levelView,
+        screen: this._renderer?.screen,
+        // вывески на крыше гаснут вместе с ней, а не по кругу вокруг игрока
+        roofAlpha: this._roofAlpha(),
+      });
     }
 
     if (!this._parallaxK && !this._slices.length) {
@@ -417,6 +443,9 @@ export default class MapLayer {
       this._lighting.releaseMap(this._mapKey, this);
       this._lighting = null;
     }
+
+    this._volumes?.release(this);
+    this._volumes = null;
 
     disposeHole(this._hole, container);
 
@@ -518,8 +547,9 @@ export default class MapLayer {
 
 // Все ли тайлы слоя — крыши его уровня (`game.roofs`, ключ — уровень
 // строкой или числом). Слой, где крыши смешаны с другими тайлами, крышей не
-// считается: предупреждение и обычное поведение
-function isRoofLayer(game, level, tiles) {
+// считается: предупреждение и обычное поведение. Экспортируется для проверки
+// карт в тестах
+export function isRoofLayer(game, level, tiles) {
   const roofs = game?.roofs?.[level] ?? game?.roofs?.[String(level)];
 
   if (!Array.isArray(roofs) || roofs.length === 0 || !tiles?.length) {

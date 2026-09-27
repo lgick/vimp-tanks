@@ -1941,6 +1941,15 @@ describe('Tank: засвет (lighting.glints) и тень в лучах', () =>
     expect(setCaster).toHaveBeenLastCalledWith(tank, null);
   });
 
+  it('днём тени лучей не регистрируются', () => {
+    const { service, tank } = setupNight({ night: false });
+    const setCaster = vi.spyOn(service, 'setCaster');
+
+    step(tank);
+
+    expect(setCaster).not.toHaveBeenCalled();
+  });
+
   it('колбэк onRender зарегистрирован и ведёт засвет', () => {
     const { tank } = setupNight();
 

@@ -1,5 +1,6 @@
-import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin, { blurPadding } from './blurMargin.js';
+import { Graphics } from 'pixi.js';
+import blurMargin from './blurMargin.js';
+import bakeBlurred from './bakeBlurred.js';
 
 // детерминированный ГПСЧ (mulberry32): рисунок лучей один на всех клиентах
 export function seededRandom(seed) {
@@ -70,18 +71,12 @@ export default function lightShaftTexture(params, renderer) {
     }
   }
 
-  const filter = new BlurFilter({ strength: blur, quality });
-
-  // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
-  filter.padding = blurPadding(blur);
-  graphics.filters = [filter];
-
-  const texture = renderer.generateTexture({
-    target: graphics,
-    frame: new Rectangle(0, 0, textureSize, textureSize),
+  const texture = bakeBlurred(renderer, graphics, {
+    blur,
+    quality,
+    width: textureSize,
+    height: textureSize,
   });
-
-  graphics.destroy(true);
 
   return { texture, contentSize: radius * 2 };
 }

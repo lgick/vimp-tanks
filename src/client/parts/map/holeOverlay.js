@@ -1,3 +1,4 @@
+import { Ticker } from 'pixi.js';
 import { createHoleFilter, setHoleUniforms } from '../../seeThrough.js';
 import { offsetPoint } from '../../parallax.js';
 import { parallax as parallaxConfig } from '../../../config/render.js';
@@ -12,8 +13,25 @@ const HOLE_EPSILON = 0.01;
 export function createHole() {
   // `tick` — тик, на котором сила дыры уже двигалась: за один тик полотно
   // рисуется несколько раз, а сглаживание по времени обязано шагать один
-  // раз (см. `layerSeeThrough.updateSeeThrough`)
+  // раз (см. `tickRate`)
   return { strength: 0, filter: null, attached: false, tick: null };
+}
+
+// Шаг сглаживания дыры за эту отрисовку: доля перехода за время тика,
+// но РОВНО раз на тик общего тикера. За тик полотно может рисоваться не
+// раз, а `deltaMS` у всех отрисовок тика один: без отсечки дыра гасла бы
+// тем быстрее, чем больше отрисовок пришло в тик. Повторные отрисовки
+// того же тика получают 0 — сила остаётся, применение идёт каждый раз
+export function tickRate(hole, fadeRate) {
+  const tick = Ticker.shared.lastTime;
+
+  if (hole.tick === tick) {
+    return 0;
+  }
+
+  hole.tick = tick;
+
+  return Math.min(1, fadeRate * (Ticker.shared.deltaMS / 1000));
 }
 
 // сила дыры тянется к желаемой (0 — игрок не под слоем) с шагом тикера:

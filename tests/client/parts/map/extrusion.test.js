@@ -8,6 +8,7 @@ import {
   wallEdges,
   buildRampMeshes,
   updateHeightMesh,
+  wallStripCopies,
 } from '../../../../src/client/parts/map/extrusion.js';
 import { parallax, volume } from '../../../../src/config/render.js';
 
@@ -92,7 +93,8 @@ describe('extrusion: грани монолитного объёма', () => {
       sideTint: volume.sideTint,
       // боковая текстура — своя на тайл: полоса из копий его картинки
       textures: new Map([[5, texture()]]),
-      tileRepeats: 4,
+      tilesPerLevel: 2,
+      segments: 4,
       ...over,
     });
 
@@ -153,6 +155,7 @@ describe('extrusion: грани монолитного объёма', () => {
       [0, 0],
     ]);
     const uvs = slice.target.geometry.uvs;
+    const vertsPerEdge = (slice.rows + 1) * 2;
 
     for (let i = 0; i < uvs.length; i += 2) {
       expect(uvs[i]).toBeGreaterThanOrEqual(0);
@@ -160,84 +163,80 @@ describe('extrusion: грани монолитного объёма', () => {
       expect(uvs[i + 1]).toBeLessThanOrEqual(1);
     }
 
-    for (let q = 0; q < slice.facing.length; q += 1) {
-      const v = q * 8;
+    for (let e = 0; e < slice.facing.length; e += 1) {
+      const first = e * vertsPerEdge;
 
-      expect(Math.abs(uvs[v + 2] - uvs[v])).toBeCloseTo(1, 6);
-      // верхняя и нижняя вершины одной стороны стоят на одной вертикали
-      expect(uvs[v + 4]).toBeCloseTo(uvs[v], 6);
-      expect(uvs[v + 6]).toBeCloseTo(uvs[v + 2], 6);
-    }
-  });
+      for (let r = 0; r <= slice.rows; r += 1) {
+        const v = (first + r * 2) * 2;
 
-  // Экранная высота грани — `|p - cam| * (k1 - k0)`: у дальней от центра
-  // камеры стены грань длиннее. Кирпич одного размера получается только
-  // если на повтор текстуры приходится одна и та же экранная длина
-  it('копий тайла по высоте тем больше, чем дальше грань от камеры', () => {
-    const [near] = build([[5]]);
-    const [far] = build([[5]]);
-    const rise = parallax.shear;
-    // мировая клетка: step 10 × baseScale 0.5
-    const cellWorld = 5;
-    const repeats = 4;
-    // первый квад клетки — её северная грань: глубина считается по y
-    const vOf = slice => slice.target.geometry.uvs[5];
-    const depthOf = (slice, camera) => Math.abs(slice.base[5] - camera.y);
-
-    const closeCam = { x: 6, y: 6, scaleX: 1 };
-    const farCam = { x: 30, y: 30, scaleX: 1 };
-
-    updateWallMesh(near, closeCam);
-    updateWallMesh(far, farCam);
-
-    expect(vOf(near)).toBeCloseTo(
-      (depthOf(near, closeCam) * rise) / cellWorld / repeats,
-      6,
-    );
-    // та же плотность кирпича: с глубиной растёт и длина грани на экране
-    expect(vOf(far) / depthOf(far, farCam)).toBeCloseTo(
-      vOf(near) / depthOf(near, closeCam),
-      6,
-    );
-  });
-
-  // Глубина берётся вдоль нормали грани, а не радиусом до камеры: вдоль
-  // прямой стены радиус меняется, и ряды кирпича разъезжались веером —
-  // стена выглядела выпуклой
-  it('вдоль прямой стены ряды кирпича не расходятся', () => {
-    const [slice] = build([
-      [5, 5, 5, 5, 5],
-      [0, 0, 0, 0, 0],
-    ]);
-    // камера стоит против середины стены, снизу от неё
-    const camera = { x: 12.5, y: 60, scaleX: 1 };
-
-    updateWallMesh(slice, camera);
-
-    const uvs = slice.target.geometry.uvs;
-    const north = [];
-
-    for (let q = 0; q < slice.facing.length; q += 1) {
-      if (slice.normals[q * 2 + 1] === -1) {
-        north.push(uvs[q * 8 + 5]);
+        expect(uvs[v]).toBe(0);
+        expect(uvs[v + 2]).toBe(1);
+        // точка a всех рядов стоит на одной вертикали текстуры
+        expect(uvs[v]).toBe(uvs[first * 2]);
       }
     }
+  });
 
-    expect(north.length).toBeGreaterThan(1);
+  // модель GTA 2: грань тянется вместе с проекцией, а текстура с ней — ни
+  // один ряд кирпича не прибавляется и не убывает у основания
+  it('UV грани не зависят от камеры: текстура привязана к стене', () => {
+    const [slice] = build([[5]]);
+    const before = Array.from(slice.target.geometry.uvs);
 
-    for (const v of north) {
-      expect(v).toBeCloseTo(north[0], 6);
+    updateWallMesh(slice, { x: 6, y: 6, scaleX: 1 }, 2);
+    updateWallMesh(slice, { x: 300, y: -400, scaleX: 0.5 }, 2);
+
+    expect(Array.from(slice.target.geometry.uvs)).toEqual(before);
+  });
+
+  it('верх грани — v = 0, низ — volume · tilesPerLevel / копий полосы', () => {
+    const bottomOf = over => {
+      const [slice] = build([[5]], over);
+      const uvs = slice.target.geometry.uvs;
+      const bottom = slice.rows * 2;
+
+      expect(uvs[1]).toBe(0);
+
+      return uvs[bottom * 2 + 1];
+    };
+
+    expect(bottomOf({ volume: 1, tilesPerLevel: 2 })).toBeCloseTo(1, 6);
+    expect(bottomOf({ volume: 0.35, tilesPerLevel: 2 })).toBeCloseTo(0.7, 6);
+    expect(bottomOf({ volume: 0.25, tilesPerLevel: 1 })).toBeCloseTo(0.25, 6);
+  });
+
+  it('грань делится на ceil(volume · segments) рядов, высоты рядов равномерны', () => {
+    const [slice] = build([[5]], { volume: 1, segments: 4 });
+    const camera = { x: 40, y: -30, scaleX: 1 };
+    const { base, k0, k1 } = slice;
+    const vertices = slice.target.vertices;
+    const uvs = slice.target.geometry.uvs;
+
+    expect(slice.rows).toBe(4);
+    expect(base.length / 2 / slice.facing.length).toBe(10);
+
+    updateWallMesh(slice, camera, 0);
+
+    // первое ребро, сторона a: ряды сверху вниз
+    for (let r = 0; r <= 4; r += 1) {
+      const i = r * 2;
+      const k = k1 - ((k1 - k0) * r) / 4;
+      const x = base[i * 2];
+      const y = base[i * 2 + 1];
+
+      expect(vertices[i * 2]).toBeCloseTo(x + (x - camera.x) * k, 4);
+      expect(vertices[i * 2 + 1]).toBeCloseTo(y + (y - camera.y) * k, 4);
+      expect(uvs[i * 2 + 1]).toBeCloseTo(r / 4, 6);
     }
   });
 
-  // полоса конечна: у самой длинной грани координата упирается в её конец,
-  // и последняя копия тайла тянется — за полосу выборка не уходит никогда
-  it('очень длинная грань упирается в конец полосы', () => {
-    const [slice] = build([[5]]);
-
-    updateWallMesh(slice, { x: 0, y: 5000, scaleX: 1 });
-
-    expect(slice.target.geometry.uvs[5]).toBe(1);
+  it('wallStripCopies: округление вверх, не меньше одной', () => {
+    expect(wallStripCopies(1, 2)).toBe(2);
+    expect(wallStripCopies(0.25, 2)).toBe(1);
+    expect(wallStripCopies(0.35, 2)).toBe(1);
+    expect(wallStripCopies(1.5, 1)).toBe(2);
+    expect(wallStripCopies(0, 1)).toBe(1);
+    expect(wallStripCopies(0.3, 10)).toBe(3);
   });
 
   // стык с верхом объёма: нахлёст задаётся в ЭКРАННЫХ пикселях, поэтому на
@@ -245,22 +244,45 @@ describe('extrusion: грани монолитного объёма', () => {
   it('нахлёст под верх считается в экранных пикселях', () => {
     const slice = build([[5]])[0];
     const camera = { x: 50, y: 50, scaleX: 2 };
-    const topAt = () => [slice.target.vertices[0], slice.target.vertices[1]];
+    const bottom = slice.rows * 2;
+    const at = i => [
+      slice.target.vertices[i * 2],
+      slice.target.vertices[i * 2 + 1],
+    ];
 
     updateWallMesh(slice, camera, 0);
 
-    const [x0, y0] = topAt();
+    const [x0, y0] = at(0);
+    const [bx0, by0] = at(bottom);
 
     updateWallMesh(slice, camera, 4);
 
-    const [x1, y1] = topAt();
+    const [x1, y1] = at(0);
+    const [bx1, by1] = at(bottom);
 
     // 4 экранных пикселя при масштабе сцены 2 — это 2 мировые единицы
     // вершины лежат во Float32Array, поэтому сравнение не до шестого знака
     expect(Math.hypot(x1 - x0, y1 - y0)).toBeCloseTo(2, 4);
+    // нижний ряд нахлёстом не сдвигается
+    expect(bx1).toBe(bx0);
+    expect(by1).toBe(by0);
 
     // порядок отрисовки нахлёст не трогает: верх по-прежнему поверх грани
     expect(slice.k).toBeCloseTo(parallax.shear - 1e-6, 9);
+  });
+
+  it('та же камера — вершины грани не пересчитываются', () => {
+    const [slice] = build([[5]]);
+    const camera = { x: 40, y: -30, scaleX: 1 };
+
+    updateWallMesh(slice, camera, 2);
+    slice.target.vertices[0] = 12345;
+
+    updateWallMesh(slice, { ...camera }, 2);
+    expect(slice.target.vertices[0]).toBe(12345);
+
+    updateWallMesh(slice, { ...camera, x: 41 }, 2);
+    expect(slice.target.vertices[0]).not.toBe(12345);
   });
 
   it('длинный контур режется на несколько мешей', () => {
@@ -275,9 +297,11 @@ describe('extrusion: грани монолитного объёма', () => {
   });
 
   describe('порядок граней', () => {
-    // индекс первого вхождения квада `q` в списке индексов
+    // индекс первого вхождения ребра `q` в списке индексов
     const positionOf = (slice, q) =>
-      Array.from(slice.target.geometry.indices).indexOf(q * 4);
+      Array.from(slice.target.geometry.indices).indexOf(
+        q * (slice.rows + 1) * 2,
+      );
     const quadOf = (slice, nx, ny) => {
       for (let q = 0; q < slice.facing.length; q += 1) {
         if (slice.normals[q * 2] === nx && slice.normals[q * 2 + 1] === ny) {
@@ -307,6 +331,21 @@ describe('extrusion: грани монолитного объёма', () => {
       orderWallMesh(slice, { x: 2.5, y: -100 });
 
       expect(orderWallMesh(slice, { x: 3, y: -90 })).toBe(false);
+    });
+
+    it('та же точка камеры — порядок не пересчитывается', () => {
+      const [slice] = build([[5]]);
+
+      orderWallMesh(slice, { x: 2.5, y: -100 });
+
+      const before = Array.from(slice.target.geometry.indices);
+
+      // сторона сброшена вручную: пересчёт её бы вернул и переписал индексы
+      slice.facing.fill(2);
+
+      expect(orderWallMesh(slice, { x: 2.5, y: -100 })).toBe(false);
+      expect(Array.from(slice.target.geometry.indices)).toEqual(before);
+      expect(slice.facing[0]).toBe(2);
     });
   });
 });
@@ -389,5 +428,27 @@ describe('extrusion: сдвиг вершин камерой', () => {
     expect(heights[0]).toBe(0);
     expect(shift(0)).toBeCloseTo(0, 6);
     expect(shift(heights.length - 1)).toBeGreaterThan(0);
+  });
+
+  it('та же камера — вершины клина не пересчитываются', () => {
+    const [, surface] = buildRampMeshes({
+      runs: [lane()],
+      texture: texture(),
+      step: 10,
+      shear: parallax.shear,
+      baseScale: { x: 1, y: 1 },
+      segments: 1,
+      sideTint: volume.sideTint,
+    });
+    const camera = { x: 5, y: 7, scaleX: 1 };
+
+    updateHeightMesh(surface, camera);
+    surface.target.vertices[0] = 12345;
+
+    updateHeightMesh(surface, { ...camera });
+    expect(surface.target.vertices[0]).toBe(12345);
+
+    updateHeightMesh(surface, { ...camera, y: 8 });
+    expect(surface.target.vertices[0]).not.toBe(12345);
   });
 });

@@ -473,7 +473,14 @@ pub fn apply_slick(
         return mix;
     }
 
-    let params = &map.types[level_state.slick_type as usize - 1].0;
+    // тип следа берётся из состояния, а не из карты: состояние могло приехать
+    // из дампа. Чужой индекс — следа нет (паника WASM уронила бы комнату)
+    let Some((params, _)) = map.types.get(usize::from(level_state.slick_type) - 1) else {
+        level_state.slick_left = 0.0;
+        level_state.slick_type = 0;
+
+        return mix;
+    };
     let Some(slick_time) = params.slick_time else {
         return mix;
     };
@@ -495,8 +502,10 @@ pub fn apply_slick(
     out
 }
 
-// спад остатка за шаг; на нуле след забывается
-fn decay_slick(level_state: &mut LevelState, dt: f32) {
+/// Спад остатка скользкой поверхности за шаг; на нуле след забывается.
+/// Хост и реплика зовут её в полёте, в одном и том же месте (ветка
+/// `input_locked`); вне полёта спад делает сама [`apply_slick`].
+pub fn decay_slick(level_state: &mut LevelState, dt: f32) {
     level_state.slick_left = (level_state.slick_left - dt).max(0.0);
 
     if level_state.slick_left <= 0.0 {
@@ -744,7 +753,7 @@ mod tests {
         )
         .unwrap();
 
-        // порядок типов — `BTreeMap`: boost, conveyor, mud, sand
+        // порядок типов — `BTreeMap`: boost, conveyor, mud, oil, sand
         assert_eq!(map.type_at(0, center(0, 0).0, 5.0), Some(4));
         assert_eq!(map.type_at(0, center(1, 0).0, 5.0), Some(0));
         assert_eq!(map.type_at(0, center(2, 0).0, 5.0), None);
@@ -929,6 +938,33 @@ mod tests {
 
         assert_eq!(mix, SurfaceMix::NEUTRAL);
         assert_eq!(state.slick_left, 1.0);
+    }
+
+    #[test]
+    fn stale_slick_type_is_forgotten() {
+        let map = oil_patch();
+        let mut state = LevelState { slick_left: 1.0, slick_type: 200, ..LevelState::default() };
+        let input = SurfaceMix { grip: 0.5, ..SurfaceMix::NEUTRAL };
+
+        // тип из дампа, которого нет в карте: ни паники, ни следа
+        let mix = apply_slick(&map, &rules(), &mut state, 80.0, 50.0, 0.0, 4.0, 3.0, input, 0.1);
+
+        assert_eq!(mix, input);
+        assert_eq!((state.slick_left, state.slick_type), (0.0, 0));
+    }
+
+    #[test]
+    fn decay_slick_drops_the_residue_and_forgets_the_type() {
+        let mut state = LevelState { slick_left: 0.3, slick_type: 4, ..LevelState::default() };
+
+        decay_slick(&mut state, 0.2);
+
+        assert!((state.slick_left - 0.1).abs() < 1e-6, "{}", state.slick_left);
+        assert_eq!(state.slick_type, 4, "пока остаток есть, тип помнится");
+
+        decay_slick(&mut state, 0.2);
+
+        assert_eq!((state.slick_left, state.slick_type), (0.0, 0));
     }
 
     // полоса бустера на восток в колонках 3..6

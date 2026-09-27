@@ -1,6 +1,7 @@
 import { offsetPoint } from '../parallax.js';
 import { renderLevel } from '../levelZ.js';
 import { baseScale } from '../parts/map/tileGrid.js';
+import { edgeFace } from '../wallFace.js';
 
 // Чистые функции освещения: ключ карты, клетки → мир, проекция источника,
 // отсечение по экрану, мерцание и затухание вспышки. Здесь нет ни одного
@@ -175,6 +176,22 @@ export function flashFactor(elapsedMs, durationMs) {
 
 // --- засветы и лучи (этап 10) ---
 
+// Профили яркости источников по доле `t ∈ [0, 1]` радиуса или длины. Одна
+// формула на текстуру (баркеры) и на засвет (`lightStrength`): засвет
+// обязан гаснуть ровно там, где гаснет картинка
+
+// пятно фонаря: `(1 − t)²` — центр не пересвечен плато
+export function radialProfile(t) {
+  return (1 - t) * (1 - t);
+}
+
+// конус фары вдоль оси: яркий у фары, к концу сходит на нет
+const CONE_TAIL = 0.35;
+
+export function coneProfile(t) {
+  return (1 - t) * (1 - t * CONE_TAIL);
+}
+
 // спад пятна фонаря по расстоянию: тот же `(1 − t)²`, что у текстуры
 // `lightRadialTexture`, — засвет гаснет там же, где пятно
 export function radialFalloff(distance, radius) {
@@ -182,9 +199,7 @@ export function radialFalloff(distance, radius) {
     return 0;
   }
 
-  const t = 1 - Math.max(0, distance) / radius;
-
-  return t * t;
+  return radialProfile(Math.max(0, distance) / radius);
 }
 
 // Сила источника в мировой точке `(x, y)` без мерцания. Конус — как его
@@ -216,7 +231,7 @@ export function lightStrength(light, x, y) {
 
   const t = along / light.radius;
 
-  return intensity * (1 - t) * (1 - t * 0.35) * (1 - across / halfWidth);
+  return intensity * coneProfile(t) * (1 - across / halfWidth);
 }
 
 // Отбор источников для точки: `candidates` — `[{ light, factor }]`, где
@@ -440,6 +455,21 @@ export function castRay(ox, oy, dx, dy, maxDist, isBlocked, cellW, cellH) {
 // низкий край у подножия ловит свет и сбоку
 export const RAMP_CLEARANCE = 0.2;
 
+// Высота клина полосы `lane` (`buildRampLanes`) в мировой точке `(x, y)`, в
+// уровнях: `lerp(from, to, progress)`, прогресс — доля пути вдоль оси от
+// подножия, обрезанная по полосе. Та же высота, что у вершин меша клина
+export function rampHeight(lane, x, y, cellW, cellH) {
+  const alongX = lane.axis === 0;
+  const a0 = alongX ? lane.col0 * cellW : lane.row0 * cellH;
+  const a1 = alongX ? lane.col1 * cellW : lane.row1 * cellH;
+  const along = alongX ? x : y;
+  const span = a1 - a0 || 1;
+  const t = Math.min(1, Math.max(0, (along - a0) / span));
+  const progress = lane.sign > 0 ? t : 1 - t;
+
+  return lane.from + (lane.to - lane.from) * progress;
+}
+
 // Рампа как препятствие свету уровня её подножия. `lane` — полоса клетки,
 // в которую входит луч, `prevLane` — полоса клетки, из которой он вышел
 // (null — не рампа); полосы — `buildRampLanes` (клетки, `axis`, `sign`,
@@ -449,8 +479,10 @@ export const RAMP_CLEARANCE = 0.2;
 //     освещён, луч идёт по полосе;
 //   - вошёл через борт или верхний торец — стоп, если клин в точке входа
 //     выше фары больше чем на `clearance`;
-//   - вышел из полосы — стоп: склон — конечная поверхность, пол за горкой
-//     и под её торцом свет не получает
+//   - вышел из полосы вбок (шаг поперёк оси) на пол — луч идёт дальше:
+//     мягкий край конуса ложится на пол у бортов;
+//   - вышел из полосы иначе (через верхний торец, в другую полосу) —
+//     стоп: пол под торцом свет не получает
 export function rampBlocks({
   lane,
   prevLane,
@@ -466,7 +498,9 @@ export function rampBlocks({
   clearance = RAMP_CLEARANCE,
 }) {
   if (prevLane && prevLane !== lane) {
-    return true;
+    const across = prevLane.axis === 0 ? row !== prevRow : col !== prevCol;
+
+    return Boolean(lane) || !across;
   }
 
   if (!lane || prevLane === lane || prevCol === null || prevCol === undefined) {
@@ -480,15 +514,34 @@ export function rampBlocks({
     return false;
   }
 
-  const a0 = alongX ? lane.col0 * cellW : lane.row0 * cellH;
-  const a1 = alongX ? lane.col1 * cellW : lane.row1 * cellH;
-  const along = alongX ? x : y;
-  const span = a1 - a0 || 1;
-  const t = Math.min(1, Math.max(0, (along - a0) / span));
-  const progress = lane.sign > 0 ? t : 1 - t;
-  const height = lane.from + (lane.to - lane.from) * progress;
+  return rampHeight(lane, x, y, cellW, cellH) - (z || 0) > clearance;
+}
 
-  return height - (z || 0) > clearance;
+// Есть ли ненулевая клетка сетки `cells` (`cols × rows`, построчно) в
+// прямоугольнике клеток [col0..col1] × [row0..row1] (включительно,
+// обрезается по сетке). Дешёвая проверка «рядом с конусом нет
+// препятствий» до обхода лучами
+export function anyCellIn(cells, cols, rows, col0, row0, col1, row1) {
+  if (!cells) {
+    return false;
+  }
+
+  const c0 = Math.max(0, col0);
+  const c1 = Math.min(cols - 1, col1);
+  const r0 = Math.max(0, row0);
+  const r1 = Math.min(rows - 1, row1);
+
+  for (let row = r0; row <= r1; row += 1) {
+    const offset = row * cols;
+
+    for (let col = c0; col <= c1; col += 1) {
+      if (cells[offset + col] !== 0) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 // Точка упора оси: первая стена на луче не дальше `length` —
@@ -510,10 +563,13 @@ export function firstHit(ox, oy, dx, dy, length, isBlocked, cellW, cellH) {
 // шире клина на постоянный отступ, и веер на угол клина срезал бы его —
 // конус у стены становился резким. Назад — несколько лучей, замыкающих
 // веер: без них на линии через вершину поперёк оси обрывалось размытие за
-// фарой. Результат — `{ points, clipped, closed }`: `points` — `[x, y, x0,
-// y0, …]` (вершина, затем концы лучей по кругу) в мировых единицах,
-// `clipped` — хоть один луч упёрся в стену (иначе конус целый и рисуется
-// прежним спрайтом), `closed` — веер замкнут (`fanIndices`)
+// фарой. Результат — `{ points, clipped, closed, reaches, forward }`:
+// `points` — `[x, y, x0, y0, …]` (вершина, затем концы лучей по кругу) в
+// мировых единицах, `clipped` — хоть один луч упёрся в стену (иначе конус
+// целый и рисуется прежним спрайтом), `closed` — веер замкнут
+// (`fanIndices`), `reaches` — предел каждого луча до края прямоугольника
+// текстуры, `forward` — число лучей вперёд (первые в `points`): засветке
+// грани (`wallWash`) нужна полная длина луча
 export function coneFan(
   { x, y, rotation, alongMax, alongBack = 0, acrossMax, rays },
   isBlocked,
@@ -534,6 +590,7 @@ export function coneFan(
   }
 
   const points = new Float32Array((offsets.length + 1) * 2);
+  const reaches = new Float32Array(offsets.length);
   let clipped = false;
 
   points[0] = x;
@@ -555,6 +612,8 @@ export function coneFan(
 
     const distance = castRay(x, y, dx, dy, reach, isBlocked, cellW, cellH);
 
+    reaches[i] = reach;
+
     if (distance < reach - 1e-6) {
       clipped = true;
     }
@@ -563,28 +622,173 @@ export function coneFan(
     points[(i + 1) * 2 + 1] = y + dy * distance;
   });
 
-  return { points, clipped, closed };
+  return { points, clipped, closed, reaches, forward: count };
 }
 
-// UV точек веера в текстуре конуса — та же раскладка, что у спрайта
-// (`itemOf`): вершина — в `(margin, height / 2)` текстуры, ось — по `+x`,
-// `sx`/`sy` — мировых единиц на пиксель текстуры вдоль и поперёк оси
-export function fanUvs(points, { x, y, rotation, sx, sy, margin, width, height }) {
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
+// UV мировой точки `(px, py)` в текстуре конуса — та же раскладка, что у
+// спрайта (`itemOf`): вершина — в `(margin, height / 2)` текстуры, ось — по
+// `+x`, `sx`/`sy` — мировых единиц на пиксель текстуры вдоль и поперёк оси.
+// `cos`/`sin` поворота можно передать готовыми — веер зовёт это на каждую
+// точку. Возвращает `[u, v]`
+export function coneUv(
+  px,
+  py,
+  { x, y, rotation, sx, sy, margin, width, height },
+  cos = Math.cos(rotation),
+  sin = Math.sin(rotation),
+) {
+  const rx = px - x;
+  const ry = py - y;
+  const along = rx * cos + ry * sin;
+  const across = ry * cos - rx * sin;
+
+  return [(margin + along / sx) / width, (height / 2 + across / sy) / height];
+}
+
+// UV точек веера в текстуре конуса (`coneUv` на каждую точку)
+export function fanUvs(points, frame) {
+  const cos = Math.cos(frame.rotation);
+  const sin = Math.sin(frame.rotation);
   const uvs = new Float32Array(points.length);
 
   for (let i = 0; i < points.length; i += 2) {
-    const rx = points[i] - x;
-    const ry = points[i + 1] - y;
-    const along = rx * cos + ry * sin;
-    const across = ry * cos - rx * sin;
+    const [u, v] = coneUv(points[i], points[i + 1], frame, cos, sin);
 
-    uvs[i] = (margin + along / sx) / width;
-    uvs[i + 1] = (height / 2 + across / sy) / height;
+    uvs[i] = u;
+    uvs[i + 1] = v;
   }
 
   return uvs;
+}
+
+// квад засветки от его первой вершины: верхняя пара, затем нижняя — тот же
+// порядок, что у рядов граней `extrusion.js`
+const WASH_QUAD = [0, 1, 3, 0, 3, 2];
+
+// Засветка грани стены конусом фары. Для соседних лучей веера вперёд,
+// упёршихся в одну грань (`edgeFace`, клетка за кромкой — стена), — квад:
+// низ на подножии, верх на высоте `min(height, объём стены)`. UV низа —
+// точка упора, верха — конец того же луча: яркость гаснет вверх.
+// Возвращает { base, heights, uvs, indices, normals, mids } или null:
+// base — мировые точки (4 на квад: верх a, верх b, низ a, низ b, как у
+// граней `extrusion.js`), heights — высота вершины в уровнях над полом
+// стены, normals/mids — нормаль и середина подножия квада (видимость).
+// `uvOf(x, y)` — `[u, v]` точки в текстуре конуса (`coneUv`), `wallAt(x,
+// y)` — объём стены уровня фары в мировой точке (0 — не стена: упор в
+// рампу засветки не даёт)
+export function wallWash({
+  x,
+  y,
+  points,
+  reaches,
+  forward,
+  uvOf,
+  wallAt,
+  cellW,
+  cellH,
+  height,
+}) {
+  const probe = 0.01 * Math.min(cellW, cellH);
+  // упор луча `i` (номер точки в `points`, 1..forward): грань, точка,
+  // конец луча и высота засветки; null — луч в стену не упёрся
+  const hitOf = i => {
+    const px = points[i * 2];
+    const py = points[i * 2 + 1];
+    const distance = Math.hypot(px - x, py - y);
+    const reach = reaches[i - 1];
+
+    if (!(distance > 1e-9) || !(distance < reach - 1e-6)) {
+      return null;
+    }
+
+    const dx = (px - x) / distance;
+    const dy = (py - y) / distance;
+    const face = edgeFace(px, py, dx, dy, cellW, cellH, 1e-3);
+
+    if (!face) {
+      return null;
+    }
+
+    const volume = wallAt(px + dx * probe, py + dy * probe);
+
+    if (!(volume > 0)) {
+      return null;
+    }
+
+    return {
+      face,
+      x: px,
+      y: py,
+      endX: px + dx * (reach - distance),
+      endY: py + dy * (reach - distance),
+      height: Math.min(height, volume),
+    };
+  };
+
+  const hits = [];
+
+  for (let i = 1; i <= forward; i += 1) {
+    hits.push(hitOf(i));
+  }
+
+  const quads = [];
+
+  for (let i = 0; i + 1 < hits.length; i += 1) {
+    const a = hits[i];
+    const b = hits[i + 1];
+
+    if (
+      a &&
+      b &&
+      a.face.axis === b.face.axis &&
+      Math.abs(a.face.coord - b.face.coord) < 1e-6
+    ) {
+      quads.push([a, b]);
+    }
+  }
+
+  if (!quads.length) {
+    return null;
+  }
+
+  const base = new Float32Array(quads.length * 8);
+  const heights = new Float32Array(quads.length * 4);
+  const uvs = new Float32Array(quads.length * 8);
+  const indices = new Uint32Array(quads.length * 6);
+  const normals = new Float32Array(quads.length * 2);
+  const mids = new Float32Array(quads.length * 2);
+
+  quads.forEach(([a, b], q) => {
+    // верх a, верх b, низ a, низ b
+    const vertices = [
+      [a.x, a.y, a.height, a.endX, a.endY],
+      [b.x, b.y, b.height, b.endX, b.endY],
+      [a.x, a.y, 0, a.x, a.y],
+      [b.x, b.y, 0, b.x, b.y],
+    ];
+
+    vertices.forEach(([vx, vy, h, ux, uy], j) => {
+      const v = q * 4 + j;
+      const [u, w] = uvOf(ux, uy);
+
+      base[v * 2] = vx;
+      base[v * 2 + 1] = vy;
+      heights[v] = h;
+      uvs[v * 2] = u;
+      uvs[v * 2 + 1] = w;
+    });
+
+    for (let j = 0; j < 6; j += 1) {
+      indices[q * 6 + j] = q * 4 + WASH_QUAD[j];
+    }
+
+    normals[q * 2] = a.face.nx;
+    normals[q * 2 + 1] = a.face.ny;
+    mids[q * 2] = (a.x + b.x) / 2;
+    mids[q * 2 + 1] = (a.y + b.y) / 2;
+  });
+
+  return { base, heights, uvs, indices, normals, mids };
 }
 
 // индексы веера из `count` лучей: треугольники (вершина, луч i, луч i + 1);
@@ -606,4 +810,160 @@ export function fanIndices(count, closed = false) {
   }
 
   return indices;
+}
+
+// Выпуклый многоугольник `[[a, b], …]`, обрезанный полуплоскостью по
+// координате `index` (0 — `a`, 1 — `b`): `above` — остаётся `>= bound`,
+// иначе `<= bound` (Сазерленд — Ходжмен)
+function clipPolygon(polygon, index, bound, above) {
+  const out = [];
+
+  for (let i = 0; i < polygon.length; i += 1) {
+    const p = polygon[i];
+    const q = polygon[(i + 1) % polygon.length];
+    const pIn = above ? p[index] >= bound : p[index] <= bound;
+    const qIn = above ? q[index] >= bound : q[index] <= bound;
+
+    if (pIn) {
+      out.push(p);
+    }
+
+    if (pIn !== qIn) {
+      const t = (bound - p[index]) / (q[index] - p[index]);
+
+      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+    }
+  }
+
+  return out;
+}
+
+// Свет источника на склоне рампы — в проекции клина (этап 14.5). Карта
+// освещённости лежит в проекции пола, а клин нарисован с повершинной
+// высотой (трапеция, шире к верху): пиксель клина брал бы свет не своей
+// мировой точки. Здесь веер источника (`points` — вершина и концы лучей в
+// мировых единицах, `closed` — как у `fanIndices`) режется прямоугольником
+// полосы `lane` (`buildRampLanes`) и вдоль оси на `segmentsPerCell` отрезков
+// на клетку — как меш клина (`rampWedgePolygon`): высота линейна вдоль
+// оси, а сдвиг проекции от неё — нет. UV — `coneUv` мировой точки в
+// раскладке текстуры `frame`: яркость та же, что у пола под ней.
+// Возвращает { base, heights, uvs, indices } или null (веер полосу не
+// задел): base — мировые точки, heights — высота клина в точке в уровнях
+// (`rampHeight`, абсолютная)
+export function rampLight({
+  points,
+  closed,
+  lane,
+  frame,
+  cellW,
+  cellH,
+  segmentsPerCell,
+}) {
+  const alongX = lane.axis === 0;
+  const a0 = alongX ? lane.col0 * cellW : lane.row0 * cellH;
+  const a1 = alongX ? lane.col1 * cellW : lane.row1 * cellH;
+  const b0 = alongX ? lane.row0 * cellH : lane.col0 * cellW;
+  const b1 = alongX ? lane.row1 * cellH : lane.col1 * cellW;
+  // точка веера в осях полосы: `a` — вдоль, `b` — поперёк
+  const local = i =>
+    alongX
+      ? [points[i * 2], points[i * 2 + 1]]
+      : [points[i * 2 + 1], points[i * 2]];
+  const count = points.length / 2;
+  let minA = Infinity;
+  let maxA = -Infinity;
+  let minB = Infinity;
+  let maxB = -Infinity;
+
+  for (let i = 0; i < count; i += 1) {
+    const [a, b] = local(i);
+
+    minA = Math.min(minA, a);
+    maxA = Math.max(maxA, a);
+    minB = Math.min(minB, b);
+    maxB = Math.max(maxB, b);
+  }
+
+  if (!(maxA > a0 && minA < a1 && maxB > b0 && minB < b1)) {
+    return null;
+  }
+
+  const cells = alongX ? lane.col1 - lane.col0 : lane.row1 - lane.row0;
+  const segments = Math.max(
+    1,
+    cells * Math.max(1, Math.round(segmentsPerCell) || 1),
+  );
+  const slab = (a1 - a0) / segments;
+  const cos = Math.cos(frame.rotation);
+  const sin = Math.sin(frame.rotation);
+  const base = [];
+  const heights = [];
+  const uvs = [];
+  const indices = [];
+
+  const emit = polygon => {
+    const first = heights.length;
+
+    for (const [a, b] of polygon) {
+      const x = alongX ? a : b;
+      const y = alongX ? b : a;
+      const [u, v] = coneUv(x, y, frame, cos, sin);
+
+      base.push(x, y);
+      heights.push(rampHeight(lane, x, y, cellW, cellH));
+      uvs.push(u, v);
+    }
+
+    for (let k = 1; k + 1 < polygon.length; k += 1) {
+      indices.push(first, first + k, first + k + 1);
+    }
+  };
+
+  const triangles = fanIndices(count - 1, closed);
+
+  for (let t = 0; t < triangles.length; t += 3) {
+    let polygon = [
+      local(triangles[t]),
+      local(triangles[t + 1]),
+      local(triangles[t + 2]),
+    ];
+
+    polygon = clipPolygon(polygon, 1, b0, true);
+    polygon = clipPolygon(polygon, 1, b1, false);
+    polygon = clipPolygon(polygon, 0, a0, true);
+    polygon = clipPolygon(polygon, 0, a1, false);
+
+    if (polygon.length < 3) {
+      continue;
+    }
+
+    const low = Math.min(...polygon.map(([a]) => a));
+    const high = Math.max(...polygon.map(([a]) => a));
+    const j0 = Math.max(0, Math.floor((low - a0) / slab));
+    const j1 = Math.min(segments - 1, Math.ceil((high - a0) / slab) - 1);
+
+    for (let j = j0; j <= j1; j += 1) {
+      const piece = clipPolygon(
+        clipPolygon(polygon, 0, a0 + j * slab, true),
+        0,
+        a0 + (j + 1) * slab,
+        false,
+      );
+
+      if (piece.length >= 3) {
+        emit(piece);
+      }
+    }
+  }
+
+  if (!indices.length) {
+    return null;
+  }
+
+  return {
+    base: new Float32Array(base),
+    heights: new Float32Array(heights),
+    uvs: new Float32Array(uvs),
+    indices: new Uint32Array(indices),
+  };
 }

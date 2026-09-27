@@ -1085,20 +1085,7 @@ impl Predictor {
             self.engine_load = 0.0;
 
             // спад остатка скользкой поверхности в полёте — зеркало хоста
-            if let (Some(map), Some(shape)) = (&self.surface_map, &self.shape) {
-                surface::apply_slick(
-                    map,
-                    &self.surface_rules,
-                    &mut self.level_state,
-                    self.state.x,
-                    self.state.y,
-                    self.state.angle,
-                    shape.half_w,
-                    shape.half_h,
-                    SurfaceMix::NEUTRAL,
-                    dt,
-                );
-            }
+            surface::decay_slick(&mut self.level_state, dt);
 
             self.pre_step_sets(dt);
             self.resolve_world(dt);

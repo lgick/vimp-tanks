@@ -34,7 +34,9 @@ export default class TracerEffect extends BaseEffect {
   // `options.pieces` — куски луча по уровням `[{ from, to, level }]`
   // (`tracerPieces`), `options.layerFor(level)` — контейнер, в котором
   // рисуется кусок уровня (своя проекция и zIndex). Без них — один кусок
-  // во весь луч внутри самого эффекта
+  // во весь луч внутри самого эффекта. `options.stopLine` — `{ axis: 'x' |
+  // 'y', coord }`: линия грани стены, за которую конец не уходит при
+  // переносе (`shiftTo`)
   constructor(
     startX,
     startY,
@@ -56,6 +58,7 @@ export default class TracerEffect extends BaseEffect {
     // По графике на уровень: в чужом контейнере она не ребёнок эффекта и
     // уничтожается им самим
     this._layerFor = options.layerFor || null;
+    this._stopLine = options.stopLine || null;
     this.pieces = options.pieces?.length
       ? options.pieces
       : [{ from: 0, to: Infinity, level: null }];
@@ -70,8 +73,6 @@ export default class TracerEffect extends BaseEffect {
         this._graphics.set(level, graphics);
       }
     }
-
-    this.graphics = this._graphics.values().next().value;
 
     this.elapsedTime = 0;
     this.progress = 0;
@@ -106,7 +107,8 @@ export default class TracerEffect extends BaseEffect {
    * дуло, конец на тот же сдвиг, направление и длина прежние. Перестраивать
    * луч к неподвижной цели нельзя: у танка вплотную к стене дуло уже в
    * стене, луч почти нулевой, и при езде вдоль стены он растягивался бы
-   * назад к старой точке. Прогресс и длительность пролёта не меняются
+   * назад к старой точке. Прогресс и длительность пролёта не меняются.
+   * Попадание в стену — конец не заходит за её грань, а скользит по ней
    */
   shiftTo(x, y) {
     if (this.isComplete) {
@@ -117,7 +119,33 @@ export default class TracerEffect extends BaseEffect {
     this.endPositionY += y - this.startPositionY;
     this.startPositionX = x;
     this.startPositionY = y;
+    this._clipToStopLine();
     this._draw();
+  }
+
+  // длина луча по линии грани стены (`stopLine`): только укорачивается
+  _clipToStopLine() {
+    const line = this._stopLine;
+
+    if (!line) {
+      return;
+    }
+
+    const alongX = line.axis === 'x';
+    const n = alongX ? this.nx : this.ny;
+
+    if (Math.abs(n) < 1e-9) {
+      return;
+    }
+
+    const start = alongX ? this.startPositionX : this.startPositionY;
+    const t = (line.coord - start) / n;
+
+    if (t < this.totalDist) {
+      this.totalDist = Math.max(0, t);
+      this.endPositionX = this.startPositionX + this.nx * this.totalDist;
+      this.endPositionY = this.startPositionY + this.ny * this.totalDist;
+    }
   }
 
   _clear() {

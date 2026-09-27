@@ -55,3 +55,13 @@ describe('config: lighting.headlights.occlusion / bounce', () => {
     expect(bounce.maxDistance).toBeLessThanOrEqual(length);
   });
 });
+
+// засветка грани стены фарами (`lighting.headlights.wash`)
+describe('config: lighting.headlights.wash', () => {
+  it('высота и сила засветки положительны', () => {
+    const { wash } = lighting.headlights;
+
+    expect(wash.height).toBeGreaterThan(0);
+    expect(wash.intensity).toBeGreaterThan(0);
+  });
+});

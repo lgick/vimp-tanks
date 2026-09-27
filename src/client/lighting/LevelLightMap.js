@@ -44,16 +44,24 @@ const WHITE = 0xffffff;
 //           маска этажа цвета `ambient` в проекции уровня, затем источники.
 //           Вне этажа карта остаётся белой, и уровень 0 не темнеет дважды.
 //
-// Свет верхнего уровня на рампах (`setRamps`, `layoutRamps`): у карты
-// уровня `from` рамп, ведущих вверх, — второй контейнер источников
-// `rampLights` с маской «клинья этих рамп» в проекции клина. В него
-// кладутся источники уровня `to`: клин нарисован в части уровня `from` и
-// затемнён её оверлеем, а свет плиты `to` без маски осветил бы и землю под
-// мостом.
+// Свет на рампах (`setRamps`, `layoutRampLights`): у карты уровня `from`
+// рамп, ведущих вверх, — второй контейнер источников `rampLights` с маской
+// «клинья этих рамп» в проекции клина. Клин нарисован с повершинной
+// высотой, поэтому свет на нём — меши в проекции клина (`rampLight`): и
+// источников уровня `from`, и источников уровня `to` (клин нарисован в
+// части уровня `from` и затемнён её оверлеем, а свет плиты `to` без маски
+// осветил бы и землю под мостом). Обычные источники (`lights`) получают
+// ИНВЕРСНУЮ маску тех же клиньев: на клине не остаётся света в проекции
+// пола, чей край не совпал бы с нарисованной трапецией.
 //
 // Конус фары, упёршийся в стену (`fan` у источника), рисуется не спрайтом, а
 // веером-мешем по полигону видимости с той же текстурой: свет кончается на
 // стене без стенсил-масок на каждый конус.
+//
+// Засветка грани (`layoutWashes`): часть луча фары, упёршаяся в стену,
+// ложится квадами на видимую грань — от подножия вверх, гаснет к верху.
+// Квад рисуется, только пока грань смотрит на центр проекции; крышу
+// закрывают вершины объёмов, они выше в оверлее.
 //
 // Над источниками — лучи фонарей в воздухе (`layoutShafts`) с просветами-
 // тенями предметов.
@@ -95,14 +103,15 @@ export default class LevelLightMap {
     this.lights = new Container();
     this.overlay.addChild(this.lights);
 
-    // свет верхнего уровня, обрезанный клиньями рамп (стенсил-маска):
-    // маска заводится вместе с первыми рампами
+    // свет на клиньях рамп в проекции клина, обрезанный ими же
+    // (стенсил-маска). Маски — эта и инверсная у `lights` — заводятся
+    // вместе с первыми рампами
     this.rampLights = new Container();
     this.overlay.addChild(this.rampLights);
     this.rampMask = null;
+    this.lightsMask = null;
     this.ramps = [];
-    this.rampPool = [];
-    this.rampFanPool = [];
+    this.rampLightPool = [];
 
     // лучи фонарей в воздухе: по контейнеру на фонарь — спрайт лучей и
     // клинья теней предметов. Тени — ИНВЕРСНАЯ стенсил-маска контейнера:
@@ -121,6 +130,8 @@ export default class LevelLightMap {
     this.pool = [];
     // веера конусов, упёршихся в стену (`item.fan`)
     this.fanPool = [];
+    // засветка граней стен (`layoutWashes`)
+    this.washPool = [];
 
     // проходной фильтр: разрешение карты и режим наложения на сцену
     this.filter = new AlphaFilter({ alpha: 1 });
@@ -209,12 +220,17 @@ export default class LevelLightMap {
 
     if (lanes.length && !this.rampMask) {
       this.rampMask = new Graphics();
-      this.overlay.addChild(this.rampMask);
+      this.lightsMask = new Graphics();
+      this.overlay.addChild(this.rampMask, this.lightsMask);
       this.rampLights.mask = this.rampMask;
+      this.lights.setMask({ mask: this.lightsMask, inverse: true });
     } else if (!lanes.length && this.rampMask) {
       this.rampLights.mask = null;
+      this.lights.mask = null;
       this.rampMask.destroy();
+      this.lightsMask.destroy();
       this.rampMask = null;
+      this.lightsMask = null;
     }
   }
 
@@ -234,18 +250,42 @@ export default class LevelLightMap {
       const { step, scale, segments } = this.rampGeometry;
 
       this.rampMask.clear();
+      this.lightsMask.clear();
 
       for (const lane of this.ramps) {
-        this.rampMask.poly(
-          rampWedgePolygon(lane, step, scale, camera, shear, segments),
+        const polygon = rampWedgePolygon(
+          lane,
+          step,
+          scale,
+          camera,
+          shear,
+          segments,
         );
+
+        this.rampMask.poly(polygon);
+        this.lightsMask.poly(polygon);
       }
 
       this.rampMask.fill(WHITE);
+      this.lightsMask.fill(WHITE);
     }
 
     for (const { graphics, volume } of this.topGroups) {
       applyParallax(graphics, camera, (this.level + volume) * shear, 1);
+    }
+  }
+
+  // Цепочка фильтров оверлея после шага дыры. Фильтр дыры заменяет
+  // проходной целиком, поэтому и режим наложения (multiply), и разрешение
+  // карты он обязан нести сам: без этого под плитой, то есть почти всё
+  // время игрока на земле, карта рисовалась в полном разрешении. Без дыры
+  // возвращается проходной фильтр
+  syncFilters() {
+    if (this.hole.attached) {
+      this.hole.filter.blendMode = 'multiply';
+      this.hole.filter.resolution = this.resolution;
+    } else if (this.overlay.filters?.[0] !== this.filter) {
+      this.overlay.filters = [this.filter];
     }
   }
 
@@ -257,14 +297,158 @@ export default class LevelLightMap {
     layoutFans(this.fanPool, this.lights, items.filter(item => item.fan));
   }
 
-  // источники верхнего уровня на клиньях рамп — тот же формат, что `layout`
-  layoutRamps(items) {
-    layoutPool(this.rampPool, this.rampLights, items.filter(item => !item.fan));
-    layoutFans(
-      this.rampFanPool,
-      this.rampLights,
-      items.filter(item => item.fan),
-    );
+  // Засветка граней стен фарами: `items` — `{ wash, level, texture, color,
+  // alpha }`, где `wash` — квады `wallWash` в мировых единицах. Оверлей
+  // мировой, без трансформа, поэтому вершины проецируются здесь:
+  // `p + (p − cam)·k`, `k = (level + высота вершины)·shear`. UV и индексы
+  // заливаются только на смене засветки; квад грани, отвёрнутой от камеры
+  // (она под крышей), получает вырожденные индексы — переписываются они
+  // только при смене видимости, как в `orderWallMesh`
+  layoutWashes(items, camera, shear) {
+    while (this.washPool.length < items.length) {
+      const geometry = new MeshGeometry({
+        positions: new Float32Array(8),
+        uvs: new Float32Array(8),
+        indices: new Uint32Array(6),
+      });
+      const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
+
+      mesh.blendMode = 'add';
+      mesh.wash = null;
+      mesh.facing = null;
+      this.washPool.push(mesh);
+      this.lights.addChild(mesh);
+    }
+
+    for (let i = 0; i < this.washPool.length; i += 1) {
+      const mesh = this.washPool[i];
+      const item = items[i];
+
+      if (!item) {
+        mesh.visible = false;
+        continue;
+      }
+
+      const { wash } = item;
+      const geometry = mesh.geometry;
+
+      if (mesh.wash !== wash) {
+        geometry.positions = new Float32Array(wash.base.length);
+        geometry.uvs = wash.uvs;
+        geometry.indices = new Uint32Array(wash.indices.length);
+        mesh.wash = wash;
+        mesh.facing = new Int8Array(wash.normals.length / 2).fill(-1);
+      }
+
+      const positions = geometry.positions;
+      const { base, heights, normals, mids } = wash;
+
+      for (let v = 0; v < heights.length; v += 1) {
+        const x = base[v * 2];
+        const y = base[v * 2 + 1];
+        const k = camera ? (item.level + heights[v]) * shear : 0;
+
+        positions[v * 2] = camera ? x + (x - camera.x) * k : x;
+        positions[v * 2 + 1] = camera ? y + (y - camera.y) * k : y;
+      }
+
+      // тот же массив: сеттер буфера только отмечает обновление
+      geometry.positions = positions;
+
+      const indices = geometry.indices;
+      let changed = false;
+
+      for (let q = 0; q < mesh.facing.length; q += 1) {
+        const front =
+          camera &&
+          normals[q * 2] * (camera.x - mids[q * 2]) +
+            normals[q * 2 + 1] * (camera.y - mids[q * 2 + 1]) >
+            0
+            ? 1
+            : 0;
+
+        if (mesh.facing[q] === front) {
+          continue;
+        }
+
+        mesh.facing[q] = front;
+        changed = true;
+
+        for (let j = 0; j < 6; j += 1) {
+          indices[q * 6 + j] = front ? wash.indices[q * 6 + j] : q * 4;
+        }
+      }
+
+      if (changed) {
+        geometry.indices = indices;
+      }
+
+      mesh.visible = true;
+      mesh.texture = item.texture;
+      mesh.tint = item.color;
+      mesh.alpha = item.alpha;
+    }
+  }
+
+  // Свет на клиньях рамп: `items` — `{ ramp, texture, color, alpha }`, где
+  // `ramp` — меш `rampLight` в мировых единицах. Оверлей мировой, поэтому
+  // вершины проецируются здесь высотой клина в своей точке: `p + (p −
+  // cam)·k`, `k = высота·shear`. UV и индексы заливаются только на смене
+  // меша
+  layoutRampLights(items, camera, shear) {
+    while (this.rampLightPool.length < items.length) {
+      const geometry = new MeshGeometry({
+        positions: new Float32Array(6),
+        uvs: new Float32Array(6),
+        indices: new Uint32Array(3),
+      });
+      const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
+
+      mesh.blendMode = 'add';
+      mesh.ramp = null;
+      this.rampLightPool.push(mesh);
+      this.rampLights.addChild(mesh);
+    }
+
+    for (let i = 0; i < this.rampLightPool.length; i += 1) {
+      const mesh = this.rampLightPool[i];
+      const item = items[i];
+
+      if (!item) {
+        mesh.visible = false;
+        continue;
+      }
+
+      const { ramp } = item;
+      const geometry = mesh.geometry;
+
+      if (mesh.ramp !== ramp) {
+        geometry.positions = new Float32Array(ramp.base.length);
+        geometry.uvs = ramp.uvs;
+        geometry.indices = ramp.indices;
+        mesh.ramp = ramp;
+      }
+
+      const positions = geometry.positions;
+      const { base, heights } = ramp;
+
+      for (let v = 0; v < heights.length; v += 1) {
+        const x = base[v * 2];
+        const y = base[v * 2 + 1];
+        const k = camera ? heights[v] * shear : 0;
+
+        positions[v * 2] = camera ? x + (x - camera.x) * k : x;
+        positions[v * 2 + 1] = camera ? y + (y - camera.y) * k : y;
+      }
+
+      // тот же массив: сеттер буфера только отмечает обновление
+      geometry.positions = positions;
+
+      mesh.visible = true;
+      mesh.texture = item.texture;
+      mesh.tint = item.color;
+      mesh.alpha = item.alpha;
+    }
   }
 
   // раскладка лучей кадра: `items` — `{ texture, x, y, scale, rotation,
@@ -345,22 +529,28 @@ export default class LevelLightMap {
     overlay.filters = [];
     this.filter.destroy();
 
-    for (const sprite of [...this.pool, ...this.rampPool]) {
+    for (const sprite of this.pool) {
       sprite.texture = null;
     }
 
     // геометрию вееров Mesh.destroy не уничтожает — только отвязывает
-    for (const mesh of [...this.fanPool, ...this.rampFanPool]) {
+    for (const mesh of [
+      ...this.fanPool,
+      ...this.rampLightPool,
+      ...this.washPool,
+    ]) {
       mesh.texture = Texture.EMPTY;
       mesh.geometry.destroy();
     }
 
     this.pool = [];
-    this.rampPool = [];
     this.fanPool = [];
-    this.rampFanPool = [];
+    this.rampLightPool = [];
+    this.washPool = [];
     this.rampLights.mask = null;
+    this.lights.mask = null;
     this.rampMask = null;
+    this.lightsMask = null;
     this.ramps = [];
 
     for (const entry of this.shaftPool) {

@@ -156,6 +156,28 @@ the slab and drops beyond the edge; before, the whole line was drawn at the
 end level, under the slab. By day the end-level piece stays in the
 controller.
 
+A shot into a wall ends on the wall's visible FACE, not on its foot. The
+host's ray runs over the floor and stops at the edge of the wall's
+footprint, while the drawn wall is the volume face from the foot up. The
+`volumes` service (`src/client/volumes.js`) holds the volume height of
+every level cell, filled by the `Map` layers that have `data.volume`.
+`ShotEffect` recognises a wall hit by geometry (`src/client/wallFace.js`):
+the ray's end lies on a cell edge (`edgeFace`, tolerance 0.15 — the host
+rounds the hit point to 0.1) and the cell beyond it is a volume of the end
+level. When the face looks at the projection centre (`faceIsFront`), the
+tracer's end is moved onto it at the bullet height `tracer.height` (the
+barrel height of the model; `raisedPoint`), and the controller rises over
+the occluder (`levelZ(OCCLUDER_BASE_Z + 0.5, L)`, under the light map).
+When the face is turned away (camera past the wall), the tracer stops at
+the roof's silhouette (`crossingDistance`, the face's top edge in
+projection) instead of being drawn over the roof down to the hidden foot.
+The side is picked once per shot: the camera barely moves in 45–80 ms of
+flight. The tracer gets the face line as `stopLine`, so `shiftTo` never
+carries its end past the face while the shooter drives — it slides along
+it. The impact sparks of a wall hit live in their own `shot-impact` layer
+on the stage, projected at the bullet height; its side (over or under the
+occluder) is re-picked every frame.
+
 `blasts` (`src/client/blastEvents.js`) is the same kind of bus for
 explosions: `ExplosionEffect` (bomb or barrel) reports `{ x, y, radius,
 level }` once per explosion, and every `Tank` decides itself whether it was
@@ -166,7 +188,7 @@ hull tosses it up over its shadow and lands it with the landing squash.
 Render only: the push itself stays the core's.
 
 The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`,
-`lighting`, `shots`, `blasts`)
+`volumes`, `lighting`, `shots`, `blasts`)
 are repeated in `ClientPlugin.serviceNames`. The hook
 needs a live core, so the contract checker cannot read what it returns; the
 list is what lets rule `C4` tell a game service from a typo in
@@ -313,12 +335,14 @@ The consequences the parts implement themselves:
 - **Volumes shift with the camera and occlude.** A render layer with a
   height (`volumes` in the map, `data.volume` in the part) is extruded by
   `Map` itself: side walls as a mesh (`buildVolumeWalls` — one quad per
-  exposed cell side, textured from a strip of `volume.faceTileRepeats`
-  copies of that cell's tile — its own side texture per tile, so bricks keep
-  one size — the lower edge at
+  exposed cell side, textured from its tile's own strip with UVs fixed to
+  the wall (`volume.faceTilesPerLevel` copies per level of height, like a
+  GTA 2 block face), split into `volume.faceSegments` rows per level so the
+  bilinear parallax does not bend the brick joints — the lower edge at
   `level`, the upper one at `level + volume` plus `volume.faceBleedPx`
-  screen pixels of overlap, every vertex and its vertical UV recomputed per
-  frame (`updateWallMesh`) like the ramp wedge) plus one sprite of the layer's own baked picture at the top
+  screen pixels of overlap; only the vertices are recomputed per frame
+  (`updateWallMesh`), like the ramp wedge; the mesh is recomputed only when
+  the camera moves) plus one sprite of the layer's own baked picture at the top
   height, so walls open up as the player moves and read as one solid block.
   Faces turned away from the camera are drawn first (`orderWallMesh`
   rewrites the index order only when a face changes side). `volume.faces =
@@ -412,11 +436,14 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   slab (`holeOverlay`, its own filter state; in `'layer'` mode — the
   overlay's `alpha`), otherwise a dark patch would stay in the hole. While
   the hole is attached, its filter is the last in the chain and carries the
-  `multiply` blend itself.
+  `multiply` blend and the map's `resolution` itself.
 - **Emissive layer.** Per level a container at `levelZ(45, L)` with additive
   sprites drawn over the darkness: neon signs (`parts/map/NeonSign.js`).
-  Their transparency is `levelView.alphaFor`. Without night `addEmissive`
-  returns `false`, and the caller keeps its sprite. A shot tracer is light
+  Their transparency and position are set by the owner on every draw
+  (`NeonSign.update`: `levelView.alphaFor`, or the roof's alpha for a sign
+  standing on a roof — `MapLayer._roofAlpha`); the service only holds the
+  sprite in its level's container. Without night `addEmissive` returns
+  `false`, and the caller keeps its sprite. A shot tracer is light
   too: at night every tracer piece goes into a sibling container at
   `levelZ(45, L)` of its own level (that level's projection and
   transparency), otherwise a long shot faded to `ambient` beyond the
@@ -448,38 +475,64 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   textures (`lightRadialTexture`, `headlightConeTexture`, `lampHeadTexture`)
   and therefore batch, are culled against the screen and capped by
   `lighting.maxLights`. The layout runs once per stage transform per tick.
-- **Upper-level light on ramps.** A ramp wedge is drawn in the part of its
-  `from` level and darkened by that level's overlay, so the light of the
-  slab it leads to never reached it. A static layer with rising ramps hands
-  their lanes to the service (`setRampWedges`); the `from` level's map then
-  has a second source container, `rampLights`, under a stencil mask of the
-  wedges in the wedge mesh's own projection (`rampWedgePolygon`, redrawn on
-  every stage transform). Sources of the `to` level go there too, scaled by
+- **Light on ramps.** A ramp wedge is drawn in the part of its `from`
+  level with a per-vertex height (a trapezoid widening upwards), while a
+  light map lies in the floor's projection: a wedge pixel would take the
+  light of the floor point drawn under it, and the lit footprint would not
+  match the drawn wedge. A static layer with rising ramps hands their lanes
+  to the service (`setRampWedges`); the `from` level's map then has a
+  second source container, `rampLights`, under a stencil mask of the wedges
+  in the wedge mesh's own projection (`rampWedgePolygon`, redrawn on every
+  stage transform), and its ordinary `lights` get an **inverse** mask of the
+  same outline, so no floor-projected light remains on a wedge. The light
+  on a slope is a mesh in the wedge's projection
+  (`lightMath.rampLight`, `LevelLightMap.layoutRampLights`): the source's
+  fan (the headlight's occlusion fan, or its texture rectangle for lamps,
+  flashes and unoccluded cones) is clipped by the lane rectangle, cut along
+  the axis into `volume.rampSegments` pieces per cell like the wedge mesh,
+  each vertex projected by the wedge height at its point, with the UV of
+  its world point. Sources of the `from` level get it for free (not against
+  `maxLights`); sources of the `to` level get it scaled by
   `lighting.rampSpill` and counted against `maxLights`; a source already
   lighting the `from` level (a tank on the ramp, `levels [0, 1]`) is not
   added twice. The ground under the bridge stays dark — it is outside the
-  mask.
+  mask. Meshes are cached per fan, so a standing lamp builds them once.
 - **Headlights and walls.** The cells of a level's volumes (building,
   canal and railing walls — what `setVolumeTops` hands over) form its
   obstacle grid, rebuilt with the masks. A headlight cone of that level
   casts `headlights.occlusion.rays` rays across its texture rectangle
   (`lightMath.coneFan`, a grid DDA `castRay`); when any ray stops at a wall
   the cone is drawn as a fan mesh over that visibility polygon with the
-  same texture (`fanUvs`), in the light map's `lights`/`rampLights`
-  container, projected by the mesh transform — no stencil mask per cone.
-  An unclipped cone stays the old sprite. The fan is cached per source
+  same texture (`fanUvs`), in the light map's `lights` container
+  (on ramp wedges — see the ramp paragraph), projected by the mesh transform — no stencil mask per cone.
+  An unclipped cone stays the old sprite. Cones whose texture rectangle
+  touches no wall or ramp cell skip the rays. The fan is cached per source
   until it moves, turns or the grid changes. Since the fan stops at the
-  wall's footprint, neither the floor behind it nor the volume's side faces
-  drawn over the footprint get the light. Where the cone axis hits a wall
+  wall's footprint, the floor behind it gets no light. The part of the beam
+  a wall stops is folded onto the wall's visible face instead
+  (`lightMath.wallWash`, `headlights.wash`): for each pair of neighbouring
+  rays hitting the same face (`edgeFace`, the obstacle grid stores the
+  volume height) a quad rises from the foot to `min(wash.height, volume)`;
+  its bottom UV is the hit point, its top UV the end of the same ray, so the
+  light fades upwards. `LevelLightMap.layoutWashes` projects the quads per
+  level height and draws only faces looking at the projection centre (a
+  turned-away face is under the roof); the volume tops drawn above keep the
+  roof dark. The wash goes only into the headlight's own level map and does
+  not count against `maxLights`. Where the cone axis hits a wall
   (`firstHit`) no farther than `headlights.bounce.maxDistance`, a radial
   bounce spot is added in front of it. `lightsAt` skips a cone whose line
   of sight to the point is blocked, so there are no glints behind walls.
   Ramps rising from the light's level (`setRampWedges`) are obstacles too,
   by direction (`lightMath.rampBlocks`): a ray entering through the foot
-  lights the slope and stops where it leaves the lane; one entering
-  through a side or the top end stops if the wedge there is higher than
-  the headlight by more than `RAMP_CLEARANCE`. The lane the headlight
-  itself stands on is exempt; neighbouring ramps still block it. The fan
+  lights the slope; leaving the lane sideways it goes on along the floor
+  (the soft cone edge lands on the floor by the sides), leaving it through
+  the top end (or into another lane) it stops, so the floor under the
+  bridge stays dark. A ray entering through a side or the top end stops if
+  the wedge there is higher than the headlight by more than
+  `RAMP_CLEARANCE`, and the embankment side or end it stopped at is washed
+  like a wall: `wallWash` sees `max(volume, wedge height at the point)`, so
+  the quad rises to `min(wash.height, wedge height)`. The lane the
+  headlight itself stands on is exempt; neighbouring ramps still block it. The fan
   and the bounce are computed only for cones that pass the screen cull.
 - **Glints.** `Tank` and `MapObject` ask the service for the strongest
   source at their world point (`lightsAt`: lamps through a cell grid built
@@ -488,11 +541,17 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   of their own container — so it follows tilt and parallax. The gradient's
   mask is a sprite with the object's own texture (the hull or wreck, the
   prop's current state). Screen culling (`onScreen`) and a per-tick budget
-  of `maxLights` keep the mask passes bounded.
+  of `maxLights` keep the mask passes bounded. The query and the sprite pair
+  are shared code in `src/client/parts/glint.js` (`glintHit`,
+  `ensureGlint`, `placeGlint`, `hideGlint`); each part lays out only its own
+  mask.
 - **Light shafts and their shadows.** Every lamp with `head: true` gets a
   `lightShaftTexture` sprite in its level's light map, above the sources and
   below the volume tops, slowly swaying by the lamp's `seed`. Tanks and
-  props register as shadow casters (`setCaster`, a circle in world units);
+  props register as shadow casters (`setCaster`, a circle in world units)
+  only while `castsShadows()` is true — at night with shafts and their
+  shadows enabled. A caster object is registered once and then only its
+  fields are updated each frame, since the service keeps the reference;
   the nearest `maxShadowCasters` on the lamp's level cast a wedge from the
   tangents of their circle to the end of the shafts (`shadowWedge`). The
   wedges are an **inverse stencil mask** of that lamp's shaft container, so

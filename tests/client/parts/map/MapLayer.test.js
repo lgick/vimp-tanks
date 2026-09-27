@@ -11,8 +11,10 @@ import Map from '../../../../src/client/parts/Map.js';
 import { bakeTileLayer } from '../../../../src/client/parts/bakeTileLayer.js';
 import { createLevelView } from '../../../../src/client/levelView.js';
 import { createLighting } from '../../../../src/client/lighting/createLighting.js';
+import { createVolumes } from '../../../../src/client/volumes.js';
 import { mapKeyOf } from '../../../../src/client/lighting/lightMath.js';
 import { levelZ } from '../../../../src/client/levelZ.js';
+import { wallStripCopies } from '../../../../src/client/parts/map/extrusion.js';
 import { seeThrough, parallax, volume } from '../../../../src/config/render.js';
 
 // Стратегия статического слоя карты: запечённый тайл-лист, его параллакс,
@@ -570,6 +572,10 @@ describe('Map: параллакс и объём слоя', () => {
       expect(slices[0].target.texture.source).not.toBe(
         map._mode.mapSprite.texture.source,
       );
+      // полоса — столько копий тайла, сколько их несёт грань этой высоты
+      expect(bakeTileLayer.mock.calls[1][0].map).toHaveLength(
+        wallStripCopies(1, volume.faceTilesPerLevel),
+      );
     });
 
     // путь отхода: прежняя стопка копий слоя
@@ -1098,6 +1104,56 @@ describe('Map: параллакс и объём слоя', () => {
       expect(nearRoof.alpha).toBeCloseTo(1);
       expect(underRoof.alpha).toBeCloseTo(seeThrough.layerAlpha, 2);
     });
+
+    it("_roofAlpha: режим 'layer' — alpha слоя", () => {
+      const k = parallax.shear;
+      const view = createLevelView({ ...seeThrough, mode: 'layer' });
+
+      view.set(
+        0,
+        CELL.x + (CELL.x - CAM_X) * k,
+        CELL.y + (CELL.y - CAM_Y) * k,
+        0,
+      );
+
+      const roof = readyRoof(view);
+
+      drawFrames(roof, 200);
+
+      expect(roof._mode._roofAlpha()).toBe(roof._mode._container.alpha);
+      expect(roof._mode._roofAlpha()).toBeLessThan(1);
+    });
+
+    it("_roofAlpha: режим 'hole' — alpha центра дыры", () => {
+      const k = parallax.shear;
+      const cfg = { ...seeThrough, mode: 'hole' };
+      const view = createLevelView(cfg);
+
+      view.set(
+        0,
+        CELL.x + (CELL.x - CAM_X) * k,
+        CELL.y + (CELL.y - CAM_Y) * k,
+        0,
+      );
+
+      const roof = readyRoof(view);
+
+      drawFrames(roof, 200);
+
+      const { strength } = roof._mode._hole;
+
+      expect(strength).toBeGreaterThan(0);
+      expect(roof._mode._roofAlpha()).toBeCloseTo(
+        1 + (view.cfg.minAlpha - 1) * strength,
+      );
+    });
+
+    it('не крыша — null', () => {
+      const view = createLevelView({ ...seeThrough, mode: 'hole' });
+      const slab = readyRoof(view, { ...roofData, game: {} });
+
+      expect(slab._mode._roofAlpha()).toBeNull();
+    });
   });
 });
 
@@ -1184,6 +1240,54 @@ describe('MapLayer: освещение', () => {
 
     expect(typeof night._onRender).toBe('function');
     expect(day._onRender).toBe(null);
+  });
+});
+
+// сервис `volumes`: слой с объёмом отдаёт высоты своих клеток — по ним
+// выстрел в стену кончается на её видимой грани (днём тоже)
+describe('MapLayer: сервис volumes', () => {
+  const wall = {
+    ...staticData,
+    map: [
+      [0, 5],
+      [5, 0],
+    ],
+    tiles: [5],
+    volume: 1,
+  };
+  const makeWith = (data, volumes) =>
+    new Map(data, {}, { renderer, assetsBase: '/build/', volumes });
+
+  it('слой с объёмом регистрируется и снимается в destroy', () => {
+    const volumes = createVolumes();
+    const setLayerVolume = vi.spyOn(volumes, 'setLayerVolume');
+    const part = makeWith(wall, volumes);
+    const owner = part._mode;
+
+    expect(setLayerVolume).toHaveBeenCalledWith(
+      0,
+      [
+        [1, 0],
+        [0, 1],
+      ],
+      1,
+      owner,
+      { step: 32, scale: 1 },
+    );
+    expect(volumes.heightAt(0, 40, 10)).toBe(1);
+
+    part.destroy();
+
+    expect(volumes.heightAt(0, 40, 10)).toBe(0);
+  });
+
+  it('плоский слой не регистрируется', () => {
+    const volumes = createVolumes();
+    const setLayerVolume = vi.spyOn(volumes, 'setLayerVolume');
+
+    makeWith(staticData, volumes);
+
+    expect(setLayerVolume).not.toHaveBeenCalled();
   });
 });
 

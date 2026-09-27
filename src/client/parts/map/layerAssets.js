@@ -1,5 +1,5 @@
 import { Container, Sprite } from 'pixi.js';
-import { levelZ } from '../../levelZ.js';
+import { OCCLUDER_BASE_Z, levelZ } from '../../levelZ.js';
 import { applyParallax } from '../../parallax.js';
 import { bakeTileLayer } from '../bakeTileLayer.js';
 import { buildRampLanes } from '../rampLanes.js';
@@ -8,6 +8,7 @@ import {
   buildVolumeSlices,
   buildVolumeWalls,
   buildRampMeshes,
+  wallStripCopies,
 } from './extrusion.js';
 import {
   parallax as parallaxConfig,
@@ -41,15 +42,6 @@ import {
 //   extruding        нужна ли экструзия вообще
 //   assetUrl         только для сообщения об ошибке
 //   isAborted()      парт уже уничтожен — бросать работу
-
-// Базовый zIndex контейнера-перекрывателя: объём слоя рисуется НАД
-// динамикой СВОЕГО уровня, иначе танк «наезжает» на стену вместо того,
-// чтобы уйти за неё (экструзия идёт ОТ центра камеры, то есть накрывает
-// область за стеной — ровно там танк и стоит). 5 — выше танка (3), дыма
-// (4), бомб и эффектов (2) и следов (1), и заведомо меньше шага уровней
-// (`parallax.levelZStride`): слой уровня N + 1 по-прежнему выше всего,
-// что принадлежит уровню N
-const OCCLUDER_BASE_Z = 5;
 
 const NOTHING = {
   mapSprite: null,
@@ -209,7 +201,8 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
           shear,
           sideTint: volumeConfig.sideTint,
           textures,
-          tileRepeats: volumeConfig.faceTileRepeats,
+          tilesPerLevel: volumeConfig.faceTilesPerLevel,
+          segments: volumeConfig.faceSegments,
         }),
       );
 
@@ -290,10 +283,13 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
   return { occluder, slices: built, rampTexture, wallTextures };
 }
 
-// Боковая текстура на КАЖДЫЙ тайл слоя: ПОЛОСА из `faceTileRepeats` копий
-// его картинки по вертикали. Общая запечённая картинка слоя для граней не
-// годится — по ней тайл не повторяется, и кирпич растягивался бы тем
-// сильнее, чем длиннее и выше грань (`extrusion.js`, `updateWallMesh`).
+// Боковая текстура на КАЖДЫЙ тайл слоя: ПОЛОСА из `ceil(volume ·
+// faceTilesPerLevel)` копий его картинки по вертикали (`wallStripCopies`):
+// грань высотой `volume` уровней несёт `volume · faceTilesPerLevel` копий,
+// дробный остаток полосы остаётся ниже её низа. Общая запечённая картинка
+// слоя для граней не годится — по ней тайл не повторяется, и кирпич
+// растягивался бы тем сильнее, чем выше грань (`extrusion.js`,
+// `buildVolumeWalls`).
 // Аппаратный повтор координат тоже не годится: на батченом меше он не
 // действует, координаты зажимаются, и грань размазывает крайний столбец
 // тайла.
@@ -303,7 +299,7 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
 async function bakeWallTextures(spec, baseTexture, sink) {
   const textures = new Map();
 
-  const repeats = Math.max(1, Math.round(volumeConfig.faceTileRepeats) || 1);
+  const repeats = wallStripCopies(spec.volume, volumeConfig.faceTilesPerLevel);
 
   for (const tile of spec.tiles) {
     const texture = await bakeTileLayer({

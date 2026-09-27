@@ -1,5 +1,7 @@
-import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin, { blurPadding } from './blurMargin.js';
+import { Graphics } from 'pixi.js';
+import blurMargin from './blurMargin.js';
+import bakeBlurred from './bakeBlurred.js';
+import { coneProfile } from '../lighting/lightMath.js';
 
 // Конус фары: клин от вершины к широкому концу, яркость спадает по длине,
 // края мягкие (размытие). Вершина — в точке (margin, середина высоты), то
@@ -25,7 +27,7 @@ export default function headlightConeTexture(params, renderer) {
     const h1 = (halfWidth * (i + 1)) / strips;
     const t = (i + 0.5) / strips;
     // яркий у фары, к концу луча сходит на нет
-    const alpha = (1 - t) * (1 - t * 0.35);
+    const alpha = coneProfile(t);
 
     graphics.poly([
       apexX + x0,
@@ -40,18 +42,12 @@ export default function headlightConeTexture(params, renderer) {
     graphics.fill({ color: 0xffffff, alpha });
   }
 
-  const filter = new BlurFilter({ strength: blur, quality });
-
-  // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
-  filter.padding = blurPadding(blur);
-  graphics.filters = [filter];
-
-  const texture = renderer.generateTexture({
-    target: graphics,
-    frame: new Rectangle(0, 0, width, height),
+  const texture = bakeBlurred(renderer, graphics, {
+    blur,
+    quality,
+    width,
+    height,
   });
-
-  graphics.destroy(true);
 
   return { texture, length, halfWidth, margin };
 }

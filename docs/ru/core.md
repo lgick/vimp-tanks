@@ -1119,7 +1119,7 @@ Rapier (и `step_bodies` реплики) тянет к нулю АБСОЛЮТН
 смене карты. Без удержания обе функции нейтральны — путь остаётся бит-в-бит.
 
 **Порядок в `Tank::update`**: `decay_boost` до раннего выхода при запертом
-вводе; в этом выходе (полёт) `apply_slick` только гасит остаток; после него —
+вводе; в этом выходе (полёт) `decay_slick` гасит остаток; после него —
 `tank_mix` (угол — из тела), `apply_slick` поверх этой смеси, `boost_hold_mix`
 и снимок скорости начала шага `(vx0, vy0)` и `ω0` —
 Rapier меняет `linvel` прямо в `apply_impulse`, поэтому любое чтение после
@@ -1131,7 +1131,7 @@ Rapier меняет `linvel` прямо в `apply_impulse`, поэтому лю�
 ленте нагрузка остаётся `0`, двигатель не «воет»); поворот
 `turn_delta · turn + track_yaw_dv + angular_drag_dw(ω0)`, умноженный на инерцию.
 **`Predictor::step_inner`** повторяет его: `decay_boost` до ветки полёта,
-`apply_slick` (спад) внутри неё, `tank_mix`, `apply_slick` и `boost_hold_mix`
+`decay_slick` внутри неё, `tank_mix`, `apply_slick` и `boost_hold_mix`
 после неё,
 `vx/vy` реплики в начале шага как `(vx0, vy0)`, те же Δv в `vx/vy` в том же
 порядке, Δω — в `angvel`, затем `resolve_world` без изменений.

@@ -1,6 +1,9 @@
-import { Ticker } from 'pixi.js';
 import { offsetPoint } from '../../parallax.js';
-import { advance as advanceHole, apply as applyHole } from './holeOverlay.js';
+import {
+  advance as advanceHole,
+  apply as applyHole,
+  tickRate,
+} from './holeOverlay.js';
 import { parallax as parallaxConfig } from '../../../config/render.js';
 import { coversPoint, tileAt } from './tileGrid.js';
 
@@ -36,21 +39,9 @@ export function updateSeeThrough(view, camera) {
   }
 
   const cfg = view.levelView.cfg;
-  // Сглаживание по времени тикера общего приложения — РОВНО раз на тик.
-  // Полотно может рисоваться несколько раз за тик (`vimp-engine` до 0.34
-  // зовёт `app.render()` из `updateCoords` на каждый кадр камеры), а
-  // `deltaMS` у всех этих отрисовок один и тот же: без этой отсечки плита
-  // гасла бы тем быстрее, чем больше кадров пришло в тик, то есть
-  // `fadeRate` означал бы разное на разном пинге. Нулевой шаг оставляет
-  // силу дыры как есть, а её ПРИМЕНЕНИЕ идёт каждую отрисовку: центр дыры
-  // едет за камерой
-  const tick = Ticker.shared.lastTime;
-  const stepped = view.hole.tick === tick;
-
-  view.hole.tick = tick;
-
-  const dt = Ticker.shared.deltaMS / 1000;
-  const rate = stepped ? 0 : Math.min(1, cfg.fadeRate * dt);
+  // сглаживание шагает раз на тик общего тикера (см. `tickRate`);
+  // перекрыватель берёт тот же шаг
+  const rate = tickRate(view.hole, cfg.fadeRate);
 
   if (view.hasSprite) {
     updateLayerSeeThrough(view, cfg, rate, camera);

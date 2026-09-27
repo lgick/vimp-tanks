@@ -1,6 +1,7 @@
-import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
+import { Graphics } from 'pixi.js';
 import { randomRange } from 'vimp-engine/lib/math.js';
-import blurMargin, { blurPadding } from './blurMargin.js';
+import blurMargin from './blurMargin.js';
+import bakeBlurred from './bakeBlurred.js';
 
 // создаёт набор процедурных текстур воронки: тёмная выемка со светлым бортиком
 // двухтоновая заливка нужна, чтобы след читался и на светлых, и на тёмных картах
@@ -52,20 +53,13 @@ export default function funnelTexture(params, renderer) {
       .fill(colorFill)
       .stroke({ width: rimWidth, color: colorRim, alignment: 1 });
 
-    const filter = new BlurFilter({ strength: blur, quality: 10 });
-
-    // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
-    filter.padding = blurPadding(blur);
-    graphics.filters = [filter];
-
     textures.push(
-      renderer.generateTexture({
-        target: graphics,
-        frame: new Rectangle(0, 0, canvasSize, canvasSize),
+      bakeBlurred(renderer, graphics, {
+        blur,
+        width: canvasSize,
+        height: canvasSize,
       }),
     );
-
-    graphics.destroy(true);
   }
 
   return { textures, contentSize };

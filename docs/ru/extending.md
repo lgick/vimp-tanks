@@ -411,13 +411,15 @@ npm run dev                   # глазами: room.map в src/standalone.js
 2. Пропишите её в `gameSets`/`entitiesOnCanvas` (`src/config/client.js`).
 3. Если нужна процедурная текстура, добавьте baker в
    `src/client/bakers/` (по образцу существующих) и запись в
-   `bakedAssets`. При использовании `BlurFilter` размер холста обязан
-   включать запас `blurMargin(blur)` вокруг фигуры
-   (`bakers/blurMargin.js`) **и** фильтру нужно выставить
-   `filter.padding = blurMargin(blur)`: без padding Pixi рисует размытие
-   лишь в пределах `2 * strength` вокруг фигуры, без запаса
-   `generateTexture` обрежет размытие рамкой — в обоих случаях спрайт
-   получит видимый прямоугольный край. Baker, у которого холст больше
+   `bakedAssets`. При использовании `BlurFilter` пеките через
+   `bakeBlurred(renderer, graphics, { blur, quality, width, height })`
+   (`bakers/bakeBlurred.js`). Он выставляет
+   `filter.padding = blurPadding(blur)` — вдвое больше `blurMargin(blur)`:
+   при меньшем padding проходы размытия читают старые пиксели пула
+   текстур, и по краю текстуры появляется светлая рамка. Сам холст
+   по-прежнему обязан включать запас `blurMargin(blur)` вокруг фигуры
+   (`bakers/blurMargin.js`), иначе `generateTexture` обрежет размытие
+   рамкой. Baker, у которого холст больше
    фигуры, обязан возвращать размер фигуры вместе с текстурой
    (`{ texture, contentSize }`), а потребители — считать масштаб от
    `contentSize`: иначе правка `blur` в конфиге молча меняет размер всех

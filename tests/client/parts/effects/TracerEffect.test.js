@@ -124,3 +124,54 @@ describe('TracerEffect.shiftTo', () => {
     expect(effect.endPositionX).toBe(30);
   });
 });
+
+// попадание в стену: конец не заходит за линию её грани, а скользит по ней
+describe('TracerEffect.shiftTo: линия грани (stopLine)', () => {
+  const make = () =>
+    new TracerEffect(0, 0, 100, 0, () => {}, tracer, {
+      stopLine: { axis: 'x', coord: 100 },
+    });
+
+  it('танк едет к стене — конец обрезается по линии', () => {
+    const effect = make();
+
+    effect._update(1);
+    effect.shiftTo(20, 0);
+
+    expect(effect.startPositionX).toBe(20);
+    expect(effect.endPositionX).toBeCloseTo(100, 6);
+    expect(effect.totalDist).toBeCloseTo(80, 6);
+  });
+
+  it('едет вдоль стены — конец скользит по ней', () => {
+    const effect = make();
+
+    effect._update(1);
+    effect.shiftTo(0, 15);
+
+    expect(effect.endPositionX).toBeCloseTo(100, 6);
+    expect(effect.endPositionY).toBeCloseTo(15, 6);
+    expect(effect.totalDist).toBeCloseTo(100, 6);
+  });
+
+  it('длина обратно не растёт', () => {
+    const effect = make();
+
+    effect._update(1);
+    effect.shiftTo(20, 0);
+    effect.shiftTo(0, 0);
+
+    expect(effect.totalDist).toBeCloseTo(80, 6);
+    expect(effect.endPositionX).toBeCloseTo(80, 6);
+  });
+
+  it('без линии — прежний перенос', () => {
+    const effect = new TracerEffect(0, 0, 100, 0, () => {});
+
+    effect._update(1);
+    effect.shiftTo(20, 0);
+
+    expect(effect.endPositionX).toBe(120);
+    expect(effect.totalDist).toBeCloseTo(100, 6);
+  });
+});

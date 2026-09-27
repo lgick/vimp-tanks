@@ -419,12 +419,14 @@ The live tank and its wreck are a low-poly model (`src/client/tank3d/`):
 2. Add it to `gameSets`/`entitiesOnCanvas` (`src/config/client.js`).
 3. If it needs a procedural texture, add a baker in `src/client/bakers/`
    (follow the existing ones) and an entry in `bakedAssets`. When using
-   `BlurFilter`, the canvas size must include a `blurMargin(blur)`
-   allowance around the shape (`bakers/blurMargin.js`) **and** the filter
-   must get `filter.padding = blurMargin(blur)`: without the padding Pixi
-   renders the blur only within `2 * strength` around the shape, without
-   the allowance `generateTexture` clips the blur at the frame — either
-   way the sprite gets a visible rectangular edge. A baker whose canvas is
+   `BlurFilter`, bake through
+   `bakeBlurred(renderer, graphics, { blur, quality, width, height })`
+   (`bakers/bakeBlurred.js`). It sets `filter.padding = blurPadding(blur)`
+   — twice `blurMargin(blur)`: with a smaller padding the blur passes read
+   stale pixels of the texture pool, and the texture gets a light frame on
+   its edge. The canvas itself must still include a `blurMargin(blur)`
+   allowance around the shape (`bakers/blurMargin.js`), or
+   `generateTexture` clips the blur at the frame. A baker whose canvas is
    larger than the shape must return the shape size along with the texture
    (`{ texture, contentSize }`), and consumers must derive scale from
    `contentSize` — otherwise changing `blur` in the config silently

@@ -1162,7 +1162,7 @@ roll back with the level history like the oil residue
 functions are neutral — the path stays bit for bit.
 
 **Order in `Tank::update`**: `decay_boost` before the early return on locked
-input; in that return (flight) `apply_slick` only decays the residue; after
+input; in that return (flight) `decay_slick` drops the residue; after
 it — `tank_mix` (the angle from the body), `apply_slick` over that mix,
 `boost_hold_mix`, and a snapshot of the step-start velocity
 `(vx0, vy0)` and `ω0` — Rapier changes `linvel` right inside `apply_impulse`,
@@ -1175,7 +1175,7 @@ when it fires, `start_boost_hold`), then the hold's damping compensation
 stays `0`, the engine does not howl); the turn
 `turn_delta · turn + track_yaw_dv + angular_drag_dw(ω0)` times the inertia.
 **`Predictor::step_inner`** mirrors it: `decay_boost` before the flight
-branch, `apply_slick` (decay) inside it, `tank_mix`, `apply_slick` and
+branch, `decay_slick` inside it, `tank_mix`, `apply_slick` and
 `boost_hold_mix` after it,
 the replica's `vx/vy` at the start of the step as `(vx0, vy0)`, the same Δv
 added to `vx/vy` in the same order, Δω to `angvel`, then `resolve_world`

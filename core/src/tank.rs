@@ -503,22 +503,7 @@ impl Tank {
 
             // остаток скользкой поверхности в полёте спадает — тот же вызов,
             // что у реплики до её раннего выхода
-            if let Some(map) = surfaces {
-                let position = body.translation();
-
-                surface::apply_slick(
-                    map,
-                    surface_rules,
-                    &mut self.level_state,
-                    position.x,
-                    position.y,
-                    body.rotation().angle(),
-                    self.width / 2.0,
-                    self.height / 2.0,
-                    SurfaceMix::NEUTRAL,
-                    dt,
-                );
-            }
+            surface::decay_slick(&mut self.level_state, dt);
 
             return shot_data;
         }
@@ -528,6 +513,8 @@ impl Tank {
         // после бокового импульса или тяги было бы уже другим. Реплика берёт
         // те же скорости — до всех импульсов шага
         let position = body.translation();
+        let angle = body.rotation().angle();
+        let (half_w, half_h) = (self.width / 2.0, self.height / 2.0);
         let mix = surfaces.map_or(SurfaceMix::NEUTRAL, |map| {
             surface::tank_mix(
                 map,
@@ -535,9 +522,9 @@ impl Tank {
                 &self.level_state,
                 position.x,
                 position.y,
-                body.rotation().angle(),
-                self.width / 2.0,
-                self.height / 2.0,
+                angle,
+                half_w,
+                half_h,
             )
         });
         // остаток масла после съезда: таймер живёт в состоянии уровня
@@ -548,9 +535,9 @@ impl Tank {
                 &mut self.level_state,
                 position.x,
                 position.y,
-                body.rotation().angle(),
-                self.width / 2.0,
-                self.height / 2.0,
+                angle,
+                half_w,
+                half_h,
                 mix,
                 dt,
             )

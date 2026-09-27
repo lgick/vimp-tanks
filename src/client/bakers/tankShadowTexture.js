@@ -1,5 +1,6 @@
-import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin, { blurPadding } from './blurMargin.js';
+import { Graphics } from 'pixi.js';
+import blurMargin from './blurMargin.js';
+import bakeBlurred from './bakeBlurred.js';
 
 // Тень танка — СИЛУЭТ корпуса, а не круг: круглая тень с мягким ореолом
 // вылезала из-под углов вращающегося корпуса и читалась как серый кружок
@@ -25,20 +26,12 @@ export default function tankShadowTexture(params, renderer) {
   graphics.roundRect(margin, margin, width, height, radius);
   graphics.fill(color);
 
-  const filter = new BlurFilter({ strength: blur, quality });
-
-  // без явного padding Pixi рендерит размытие лишь на 2 * strength вокруг
-  // фигуры и обрезает его раньше рамки, каким бы большим ни был холст;
-  // область шире рамки — чтобы мусор пула с края не попал в текстуру
-  filter.padding = blurPadding(blur);
-  graphics.filters = [filter];
-
-  const texture = renderer.generateTexture({
-    target: graphics,
-    frame: new Rectangle(0, 0, textureWidth, textureHeight),
+  const texture = bakeBlurred(renderer, graphics, {
+    blur,
+    quality,
+    width: textureWidth,
+    height: textureHeight,
   });
-
-  graphics.destroy(true);
 
   return { texture, contentSize: width };
 }

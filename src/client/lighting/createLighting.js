@@ -9,6 +9,7 @@ import {
 import {
   advance as advanceHole,
   apply as applyHole,
+  tickRate,
 } from '../parts/map/holeOverlay.js';
 import {
   lighting as lightingConfig,
@@ -21,23 +22,17 @@ import {
   EMISSIVE_BASE_Z,
   LAMP_HEAD_BASE_Z,
   buildLightGrid,
-  castRay,
   cellCenter,
   cellRuns,
-  coneFan,
-  fanUvs,
-  firstHit,
-  lightStrength,
-  rampBlocks,
+  rampLight,
   flashFactor,
   flicker,
   isOnScreen,
   projectLight,
-  queryLightGrid,
-  selectLights,
-  shadowWedge,
-  shaftSway,
 } from './lightMath.js';
+import { createOcclusion, frameOf } from './occlusion.js';
+import { createGlintQuery } from './glints.js';
+import { layoutShafts } from './shafts.js';
 
 // цвет полумрака, если карта его не задала
 const DEFAULT_AMBIENT = 0x3a4260;
@@ -46,23 +41,6 @@ const DEFAULT_AMBIENT = 0x3a4260;
 // засветы и лучи фонарей
 const TEXTURE_KEYS = ['radial', 'cone', 'head', 'glint', 'shaft'];
 
-// наибольшее покачивание лучей фонаря, рад
-const SHAFT_SWAY = 0.08;
-
-// отступ отсвета фары от стены в долях его радиуса
-const BOUNCE_PULL = 0.6;
-
-// Сервис пула зависимостей `lighting`: ночь, карты освещённости уровней,
-// источники света и эмиссивный слой. Возвращается из `hooks.services(core)`
-// (src/client/index.js), по экземпляру на ядро.
-//
-// Два вида состояния:
-// - состояние КАРТЫ — оверлеи уровней, фонари (источники и головы), вклады
-//   масок этажей. Живёт по ключу карты (`lightMath.mapKeyOf`), освобождается
-//   `clear()` и при переключении ключа;
-// - состояние СЕССИИ — зарегистрированные текстуры, источники `addLight`,
-//   записи эмиссива. Переживает смену карты: танки и эффекты — не части
-//   карты, движок уничтожает их отдельно, и снимают своё они сами.
 // Область карт освещённости в мировых единицах: карта плюс запас на
 // каждую сторону, равный её большей стороне, — при максимальном отдалении
 // камеры за краем карты тоже полумрак
@@ -79,6 +57,20 @@ export function lightArea(size, step, scale) {
   };
 }
 
+// Сервис пула зависимостей `lighting`: ночь, карты освещённости уровней,
+// источники света и эмиссивный слой. Возвращается из `hooks.services(core)`
+// (src/client/index.js), по экземпляру на ядро.
+//
+// Два вида состояния:
+// - состояние КАРТЫ — оверлеи уровней, фонари (источники и головы), вклады
+//   масок этажей и крыш, вершины объёмов и клинья рамп (`tops`, `ramps`),
+//   сетки препятствий фар (`map.blockers`, `map.rampCells`) и кеш вееров
+//   (`fans`). Живёт по ключу карты (`lightMath.mapKeyOf`), освобождается
+//   `clear()` и при переключении ключа;
+// - состояние СЕССИИ — зарегистрированные текстуры, источники `addLight`,
+//   записи эмиссива, предметы-тени лучей (`setCaster`) и бюджет засветов
+//   на тик (`lightsAt`). Переживает смену карты: танки и эффекты — не части
+//   карты, движок уничтожает их отдельно, и снимают своё они сами.
 export function createLighting(cfg = lightingConfig, deps = {}) {
   const enabled = Boolean(cfg.enabled);
   const levelView = deps.levelView || null;
@@ -95,9 +87,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   const flashes = [];
   // предметы, отбрасывающие тени в лучах: owner -> { x, y, z, level, radius }
   const casters = new Map();
-  // бюджет засветов на тик: `lightsAt` с ответом — не больше `maxLights`
-  let glintTick = null;
-  let glintCount = 0;
 
   // --- состояние карты ---
   let mapKey = null;
@@ -118,11 +107,24 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   // ключ раскладки: трансформ сцены + тик (см. render)
   let layoutKey = null;
 
-  // веера фар у стен: источник -> { key, shape, hit }. Пересчёт — только
-  // когда фара сдвинулась, повернулась или сменилась сетка препятствий
-  const fans = new WeakMap();
-  // номер сборки сетки препятствий (`syncLevels`): ключ кеша вееров
-  let blockersVersion = 0;
+  // препятствия и окклюзия фар; сетки и кеш вееров — состояние карты
+  const occlusion = createOcclusion({ getMap: () => map, cfg });
+  // засветы; бюджет на тик — состояние сессии
+  const glints = createGlintQuery({
+    getMap: () => map,
+    lights,
+    flashes,
+    cfg,
+    reachesPoint: occlusion.reachesPoint,
+  });
+
+  // веер-прямоугольник текстуры источника без окклюзии: источник ->
+  // { key, fan } (`quadFanOf`)
+  const quads = new WeakMap();
+  // свет на клиньях: массив точек веера -> Map(полоса -> меш `rampLight`
+  // или null). Веер фары у стены и прямоугольник фонаря живут, пока
+  // источник стоит, — и меши вместе с ними
+  const rampMeshes = new WeakMap();
 
   const seeThroughCfg = () => levelView?.cfg || null;
 
@@ -187,8 +189,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       area: lightArea(size, step, mapScale),
       cols: size?.cols ?? 0,
       rows: size?.rows ?? 0,
-      // level -> Uint8Array(cols·rows): клетки объёмов уровня — стены, в
-      // которые упирается свет фар
+      // level -> Float32Array(cols·rows): объём клетки в уровнях, 0 — пусто.
+      // Стены, в которые упирается свет фар; высота нужна засветке грани
       blockers: new Map(),
       // level -> { cells: Int32Array(cols·rows), lanes } — клетки рамп,
       // ведущих с уровня вверх (номер полосы + 1): склон ловит свет своего
@@ -316,6 +318,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   // все карты освещённости карты: обычные и крыш
   const allLevelMaps = () => [...map.levels.values(), ...map.roofLevels.values()];
 
+  // есть ли у уровня хоть одна карта освещённости — обычная или крыш:
+  // уровень может состоять из одних крыш, и его свет обязан дойти до них
+  const hasLevelMap = level => map.levels.has(level) || map.roofLevels.has(level);
+
   // объединение вкладов уровня без повторов: `[cells, keys]`, где `keys` —
   // Set('col,row'); клетки из `exclude` пропускаются
   const unionOf = (byOwner, exclude = null) => {
@@ -383,240 +389,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     }));
   };
 
-  // Сетка препятствий свету фар: на уровень — клетки его объёмов (стены
-  // зданий, канала, перила; то же, что закрывают вершины `setTops`) и
-  // клетки рамп, ведущих с него вверх
-  const syncBlockers = () => {
-    map.blockers = new Map();
-    map.rampCells = new Map();
-    blockersVersion += 1;
-
-    const { cols, rows } = map;
-
-    if (!(cols > 0 && rows > 0)) {
-      return;
-    }
-
-    const inside = (col, row) => col >= 0 && col < cols && row >= 0 && row < rows;
-
-    for (const [level, byOwner] of tops) {
-      let grid = null;
-
-      for (const { cells } of byOwner.values()) {
-        for (const [col, row] of cells) {
-          if (inside(col, row)) {
-            grid ||= new Uint8Array(cols * rows);
-            grid[row * cols + col] = 1;
-          }
-        }
-      }
-
-      if (grid) {
-        map.blockers.set(level, grid);
-      }
-    }
-
-    for (const [level, byOwner] of ramps) {
-      const lanes = [...byOwner.values()].flat();
-
-      if (!lanes.length) {
-        continue;
-      }
-
-      const cells = new Int32Array(cols * rows);
-
-      lanes.forEach((lane, index) => {
-        for (let row = lane.row0; row < lane.row1; row += 1) {
-          for (let col = lane.col0; col < lane.col1; col += 1) {
-            if (inside(col, row)) {
-              cells[row * cols + col] = index + 1;
-            }
-          }
-        }
-      });
-
-      map.rampCells.set(level, { cells, lanes });
-    }
-  };
-
-  // Препятствия свету фары `light` на её уровне: `isBlocked` для
-  // `castRay`; null — ни стен, ни рамп на уровне нет. На полосу, где
-  // стоит сама фара, правила рамп (`rampBlocks`) не действуют: танк на
-  // склоне светит по нему как раньше
-  const obstaclesFor = light => {
-    const level = light.level ?? 0;
-    const grid = map.blockers.get(level) || null;
-    const { cols, rows } = map;
-    const cellW = map.step * map.scale.x;
-    const cellH = map.step * map.scale.y;
-    const indexOf = (col, row) =>
-      col >= 0 && col < cols && row >= 0 && row < rows ? row * cols + col : -1;
-    const ramp = map.rampCells.get(level) || null;
-
-    if (!grid && !ramp) {
-      return null;
-    }
-
-    const laneAt = index => (ramp && index >= 0 && ramp.cells[index] > 0
-      ? ramp.lanes[ramp.cells[index] - 1]
-      : null);
-    // полоса, на которой стоит сама фара: танк на склоне светит по ней
-    // как раньше, а соседние горки загораживают его свет по общим правилам
-    const home = laneAt(
-      indexOf(Math.floor(light.x / cellW), Math.floor(light.y / cellH)),
-    );
-    return (col, row, prevCol, prevRow, x, y) => {
-      const index = indexOf(col, row);
-
-      if (grid && index >= 0 && grid[index] === 1) {
-        return true;
-      }
-
-      if (!ramp || prevCol === null || prevCol === undefined) {
-        return false;
-      }
-
-      const lane = laneAt(index);
-      const prevLane = laneAt(indexOf(prevCol, prevRow));
-
-      if (home && (lane === home || prevLane === home)) {
-        return false;
-      }
-
-      return rampBlocks({
-        lane,
-        prevLane,
-        col,
-        row,
-        prevCol,
-        prevRow,
-        x,
-        y,
-        z: light.z ?? level,
-        cellW,
-        cellH,
-      });
-    };
-  };
-
-  const occlusionCfg = () => cfg.headlights?.occlusion;
-
-  // Веер фары у стены и точка упора её оси — `{ shape, hit }`: `shape` —
-  // null, пока конус никуда не упёрся (рисуется прежним спрайтом). Без
-  // окклюзии, без стен на уровне или без текстуры — null
-  const occlusionOf = (light, asset) => {
-    const occlusion = occlusionCfg();
-
-    if (!occlusion?.enabled || !asset || !(light.radius > 0)) {
-      return null;
-    }
-
-    const level = light.level ?? 0;
-    const rotation = light.rotation || 0;
-    const spread = light.spread ?? 0.5;
-    // высота — в ключе: от неё зависит, пропустит ли фару борт рампы
-    const key = `${light.x},${light.y},${light.z},${rotation},${level},${light.radius},${spread},${blockersVersion},${occlusion.rays}`;
-    const cached = fans.get(light);
-
-    if (cached && cached.key === key && cached.texture === asset.texture) {
-      return cached;
-    }
-
-    const isBlocked = obstaclesFor(light);
-
-    if (!isBlocked) {
-      return null;
-    }
-
-    const cellW = map.step * map.scale.x;
-    const cellH = map.step * map.scale.y;
-    const width = asset.texture.width;
-    const height = asset.texture.height;
-    // мировых единиц на пиксель текстуры — как у спрайта в `itemOf`
-    const sx = light.radius / asset.length;
-    const sy = (light.radius * spread) / asset.halfWidth;
-    const { points, clipped, closed } = coneFan(
-      {
-        x: light.x,
-        y: light.y,
-        rotation,
-        alongMax: (width - asset.margin) * sx,
-        alongBack: asset.margin * sx,
-        acrossMax: (height / 2) * sy,
-        rays: occlusion.rays,
-      },
-      isBlocked,
-      cellW,
-      cellH,
-    );
-    const result = {
-      key,
-      texture: asset.texture,
-      shape: clipped
-        ? {
-            points,
-            closed,
-            uvs: fanUvs(points, {
-              x: light.x,
-              y: light.y,
-              rotation,
-              sx,
-              sy,
-              margin: asset.margin,
-              width,
-              height,
-            }),
-          }
-        : null,
-      hit: firstHit(
-        light.x,
-        light.y,
-        Math.cos(rotation),
-        Math.sin(rotation),
-        light.radius,
-        isBlocked,
-        cellW,
-        cellH,
-      ),
-    };
-
-    fans.set(light, result);
-
-    return result;
-  };
-
-  // видна ли точка из фары: между ними нет стены уровня фары
-  const reachesPoint = (light, x, y) => {
-    if (light.kind !== 'cone' || !occlusionCfg()?.enabled) {
-      return true;
-    }
-
-    const isBlocked = obstaclesFor(light);
-
-    if (!isBlocked) {
-      return true;
-    }
-
-    const distance = Math.hypot(x - light.x, y - light.y);
-
-    if (distance < 1e-6) {
-      return true;
-    }
-
-    return (
-      castRay(
-        light.x,
-        light.y,
-        (x - light.x) / distance,
-        (y - light.y) / distance,
-        distance,
-        isBlocked,
-        map.step * map.scale.x,
-        map.step * map.scale.y,
-      ) >= distance
-    );
-  };
-
   const syncLevels = () => {
     const dirty = masksDirty;
 
@@ -662,7 +434,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
     // вершины объёмов и клинья рамп — в обычную карту своего уровня
     if (dirty) {
-      syncBlockers();
+      occlusion.sync(tops, ramps);
 
       for (const levelMap of map.levels.values()) {
         levelMap.setTops(topGroupsOf(levelMap.level), map.step, map.scale);
@@ -742,40 +514,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     };
   };
 
-  // Отсвет фары от стены: радиальное пятно на полу перед точкой упора оси,
-  // сила — доля фары, спадает с расстоянием до стены. Центр отнесён от
-  // стены на `BOUNCE_PULL` радиуса: пятно почти не заходит за неё
-  const bounceOf = (light, hit) => {
-    const bounce = cfg.headlights?.bounce;
-
-    if (
-      !bounce ||
-      !(bounce.intensity > 0) ||
-      !(bounce.radius > 0) ||
-      hit.distance > (bounce.maxDistance ?? light.radius)
-    ) {
-      return null;
-    }
-
-    const rotation = light.rotation || 0;
-    const back = bounce.radius * BOUNCE_PULL;
-
-    return {
-      kind: 'radial',
-      level: light.level,
-      levels: light.levels,
-      x: hit.x - Math.cos(rotation) * back,
-      y: hit.y - Math.sin(rotation) * back,
-      z: light.z,
-      radius: bounce.radius,
-      color: light.color,
-      intensity:
-        (light.intensity ?? 1) *
-        bounce.intensity *
-        (1 - hit.distance / light.radius),
-    };
-  };
-
   // Окклюзия конуса, прошедшего отсечение по экрану: веер по полигону
   // видимости, если конус упёрся в стену, и точка упора оси для отсвета.
   // Считать её до отсечения значило бы гонять лучи для всех танков карты
@@ -784,34 +522,131 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       return;
     }
 
-    const occlusion = occlusionOf(light, textures.cone);
+    const occluded = occlusion.occlusionOf(light, textures.cone);
 
-    if (!occlusion) {
+    if (!occluded) {
       return;
     }
 
     const { view } = item;
 
-    if (occlusion.shape) {
+    if (occluded.shape) {
       item.fan = {
-        shape: occlusion.shape,
+        shape: occluded.shape,
         x: view.x - light.x * view.scale,
         y: view.y - light.y * view.scale,
         scale: view.scale,
       };
     }
 
-    item.hit = occlusion.hit;
+    item.hit = occluded.hit;
+    item.wash = occluded.wash;
+    item.rampFan = occluded.fan;
+  };
+
+  // Веер-прямоугольник текстуры источника (вершина и четыре угла,
+  // замкнут) — свету на клине нужен веер и там, где окклюзии нет: фонарь,
+  // вспышка, фара без стен рядом
+  const quadFanOf = (light, asset) => {
+    const key = `${light.kind},${light.x},${light.y},${light.rotation},${light.radius},${light.spread}`;
+    const cached = quads.get(light);
+
+    if (cached && cached.key === key && cached.texture === asset.texture) {
+      return cached.fan;
+    }
+
+    const frame = frameOf(light, asset);
+    const cos = Math.cos(frame.rotation);
+    const sin = Math.sin(frame.rotation);
+    const back = -frame.margin * frame.sx;
+    const front = (frame.width - frame.margin) * frame.sx;
+    const side = (frame.height / 2) * frame.sy;
+    const points = new Float32Array(10);
+
+    points[0] = frame.x;
+    points[1] = frame.y;
+
+    [
+      [back, -side],
+      [front, -side],
+      [front, side],
+      [back, side],
+    ].forEach(([along, across], i) => {
+      points[(i + 1) * 2] = frame.x + along * cos - across * sin;
+      points[(i + 1) * 2 + 1] = frame.y + along * sin + across * cos;
+    });
+
+    const fan = { points, closed: true, frame };
+
+    quads.set(light, { key, texture: asset.texture, fan });
+
+    return fan;
+  };
+
+  // Свет источника на клиньях `lanes` в проекции клина — в `target`
+  // (level подножия -> items). Веер — окклюзии фары (`item.rampFan`) или
+  // прямоугольник текстуры. Возвращает, задел ли свет хоть один клин
+  const pushRampLights = (target, level, lanes, light, item, alpha) => {
+    if (!lanes?.length) {
+      return false;
+    }
+
+    const asset = light.kind === 'cone' ? textures.cone : textures.radial;
+    const fan = item.rampFan ?? quadFanOf(light, asset);
+    let byLane = rampMeshes.get(fan.points);
+
+    if (!byLane) {
+      byLane = new Map();
+      rampMeshes.set(fan.points, byLane);
+    }
+
+    let added = false;
+
+    for (const lane of lanes) {
+      if (!byLane.has(lane)) {
+        byLane.set(
+          lane,
+          rampLight({
+            points: fan.points,
+            closed: fan.closed,
+            lane,
+            frame: fan.frame,
+            cellW: map.step * map.scale.x,
+            cellH: map.step * map.scale.y,
+            segmentsPerCell: volumeConfig.rampSegments,
+          }),
+        );
+      }
+
+      const ramp = byLane.get(lane);
+
+      if (ramp) {
+        if (!target.has(level)) {
+          target.set(level, []);
+        }
+
+        target.get(level).push({
+          ramp,
+          texture: item.texture,
+          color: item.color,
+          alpha,
+        });
+        added = true;
+      }
+    }
+
+    return added;
   };
 
   const layoutLights = (camera, screen, now) => {
     const perLevel = new Map();
-    // свет верхнего уровня на клиньях рамп: level подножия -> items
+    // свет на клиньях рамп в проекции клина — источников уровня подножия
+    // и уровня вершины: level подножия -> items (`rampLight`)
     const perRamp = new Map();
+    // засветка граней стен фарами: level фары -> items
+    const perWash = new Map();
     let count = 0;
 
-    // источник с `levels` (танк на рампе) светит в карты нескольких уровней:
-    // проекция одна (по `z`), лимит считается по добавленным спрайтам
     // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
     // его источники в `rampLights`
     const rampTargets = new Map();
@@ -827,10 +662,13 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     }
 
     const spill = cfg.rampSpill ?? 1;
+    const bounces = [];
 
+    // источник с `levels` (танк на рампе) светит в карты нескольких уровней:
+    // проекция одна (по `z`), лимит считается по добавленным спрайтам
     const push = (light, factor) => {
       const own = light.levels ?? [light.level];
-      const levels = own.filter(level => map.levels.has(level));
+      const levels = own.filter(hasLevelMap);
       // подножия рамп, ведущих на уровни источника. Уровень, в чью карту
       // источник уже светит (танк на рампе — `levels [0, 1]`), не
       // получает его второй раз
@@ -862,6 +700,24 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       item.y = item.view.y;
       occludeItem(item, light);
 
+      // засветка грани — только в карту уровня самой фары: стены — её
+      // препятствия. В `maxLights` не входит: это та же фара
+      const washLevel = light.level ?? 0;
+
+      if (item.wash && map.levels.has(washLevel)) {
+        if (!perWash.has(washLevel)) {
+          perWash.set(washLevel, []);
+        }
+
+        perWash.get(washLevel).push({
+          wash: item.wash,
+          level: washLevel,
+          texture: item.texture,
+          color: item.color,
+          alpha: item.alpha * cfg.headlights.wash.intensity,
+        });
+      }
+
       for (const level of levels) {
         if (count >= cfg.maxLights) {
           return;
@@ -873,6 +729,18 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
         perLevel.get(level).push(item);
         count += 1;
+
+        // на клиньях рамп своего уровня свет источника — в проекции клина
+        // (обычные источники там закрыты инверсной маской). В `maxLights`
+        // не входит: это тот же источник
+        pushRampLights(
+          perRamp,
+          level,
+          map.levels.get(level)?.ramps,
+          light,
+          item,
+          item.alpha,
+        );
       }
 
       for (const level of new Set(feet)) {
@@ -880,24 +748,26 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
           return;
         }
 
-        if (!perRamp.has(level)) {
-          perRamp.set(level, []);
-        }
+        const lanes = map.levels
+          .get(level)
+          ?.ramps.filter(lane => own.includes(lane.to));
 
-        perRamp.get(level).push({ ...item, alpha: item.alpha * spill });
-        count += 1;
+        if (
+          pushRampLights(perRamp, level, lanes, light, item, item.alpha * spill)
+        ) {
+          count += 1;
+        }
       }
 
       // фара упёрлась в стену: свет не пропадает, а отскакивает пятном.
       // Пятна раскладываются после фонарей: вторичный свет не вытесняет
       // из `maxLights` уличные фонари
-      const bounce = item.hit ? bounceOf(light, item.hit) : null;
+      const bounce = item.hit ? occlusion.bounceOf(light, item.hit) : null;
 
       if (bounce) {
         bounces.push({ light: bounce, factor });
       }
     };
-    const bounces = [];
 
     // вспышки — первыми: они короткие и заметнее всего
     for (let i = flashes.length - 1; i >= 0; i -= 1) {
@@ -923,134 +793,49 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       push(light, factor);
     }
 
-    const shafts = layoutShafts(camera, screen, now);
+    const shafts = layoutShafts({
+      map,
+      casters,
+      cfg,
+      asset: textures.shaft,
+      camera,
+      screen,
+      now,
+      stage,
+      shear,
+    });
 
     // карта крыш уровня получает те же источники, что и обычная
     for (const levelMap of allLevelMaps()) {
       levelMap.place(camera, shear);
       levelMap.layout(perLevel.get(levelMap.level) || []);
+
+      if (!levelMap.roof) {
+        levelMap.layoutWashes(
+          perWash.get(levelMap.level) || [],
+          camera,
+          shear,
+        );
+      }
       // у карты крыш рамп нет: их свет — только в обычной карте подножия
-      levelMap.layoutRamps(
+      levelMap.layoutRampLights(
         levelMap.roof ? [] : perRamp.get(levelMap.level) || [],
+        camera,
+        shear,
       );
       levelMap.layoutShafts(shafts.get(levelMap.level) || []);
     }
   };
 
-  // клинья теней предметов уровня фонаря в его лучах: ближайшие
-  // `maxShadowCasters` в радиусе лучей, в нарисованных координатах
-  const shadowsOf = (lamp, view, reach, camera, shaftsCfg) => {
-    if (!shaftsCfg.shadows || !(shaftsCfg.maxShadowCasters > 0)) {
-      return [];
-    }
-
-    const worldReach = lamp.radius * shaftsCfg.length;
-    const near = [];
-
-    for (const caster of casters.values()) {
-      const distance = Math.hypot(caster.x - lamp.x, caster.y - lamp.y);
-
-      if (caster.level === lamp.level && distance < worldReach) {
-        near.push({ caster, distance });
-      }
-    }
-
-    near.sort((a, b) => a.distance - b.distance);
-
-    const polygons = [];
-
-    for (const { caster } of near.slice(0, shaftsCfg.maxShadowCasters)) {
-      const k = (caster.z ?? caster.level) * shear;
-      const point = offsetPoint(caster.x, caster.y, camera, k);
-      const wedge = shadowWedge(
-        view.x,
-        view.y,
-        point.x,
-        point.y,
-        caster.radius * (1 + k),
-        reach,
-      );
-
-      if (wedge) {
-        polygons.push(wedge);
-      }
-    }
-
-    return polygons;
-  };
-
-  // лучи в воздухе вокруг голов фонарей: level -> items для
-  // `LevelLightMap.layoutShafts`
-  const layoutShafts = (camera, screen, now) => {
-    const perLevel = new Map();
-    const shaftsCfg = cfg.shafts;
-    const asset = textures.shaft;
-
-    if (!shaftsCfg?.enabled || !asset) {
-      return perLevel;
-    }
-
-    let count = 0;
-
-    for (const lamp of map.lamps) {
-      if (!lamp.head || !map.levels.has(lamp.level)) {
-        continue;
-      }
-
-      if (count >= cfg.maxLights) {
-        break;
-      }
-
-      const view = projectLight(lamp.x, lamp.y, lamp.level, camera, stage, shear);
-      const reach = lamp.radius * shaftsCfg.length * view.scale;
-
-      if (
-        !(reach > 0) ||
-        !isOnScreen(
-          view.screenX,
-          view.screenY,
-          reach * stage.scale.x,
-          screen.width,
-          screen.height,
-        )
-      ) {
-        continue;
-      }
-
-      if (!perLevel.has(lamp.level)) {
-        perLevel.set(lamp.level, []);
-      }
-
-      perLevel.get(lamp.level).push({
-        texture: asset.texture,
-        x: view.x,
-        y: view.y,
-        scale: (reach * 2) / asset.contentSize,
-        rotation: shaftSway(lamp.seed, now, SHAFT_SWAY),
-        color: lamp.color,
-        alpha:
-          shaftsCfg.intensity *
-          lamp.intensity *
-          flicker(lamp.seed, now, lamp.flicker),
-        shadows: shadowsOf(lamp, view, reach, camera, shaftsCfg),
-      });
-      count += 1;
-    }
-
-    return perLevel;
-  };
-
   // --- прозрачность над игроком ---
 
-  const updateHoles = (camera, stepped) => {
+  const updateHoles = camera => {
     const see = seeThroughCfg();
 
     if (!see) {
       return;
     }
 
-    const dt = Ticker.shared.deltaMS / 1000;
-    const rate = stepped ? Math.min(1, see.fadeRate * dt) : 0;
     // нарисованная точка игрока: крыша закрывает её, а не мировую
     const player = offsetPoint(levelView.x, levelView.y, camera, levelView.z * shear);
 
@@ -1074,6 +859,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
           see.roofMargin ?? 0,
         );
       const overlay = levelMap.overlay;
+      // сглаживание шагает раз на тик (см. `tickRate`)
+      const rate = tickRate(levelMap.hole, see.fadeRate);
 
       if (levelView.mode === 'layer') {
         let under = roofHides;
@@ -1095,14 +882,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
       advanceHole(levelMap.hole, levelMap.roof ? roofHides : below, rate);
       applyHole(overlay, levelMap.hole, see, levelView, stage, camera);
-
-      // фильтр дыры сам становится последним в цепочке и обязан класть
-      // карту на сцену тем же умножением; без дыры — проходной фильтр
-      if (levelMap.hole.attached) {
-        levelMap.hole.filter.blendMode = 'multiply';
-      } else if (overlay.filters?.[0] !== levelMap.filter) {
-        overlay.filters = [levelMap.filter];
-      }
+      levelMap.syncFilters();
     }
   };
 
@@ -1122,57 +902,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         (levelView ? levelView.alphaFor(lamp.level, view.x, view.y, 0) : 1) *
         flicker(lamp.seed, now, lamp.flicker);
     }
-
-    // спрайты сессии уже в нарисованных координатах: `z = 0` не сдвигает
-    // точку второй раз
-    if (levelView) {
-      for (const [sprite, level] of emissive) {
-        sprite.alpha = levelView.alphaFor(level, sprite.x, sprite.y, 0);
-      }
-    }
   };
 
   const isNight = () => enabled && map?.night === true;
-
-  // источники, светящие в точку уровня `level`: фонари (из сетки), фары
-  // танков (конусы сессии) и вспышки — `[{ light, factor }]`. Свет под
-  // корпусом (радиальные источники сессии) засвета не даёт
-  const candidatesAt = (x, y, level, exclude, now) => {
-    const candidates = [];
-    const onLevel = light => (light.levels ?? [light.level ?? 0]).includes(level);
-
-    for (const lamp of queryLightGrid(map.lampGrid, x, y)) {
-      if (lamp.level === level) {
-        candidates.push({
-          light: lamp,
-          factor: flicker(lamp.seed, now, lamp.flicker),
-        });
-      }
-    }
-
-    for (const light of lights) {
-      // стены — после дешёвой проверки дальности и угла конуса
-      if (
-        light.kind === 'cone' &&
-        !exclude?.includes(light) &&
-        onLevel(light) &&
-        lightStrength(light, x, y) > 0 &&
-        reachesPoint(light, x, y)
-      ) {
-        candidates.push({ light, factor: 1 });
-      }
-    }
-
-    for (const flash of flashes) {
-      const factor = flashFactor(now - flash.start, flash.duration);
-
-      if (factor > 0 && onLevel(flash)) {
-        candidates.push({ light: flash, factor });
-      }
-    }
-
-    return candidates;
-  };
 
   return {
     get enabled() {
@@ -1411,7 +1143,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       });
     },
 
-    // false — ночи нет: спрайт остаётся у вызывающей части
+    // false — ночи нет: спрайт остаётся у вызывающей части. Прозрачность и
+    // позицию спрайта ведёт владелец (он же снимает спрайт `removeEmissive`):
+    // сервис только держит его в контейнере уровня
     addEmissive(sprite, level) {
       if (!isNight() || !sprite) {
         return false;
@@ -1450,33 +1184,11 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     // источник. `exclude` — свои источники (фары самого танка). Без ночи —
     // пусто; после `maxLights` ответов за тик — тоже пусто (бюджет спрайтов)
     lightsAt(x, y, level, limit = 1, exclude = null) {
-      if (!isNight() || !(limit > 0)) {
+      if (!isNight()) {
         return [];
       }
 
-      const now = Ticker.shared.lastTime;
-
-      if (glintTick !== now) {
-        glintTick = now;
-        glintCount = 0;
-      }
-
-      if (glintCount >= cfg.maxLights) {
-        return [];
-      }
-
-      const hits = selectLights(
-        candidatesAt(x, y, level, exclude, now),
-        x,
-        y,
-        limit,
-      );
-
-      if (hits.length) {
-        glintCount += 1;
-      }
-
-      return hits;
+      return glints.lightsAt(x, y, level, limit, exclude);
     },
 
     // виден ли круг `reach` (мировые единицы) вокруг точки на высоте `z`:
@@ -1518,6 +1230,17 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
     },
 
+    // нужны ли сервису предметы-тени: ночь, лучи и их тени включены. Иначе
+    // `casters` никто не читает, и регистрировать их каждый кадр незачем
+    castsShadows() {
+      const shafts = cfg.shafts;
+
+      return (
+        isNight() &&
+        Boolean(shafts?.enabled && shafts.shadows && shafts.maxShadowCasters > 0)
+      );
+    },
+
     // Зовут части из onRender. Раскладка — один раз на трансформ сцены в
     // тике: за тик полотно рисуется несколько раз, и каждая отрисовка после
     // смены камеры получает свежую проекцию, а повторные вызовы той же
@@ -1551,8 +1274,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         return;
       }
 
-      const stepped = key === null || key.tick !== tick;
-
       layoutKey = {
         tick,
         x: stage.position.x,
@@ -1569,7 +1290,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       layoutLights(camera, screen, tick);
 
       if (levelView) {
-        updateHoles(camera, stepped);
+        updateHoles(camera);
       }
 
       updateEmissive(camera, tick);

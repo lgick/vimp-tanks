@@ -29,6 +29,8 @@ vi.mock('pixi.js', () => {
       this.quality = options.quality;
       this.padding = options.strength * 2;
     }
+
+    destroy() {}
   }
 
   class Rectangle {

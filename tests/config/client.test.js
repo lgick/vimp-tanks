@@ -39,6 +39,13 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
     expect(clientPlugin.serviceNames).toContain('rampRuns');
   });
 
+  // высоты объёмов: пишут слои Map, читает эффект выстрела (попадание в
+  // грань стены) — сервис игры, поэтому имя обязано быть в обоих списках
+  it('volumes объявлен и в componentDependencies, и в serviceNames', () => {
+    expect(deps.volumes).toEqual(['Map', 'ShotEffect']);
+    expect(clientPlugin.serviceNames).toContain('volumes');
+  });
+
   // парт, не названный в gameSets и entitiesOnCanvas, просто не будет
   // создан — и ни одной ошибки при этом не появится. Объём слоя рисует сам
   // `Map` (этап 4): отдельного парта `MapVolume` больше нет

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Client service `volumes`: volume heights of the map's cells per level,
+  filled by the map layers.
+
+### Fixed
+
+- The night light map of an upper level keeps `lighting.resolution` while the
+  player is below it; it used to render at full resolution whenever its
+  see-through hole was open.
+- In the `layer` see-through mode a neon sign on a roof fades together with
+  the roof instead of staying fully lit.
+- Lights on a level made only of roofs (`game.roofs`) now light those roofs;
+  they used to be dropped.
+- Procedural textures release their blur filter after baking.
+- Brick walls no longer sink into the ground as the camera approaches them or
+  grow out of it as it moves away: a volume's side texture is fixed to the
+  wall and stretches with the 2.5D projection, as in GTA 2.
+- Headlights pointed at a wall light its visible face: the part of the beam
+  the wall stops is folded onto it, fading upward, instead of the light
+  ending at the wall's foot.
+- Headlights pointed up a ramp light its whole drawn slope with a soft edge,
+  not a sharp rectangle of its footprint, and light the ramp's embankment
+  sides like walls.
+- A shot into a wall ends on the wall's visible face at gun height, with its
+  sparks drawn over the wall; with the camera past the wall the tracer stops
+  at the roof's edge instead of running under the building, and it no longer
+  slides into the wall while the shooter drives.
+
+### Changed
+
+- Render config: `volume.faceTileRepeats` is replaced by
+  `volume.faceTilesPerLevel` (tile copies per level of wall height) and
+  `volume.faceSegments` (mesh rows per level).
+- Volume walls and ramp wedges skip their per-frame vertex update while the
+  camera stands still, and headlight cones far from walls and ramps skip the
+  occlusion rays.
+
 ## [0.22.8] - 2026-09-27
 
 ### Changed

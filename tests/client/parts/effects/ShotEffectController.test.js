@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Container, Texture } from 'pixi.js';
 import ShotEffectController from '../../../../src/client/parts/effects/shot/ShotEffectController.js';
-import { parallax } from '../../../../src/config/render.js';
+import { parallax, tracer } from '../../../../src/config/render.js';
+import { cameraCenter } from '../../../../src/client/camera.js';
+import { OCCLUDER_BASE_Z, levelZ } from '../../../../src/client/levelZ.js';
+import { raisedPoint } from '../../../../src/client/wallFace.js';
 
 // Проверяется проводка якоря попадания, а не отрисовка: контроллер обязан
 // пересчитать точку удара по ТЕКУЩЕМУ трансформу задетого ящика и уметь
@@ -461,5 +464,141 @@ describe('ShotEffectController: трассер по уровням', () => {
       expect(layer.destroyed).toBe(true);
       expect(stage.children).not.toContain(layer);
     }
+  });
+});
+
+// Попадание в стену (этап 14 ревью): луч хоста кончается на подножии стены,
+// а видимый конец трассера и искры — на её грани на высоте ствола. Стена —
+// клетка 3 (x 96..128) уровня 0, выстрел по +x в её кромку x = 96
+describe('ShotEffectController: попадание в грань стены', () => {
+  const row = [10, 40, 96, 40, 0, 0, true, 1, 0, 0];
+  const WALL_HIT_Z = levelZ(OCCLUDER_BASE_Z + 0.5, 0);
+  const SHOT_Z = levelZ(2, 0);
+  const renderer = { screen: { width: 800, height: 600 } };
+  const wallVolumes = (heightAt = (level, x) => (x >= 96 && x < 128 ? 1 : 0)) => ({
+    cellSize: () => ({ cellW: 32, cellH: 32 }),
+    heightAt: vi.fn(heightAt),
+  });
+  // центр камеры в (camX, 40): сцена сдвинута на полэкрана
+  const wallShot = (camX, { data = row, volumes = wallVolumes() } = {}) => {
+    let stage = null;
+    const levelView = {
+      camera: () => cameraCenter(stage, renderer),
+      alphaFor: () => 0.7,
+      tintFor: () => 0xb0b0c0,
+    };
+    const controller = makeController(data, { levelView, renderer, volumes });
+
+    stage = controller.parent;
+    stage.position.set(400 - camX, 300 - 40);
+
+    return controller;
+  };
+
+  it('грань к камере: конец трассера на грани на высоте ствола, над перекрывателем', () => {
+    const controller = wallShot(0);
+
+    controller.run();
+
+    const end = raisedPoint(
+      96,
+      40,
+      { x: 0, y: 40 },
+      0,
+      tracer.height * parallax.shear,
+    );
+
+    expect(controller.zIndex).toBe(WALL_HIT_Z);
+    expect(controller.tracer.endPositionX).toBeCloseTo(end.x, 6);
+    expect(controller.tracer.endPositionY).toBeCloseTo(end.y, 6);
+    // точка удара для искр — исходная
+    expect(controller.endPositionX).toBe(96);
+  });
+
+  it('грань от камеры: трассер обрывается на силуэте крыши', () => {
+    const controller = wallShot(300);
+
+    controller.run();
+
+    // верх стены (объём 1) в проекции: 96 + (96 − 300)·shear
+    const silhouette = 96 + (96 - 300) * parallax.shear;
+
+    expect(controller.tracer.endPositionX).toBeCloseTo(silhouette, 6);
+    expect(controller.tracer.totalDist).toBeLessThan(86);
+    expect(controller.zIndex).toBe(SHOT_Z);
+  });
+
+  it('попадание не в стену и промах — прежнее поведение', () => {
+    const open = wallShot(0, { volumes: wallVolumes(() => 0) });
+
+    open.run();
+    expect(open.zIndex).toBe(SHOT_Z);
+    expect(open.tracer.endPositionX).toBe(96);
+
+    const missed = wallShot(0, { data: [10, 40, 96, 40, 0, 0, false, 1, 0, 0] });
+
+    missed.run();
+    expect(missed.zIndex).toBe(SHOT_Z);
+    expect(missed.tracer.endPositionX).toBe(96);
+    expect(missed.tracer._stopLine).toBeNull();
+  });
+
+  it('трассер получает линию грани: на ходу конец не заходит в стену', () => {
+    const muzzle = { x: 10, y: 40 };
+    const controller = wallShot(0);
+
+    controller._shots = { muzzle: () => muzzle };
+    controller.run();
+
+    const stop = controller.tracer.endPositionX;
+
+    expect(controller.tracer._stopLine).toEqual({ axis: 'x', coord: stop });
+
+    // танк проехал к стене 20 единиц: луч перенесён, но конец — на грани
+    muzzle.x = 30;
+    controller.onRender();
+
+    expect(controller.tracer.startPositionX).toBe(30);
+    expect(controller.tracer.endPositionX).toBeCloseTo(stop, 6);
+  });
+
+  it('искры — в своём слое на высоте ствола, сторона грани — каждый кадр', () => {
+    const controller = wallShot(0);
+    const stage = controller.parent;
+
+    controller.run();
+    finishTracer(controller);
+
+    const layer = controller.impact.parent;
+
+    expect(layer).not.toBe(controller);
+    expect(layer.label).toBe('shot-impact');
+    expect(layer.parent).toBe(stage);
+    expect(layer.zIndex).toBe(WALL_HIT_Z);
+
+    controller.onRender();
+
+    expect(layer.scale.x).toBeCloseTo(1 + tracer.height * parallax.shear, 6);
+    expect(layer.alpha).toBe(0.7);
+    expect(layer.tint).toBe(0xb0b0c0);
+
+    // камера ушла за стену: искры под перекрывателем
+    stage.position.x = 400 - 300;
+    controller.onRender();
+    expect(layer.zIndex).toBe(SHOT_Z);
+
+    controller.destroy();
+
+    expect(layer.destroyed).toBe(true);
+    expect(stage.children).not.toContain(layer);
+  });
+
+  it('попадание не в стену — искры в самом контроллере', () => {
+    const controller = wallShot(0, { volumes: wallVolumes(() => 0) });
+
+    controller.run();
+    finishTracer(controller);
+
+    expect(controller.impact.parent).toBe(controller);
   });
 });

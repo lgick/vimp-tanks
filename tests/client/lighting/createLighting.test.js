@@ -602,6 +602,22 @@ describe('lighting: эмиссив', () => {
     expect(sprite.parent).toBe(emissiveOf(stage, 1));
     expect(emissiveOf(stage, 0).children).toHaveLength(0);
   });
+
+  it('сервис не трогает прозрачность эмиссива: её ведёт владелец', () => {
+    const { service, levelView } = setup();
+
+    makeParts(service, 'a', nightLighting([]));
+    service.setLevelMask(1, [[0, 0]], {});
+    levelView.set(0, 0, 0, 0);
+
+    const sprite = new Sprite();
+
+    sprite.alpha = 0.37;
+    service.addEmissive(sprite, 1);
+    frame(service);
+
+    expect(sprite.alpha).toBe(0.37);
+  });
 });
 
 // Крыши (`game.roofs`) — отдельная карта уровня со своей дырой, вершины
@@ -666,6 +682,45 @@ describe('lighting: крыши и вершины объёмов', () => {
     }
 
     expect(roofMap.hole.attached).toBe(true);
+  });
+
+  it('уровень из одних крыш получает свой свет', () => {
+    const { service, stage } = setup();
+    const layout = spyLayout();
+
+    service.registerTextures(textures());
+    makeParts(service, 'k', nightLighting([]));
+    service.setLevelMask(1, [[1, 0]], {}, { roof: true });
+    service.addLight({ kind: 'radial', level: 1, x: 48, y: 16, radius: 40, intensity: 1 });
+    frame(service);
+
+    expect(overlayOf(stage, 1)).toBeUndefined();
+
+    const roofMap = levelMaps(layout).find(map => map.roof && map.level === 1);
+
+    expect(roofMap.overlay.label).toBe('lighting-roof-1');
+    expect(roofMap.lights.children.some(sprite => sprite.visible)).toBe(true);
+  });
+
+  it('лучи фонаря уровня из одних крыш', () => {
+    const { service } = setup();
+    const layoutShafts = vi.spyOn(LevelLightMap.prototype, 'layoutShafts');
+
+    service.registerTextures({
+      ...textures(),
+      shaft: { texture: sized(262, 262), contentSize: 256 },
+    });
+    makeParts(
+      service,
+      'k',
+      nightLighting([{ cell: [1, 0], level: 1, radius: 50, head: true }]),
+    );
+    service.setLevelMask(1, [[1, 0]], {}, { roof: true });
+    frame(service);
+
+    const roofMap = levelMaps(layoutShafts).find(map => map.roof && map.level === 1);
+
+    expect(roofMap.shafts.children.some(entry => entry.visible)).toBe(true);
   });
 
   it('setVolumeTops рисует вершины, releaseMap снимает их вместе с владельцем', () => {
@@ -775,6 +830,53 @@ describe('lighting: область фильтра оверлея', () => {
 
     other.destroy();
     map.destroy();
+  });
+
+  // фильтр дыры заменяет проходной целиком: разрешение карты он несёт сам
+  const withHole = () => {
+    const env = setup();
+    const layout = spyLayout();
+
+    env.service.registerTextures(textures());
+    makeParts(env.service, 'k', nightLighting([]));
+    env.service.setLevelMask(1, [[5, 5]], {});
+    env.levelView.set(0, -300, -300, 0);
+
+    for (let i = 0; i < 200; i += 1) {
+      frame(env.service);
+    }
+
+    const levelMap = [...new Set(layout.mock.contexts)].find(
+      map => !map.roof && map.level === 1,
+    );
+
+    return { ...env, levelMap };
+  };
+
+  it('открытая дыра несёт разрешение карты и multiply', () => {
+    const { stage, levelMap } = withHole();
+    const overlay = overlayOf(stage, 1);
+
+    expect(levelMap.hole.attached).toBe(true);
+    expect(overlay.filters[0]).not.toBe(levelMap.filter);
+    expect(overlay.filters[0].resolution).toBe(lighting.resolution);
+    expect(overlay.filters[0].blendMode).toBe('multiply');
+  });
+
+  it('закрытая дыра возвращает проходной фильтр', () => {
+    const { service, stage, levelView, levelMap } = withHole();
+
+    levelView.set(1, -300, -300, 0);
+
+    for (let i = 0; i < 200; i += 1) {
+      frame(service);
+    }
+
+    const overlay = overlayOf(stage, 1);
+
+    expect(levelMap.hole.attached).toBe(false);
+    expect(overlay.filters[0]).toBe(levelMap.filter);
+    expect(overlay.filters[0].resolution).toBe(lighting.resolution);
   });
 });
 
@@ -934,6 +1036,27 @@ describe('lighting: лучи фонарей и тени', () => {
     expect(lastShafts(spy, 0)).toEqual([]);
   });
 
+  it('castsShadows: только ночью и при включённых тенях лучей', () => {
+    const shafts = patch => ({
+      ...lighting,
+      shafts: { ...lighting.shafts, ...patch },
+    });
+    const casts = (cfg, map = nightLighting()) => {
+      const { service } = setup(cfg);
+
+      makeParts(service, 'a', map);
+
+      return service.castsShadows();
+    };
+
+    expect(casts(lighting)).toBe(true);
+    expect(casts(lighting, { night: false, lamps: [] })).toBe(false);
+    expect(casts({ ...lighting, enabled: false })).toBe(false);
+    expect(casts(shafts({ enabled: false }))).toBe(false);
+    expect(casts(shafts({ shadows: false }))).toBe(false);
+    expect(casts(shafts({ maxShadowCasters: 0 }))).toBe(false);
+  });
+
   it('предмет в лучах своего уровня бросает клин, чужого уровня — нет', () => {
     const spy = spyShafts();
     const { service } = withShaft();
@@ -1029,7 +1152,7 @@ describe('lighting: лучи фонарей и тени', () => {
 describe('lighting: свет верхнего уровня на рампах', () => {
   // рампа 0 → 1: клетки 2..5 × 1..2, в гриде уровня 0
   const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 5, row0: 1, row1: 2 };
-  const spyRamps = () => vi.spyOn(LevelLightMap.prototype, 'layoutRamps');
+  const spyRamps = () => vi.spyOn(LevelLightMap.prototype, 'layoutRampLights');
   const lastRamps = (spy, level) => {
     for (let i = spy.mock.calls.length - 1; i >= 0; i -= 1) {
       if (spy.mock.contexts[i].level === level) {
@@ -1082,23 +1205,63 @@ describe('lighting: свет верхнего уровня на рампах', (
   it('танк на рампе (levels [0, 1]) не даёт двойного вклада в клин', () => {
     const rampSpy = spyRamps();
     const layout = spyLayout();
-    const { service } = withRamp();
+    const { service } = withRamp({ ...lighting, rampSpill: 0.5 });
 
     coneAt(service, { level: 0, levels: [0, 1], z: 0.6 });
     frame(service);
 
     expect(lastItems(layout, 0)).toHaveLength(1);
-    expect(lastRamps(rampSpy, 0)).toEqual([]);
+    // один вклад — как источник своего уровня, без ослабления rampSpill
+    expect(lastRamps(rampSpy, 0)).toHaveLength(1);
+    expect(lastRamps(rampSpy, 0)[0].alpha).toBeCloseTo(
+      lastItems(layout, 0)[0].alpha,
+    );
   });
 
-  it('источник уровня 0 на рампы уровня 0 сверху не попадает', () => {
+  it('источник уровня 0 светит на клин как источник своего уровня', () => {
     const rampSpy = spyRamps();
-    const { service } = withRamp();
+    const layout = spyLayout();
+    const { service } = withRamp({ ...lighting, rampSpill: 0.5 });
 
     coneAt(service, { level: 0, z: 0 });
     frame(service);
 
+    expect(lastRamps(rampSpy, 0)).toHaveLength(1);
+    expect(lastRamps(rampSpy, 0)[0].alpha).toBeCloseTo(
+      lastItems(layout, 0)[0].alpha,
+    );
+  });
+
+  it('свет вдали от клина в rampLights не попадает', () => {
+    const rampSpy = spyRamps();
+    const { service } = withRamp();
+
+    coneAt(service, { x: 200, y: 300, rotation: 0 });
+    frame(service);
+
     expect(lastRamps(rampSpy, 0)).toEqual([]);
+  });
+
+  it('у обычных источников — инверсная маска тех же клиньев', () => {
+    const setRamps = vi.spyOn(LevelLightMap.prototype, 'setRamps');
+    const { service, parts } = withRamp();
+
+    frame(service);
+
+    const ground = setRamps.mock.contexts.find(context => context.level === 0);
+
+    expect(ground.lightsMask).toBeTruthy();
+    expect(ground.lights.mask).toBe(ground.lightsMask);
+    expect(ground.lights._maskOptions.inverse).toBe(true);
+    // тот же контур, что у маски клиньев
+    expect(ground.lightsMask.bounds.minX).toBeCloseTo(ground.rampMask.bounds.minX);
+    expect(ground.lightsMask.bounds.maxY).toBeCloseTo(ground.rampMask.bounds.maxY);
+
+    service.releaseMap('a', parts[0]);
+    frame(service);
+
+    expect(ground.lights.mask).toBeFalsy();
+    expect(ground.lightsMask).toBeNull();
   });
 
   it('rampSpill ослабляет свет на клине, 0 — выключает', () => {
@@ -1162,13 +1325,13 @@ describe('lighting: фары и стены', () => {
   // столбец клеток 3 (x 96..128) — стена
   const column = Array.from({ length: 20 }, (_, row) => [3, row]);
 
-  const scene = ({ cfg = lighting, walls = column } = {}) => {
+  const scene = ({ cfg = lighting, walls = column, volume = 1 } = {}) => {
     const context = setup(cfg);
     const { service } = context;
 
     service.registerTextures(textures());
     service.acquireMap('w', nightLighting([]), STEP, 1, size);
-    service.setVolumeTops(0, walls, 1, {});
+    service.setVolumeTops(0, walls, volume, {});
 
     const cone = service.addLight({
       kind: 'cone',
@@ -1222,6 +1385,25 @@ describe('lighting: фары и стены', () => {
     );
 
     expect(free.fan).toBeNull();
+  });
+
+  // стены на карте есть, но прямоугольник текстуры конуса их не задевает:
+  // лучи не строятся, результат тот же, что у полного обхода
+  it('конус вдали от стен и рамп — без веера и отсвета', () => {
+    const far = Array.from({ length: 20 }, (_, row) => [15, row]);
+    const { service } = scene({ walls: far });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const items = lastItems(layout, 0);
+    const cones = items.filter(entry => entry.texture === coneTexture(service));
+
+    expect(cones).toHaveLength(1);
+    expect(cones[0].fan).toBeNull();
+    expect(
+      items.filter(entry => entry.texture === radialTexture(service)),
+    ).toHaveLength(0);
   });
 
   it('отсвет — только при упоре оси в стену', () => {
@@ -1398,6 +1580,135 @@ describe('lighting: фары и стены', () => {
     Ticker.shared.lastTime += 16;
     expect(open.service.lightsAt(120, 48, 0)).toHaveLength(1);
   });
+
+  // засветка грани (этап 14 ревью): часть луча, упёршаяся в стену, — квады
+  // на её видимой грани в карте уровня фары
+  const groundOf = spy => spy.mock.contexts.find(map => map.level === 0);
+  // квад грани скрыт — все шесть индексов равны его первой вершине
+  const hiddenQuads = mesh => {
+    const indices = mesh.geometry.indices;
+    let hidden = 0;
+
+    for (let q = 0; q < indices.length / 6; q += 1) {
+      if (indices.slice(q * 6, q * 6 + 6).every(index => index === q * 4)) {
+        hidden += 1;
+      }
+    }
+
+    return hidden;
+  };
+
+  it('засветка: фара упёрлась в стену — видимый меш на грани', () => {
+    const { service } = scene();
+    const layout = spyLayout();
+
+    frame(service);
+
+    const ground = groundOf(layout);
+    const [mesh] = ground.washPool;
+
+    expect(mesh.visible).toBe(true);
+    expect(mesh.parent).toBe(ground.lights);
+    expect(mesh.texture).toBe(coneTexture(service));
+    expect(mesh.blendMode).toBe('add');
+    // камера в начале координат, грань x = 96 смотрит на неё
+    expect(hiddenQuads(mesh)).toBe(0);
+
+    // верх квада — в проекции высоты засветки, низ — на подножии
+    const positions = mesh.geometry.positions;
+    const k = lighting.headlights.wash.height * parallax.shear;
+
+    expect(positions[0]).toBeCloseTo(96 * (1 + k), 3);
+    expect(positions[4]).toBeCloseTo(96, 3);
+  });
+
+  it('засветка: в открытом поле меша нет', () => {
+    const { service } = scene({ walls: [[15, 15]] });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const ground = groundOf(layout);
+
+    expect(ground.washPool.every(mesh => !mesh.visible)).toBe(true);
+  });
+
+  it('засветка: камера за стеной — квады скрыты (грань под крышей)', () => {
+    const { service, stage } = scene();
+    const layout = spyLayout();
+
+    // центр камеры — x = 300, за стеной
+    stage.position.x = screen.width / 2 - 300;
+    frame(service);
+
+    const [mesh] = groundOf(layout).washPool;
+    const quads = mesh.geometry.indices.length / 6;
+
+    expect(quads).toBeGreaterThan(0);
+    expect(hiddenQuads(mesh)).toBe(quads);
+
+    // камера вернулась — индексы переписаны обратно
+    stage.position.x = screen.width / 2;
+    frame(service);
+    expect(hiddenQuads(mesh)).toBe(0);
+  });
+
+  it('засветка — только в карте уровня самой фары', () => {
+    const { service } = scene();
+    const washes = vi.spyOn(LevelLightMap.prototype, 'layoutWashes');
+
+    service.setLevelMask(1, [[10, 10]], {});
+    frame(service);
+
+    const byLevel = level => {
+      for (let i = washes.mock.calls.length - 1; i >= 0; i -= 1) {
+        if (washes.mock.contexts[i].level === level) {
+          return washes.mock.calls[i][0];
+        }
+      }
+
+      return null;
+    };
+
+    expect(byLevel(0)).toHaveLength(1);
+    expect(byLevel(0)[0].alpha).toBeCloseTo(
+      0.9 * lighting.headlights.wash.intensity,
+    );
+    expect(byLevel(1)).toEqual([]);
+  });
+
+  it('wash.intensity: 0 — без засветки', () => {
+    const { service } = scene({
+      cfg: withHeadlights({ wash: { height: 0.6, intensity: 0 } }),
+    });
+    const layout = spyLayout();
+
+    frame(service);
+
+    expect(groundOf(layout).washPool).toHaveLength(0);
+    // веер при этом прежний
+    expect(lastItems(layout, 0).find(entry => entry.fan)).toBeDefined();
+  });
+
+  it('сетка препятствий хранит высоту: низкая стена тоже гасит свет', () => {
+    const { service } = scene({ volume: 0.35 });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const [item] = lastItems(layout, 0).filter(
+      entry => entry.texture === coneTexture(service),
+    );
+
+    expect(item.fan).not.toBeNull();
+
+    // засветка не выше самой стены
+    const heights = item.wash.heights;
+
+    for (let v = 0; v < heights.length; v += 1) {
+      expect(heights[v] === 0 || Math.abs(heights[v] - 0.35) < 1e-6).toBe(true);
+    }
+  });
 });
 
 // Горка — препятствие фарам своего подножия (этап 14): полоса x 64..256,
@@ -1528,6 +1839,92 @@ describe('lighting: фары и рампы', () => {
     expect(coneItem(layout, service).fan).toBeNull();
   });
 
+  const rampMapOf = spy => spy.mock.contexts.findLast(context => context.level === 0);
+
+  it('от подножия вверх: свет на склоне — меш в проекции клина', () => {
+    const rampSpy = vi.spyOn(LevelLightMap.prototype, 'layoutRampLights');
+    const { service } = scene({ x: 40, y: 144, rotation: 0 });
+
+    frame(service);
+
+    const items = rampSpy.mock.calls.findLast(
+      (call, i) => rampSpy.mock.contexts[i].level === 0,
+    )[0];
+
+    expect(items).toHaveLength(1);
+
+    const levelMap = rampMapOf(rampSpy);
+    const [mesh] = levelMap.rampLightPool;
+    const { base, heights } = items[0].ramp;
+    const positions = mesh.geometry.positions;
+    // камера в начале координат: сдвиг вершины — `p · высота · shear`
+    const shiftOf = v =>
+      Math.hypot(positions[v * 2] - base[v * 2], positions[v * 2 + 1] - base[v * 2 + 1]);
+    let low = 0;
+    let high = 0;
+
+    for (let v = 0; v < heights.length; v += 1) {
+      expect(shiftOf(v)).toBeCloseTo(
+        Math.hypot(base[v * 2], base[v * 2 + 1]) * heights[v] * parallax.shear,
+        3,
+      );
+      low = heights[v] < heights[low] ? v : low;
+      high = heights[v] > heights[high] ? v : high;
+    }
+
+    // у верха сдвиг больше, чем у подножия
+    expect(heights[high]).toBeGreaterThan(heights[low]);
+    expect(shiftOf(high)).toBeGreaterThan(shiftOf(low));
+    // обычные источники на клине закрыты инверсной маской клиньев
+    expect(levelMap.lights.mask).toBe(levelMap.lightsMask);
+  });
+
+  it('мягкий край: луч, вышедший из полосы вбок, идёт дальше по полу', () => {
+    // фара в 4 ед. от подножия x = 64, в 14 ед. от северного борта y = 96
+    const { service } = scene({ x: 60, y: 110, rotation: 0 });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const { points } = coneItem(layout, service).rampFan;
+    // лучи круче 3:1 к оси мимо подножия не проходят: у x = 64 они уже
+    // севернее борта. Остальные вошли в склон через подножие — их концы
+    // севернее борта значат, что луч вышел вбок и дошёл до пола
+    const beyond = ends(points).filter(
+      ([x, y]) => x > 64 && y < 96 - 5 && (110 - y) / (x - 60) < 3,
+    );
+
+    expect(beyond.length).toBeGreaterThan(0);
+  });
+
+  it('засветка борта насыпи: фара упёрлась в борт выше RAMP_CLEARANCE', () => {
+    const washes = vi.spyOn(LevelLightMap.prototype, 'layoutWashes');
+    const { service } = scene({ x: 200, y: 48, rotation: Math.PI / 2 });
+
+    frame(service);
+
+    const items = washes.mock.calls.findLast(
+      (call, i) => washes.mock.contexts[i].level === 0,
+    )[0];
+
+    expect(items).toHaveLength(1);
+
+    const { base, heights } = items[0].wash;
+
+    for (let v = 0; v < heights.length; v += 1) {
+      const x = base[v * 2];
+      // клин в точке: (x − 64) / 192 уровня над полом
+      const wedge = (x - 64) / 192;
+
+      expect(base[v * 2 + 1]).toBeCloseTo(96, 3);
+      expect(heights[v]).toBeLessThanOrEqual(
+        Math.min(lighting.headlights.wash.height, wedge) + 1e-3,
+      );
+    }
+
+    expect(Math.max(...heights)).toBeGreaterThan(0.2);
+  });
+
   it('засвет: фара сбоку горки не светит на её склон', () => {
     const { service } = scene({ x: 200, y: 48, rotation: Math.PI / 2 });
 
@@ -1536,6 +1933,63 @@ describe('lighting: фары и рампы', () => {
 
     expect(service.lightsAt(200, 80, 0)).toHaveLength(1);
     expect(service.lightsAt(200, 120, 0)).toEqual([]);
+  });
+});
+
+describe('LevelLightMap: свет на клиньях', () => {
+  const make = () =>
+    new LevelLightMap({
+      level: 0,
+      ambient: 0x3a4260,
+      resolution: 0.5,
+      area: { x: 0, y: 0, width: 100, height: 100 },
+    });
+  const ramp = () => ({
+    base: new Float32Array([10, 10, 20, 10, 20, 20]),
+    heights: new Float32Array([0, 0.5, 1]),
+    uvs: new Float32Array(6),
+    indices: new Uint32Array([0, 1, 2]),
+  });
+  const item = data => ({ ramp: data, texture: Texture.WHITE, color: 0xffffff, alpha: 1 });
+  const camera = { x: 0, y: 0 };
+
+  it('layoutRampLights переиспользует пул и проецирует высотой вершины', () => {
+    const map = make();
+    const data = ramp();
+
+    map.layoutRampLights([item(data), item(ramp())], camera, 0.2);
+
+    const [first] = map.rampLightPool;
+
+    expect(map.rampLightPool).toHaveLength(2);
+    expect([...first.geometry.positions]).toEqual([
+      10,
+      10,
+      22,
+      11,
+      24,
+      24,
+    ].map(value => expect.closeTo(value, 5)));
+
+    map.layoutRampLights([item(data)], camera, 0.2);
+
+    expect(map.rampLightPool).toHaveLength(2);
+    expect(map.rampLightPool[0]).toBe(first);
+    expect(map.rampLightPool[1].visible).toBe(false);
+
+    map.destroy();
+  });
+
+  it('destroy уничтожает геометрию мешей клина', () => {
+    const map = make();
+
+    map.layoutRampLights([item(ramp())], camera, 0.2);
+
+    const destroy = vi.spyOn(map.rampLightPool[0].geometry, 'destroy');
+
+    map.destroy();
+
+    expect(destroy).toHaveBeenCalled();
   });
 });
 

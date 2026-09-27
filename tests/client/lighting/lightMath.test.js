@@ -11,6 +11,8 @@ import {
   mapKeyOf,
   projectLight,
   radialFalloff,
+  radialProfile,
+  coneProfile,
   lightStrength,
   selectLights,
   buildLightGrid,
@@ -21,9 +23,14 @@ import {
   castRay,
   firstHit,
   coneFan,
+  coneUv,
   fanUvs,
   fanIndices,
   rampBlocks,
+  rampHeight,
+  rampLight,
+  anyCellIn,
+  wallWash,
 } from '../../../src/client/lighting/lightMath.js';
 import { cellOfPoint } from '../../../src/client/parts/map/tileGrid.js';
 
@@ -198,6 +205,15 @@ describe('lightMath: уровни источника на рампе', () => {
 });
 
 describe('lightMath: сила источника в точке (засвет)', () => {
+  it('профили яркости: пятно (1 − t)², конус (1 − t)(1 − 0.35t)', () => {
+    expect(radialProfile(0)).toBe(1);
+    expect(radialProfile(1)).toBe(0);
+    expect(radialProfile(0.5)).toBe(0.25);
+    expect(coneProfile(0)).toBe(1);
+    expect(coneProfile(1)).toBe(0);
+    expect(coneProfile(0.5)).toBe(0.5 * (1 - 0.175));
+  });
+
   it('спад пятна — (1 − t)², ноль на краю и за ним', () => {
     expect(radialFalloff(0, 100)).toBe(1);
     expect(radialFalloff(50, 100)).toBeCloseTo(0.25);
@@ -370,6 +386,50 @@ describe('lightMath: контур клина рампы', () => {
 
     expect(points[0]).toBeCloseTo(20 * 1.2);
     expect(points[6]).toBeCloseTo(50);
+  });
+});
+
+describe('lightMath: anyCellIn', () => {
+  // сетка 4 × 3, построчно
+  const grid = cells => {
+    const out = new Uint8Array(12);
+
+    cells.forEach(([col, row]) => {
+      out[row * 4 + col] = 1;
+    });
+
+    return out;
+  };
+
+  it('пустая сетка или её нет — false', () => {
+    expect(anyCellIn(grid([]), 4, 3, 0, 0, 3, 2)).toBe(false);
+    expect(anyCellIn(undefined, 4, 3, 0, 0, 3, 2)).toBe(false);
+  });
+
+  it('клетка внутри и на границе прямоугольника — true', () => {
+    expect(anyCellIn(grid([[2, 1]]), 4, 3, 1, 0, 3, 2)).toBe(true);
+    expect(anyCellIn(grid([[1, 0]]), 4, 3, 1, 0, 2, 1)).toBe(true);
+    expect(anyCellIn(grid([[2, 1]]), 4, 3, 0, 0, 2, 1)).toBe(true);
+  });
+
+  it('клетка вне прямоугольника — false', () => {
+    expect(anyCellIn(grid([[3, 2]]), 4, 3, 0, 0, 2, 1)).toBe(false);
+  });
+
+  it('прямоугольник за краем сетки обрезается', () => {
+    expect(anyCellIn(grid([[0, 0]]), 4, 3, -5, -5, 0, 0)).toBe(true);
+    expect(anyCellIn(grid([[3, 2]]), 4, 3, 3, 2, 10, 10)).toBe(true);
+    // целиком за краем: соседняя строка не должна «просочиться» по индексу
+    expect(anyCellIn(grid([[0, 1]]), 4, 3, 4, 0, 8, 0)).toBe(false);
+    expect(anyCellIn(grid([[0, 0]]), 4, 3, -3, 3, 0, 9)).toBe(false);
+  });
+
+  it('Int32Array полос рамп — ненулевой индекс полосы', () => {
+    const cells = new Int32Array(12);
+
+    cells[5] = 3;
+
+    expect(anyCellIn(cells, 4, 3, 1, 1, 1, 1)).toBe(true);
   });
 });
 
@@ -569,6 +629,164 @@ describe('lightMath: coneFan / fanUvs / fanIndices', () => {
   });
 });
 
+// Засветка грани стены: лучи веера, упёршиеся в одну грань, — квады от
+// подножия вверх; UV верха — конец того же луча, яркость гаснет вверх
+describe('lightMath: coneFan (reaches/forward) / wallWash', () => {
+  const CELL = 10;
+  const cone = { x: 5, y: 55, rotation: 0, alongMax: 100, acrossMax: 50, rays: 9 };
+  const column = new Set(Array.from({ length: 20 }, (_, row) => `4,${row}`));
+  const isBlocked = (col, row) => column.has(`${col},${row}`);
+  // UV — сама мировая точка: так видно, какую точку взяла вершина
+  const uvOf = (x, y) => [x, y];
+  const washOf = (fan, wallAt = () => 1, height = 0.6) =>
+    wallWash({
+      x: cone.x,
+      y: cone.y,
+      points: fan.points,
+      reaches: fan.reaches,
+      forward: fan.forward,
+      uvOf,
+      wallAt,
+      cellW: CELL,
+      cellH: CELL,
+      height,
+    });
+
+  it('coneFan отдаёт предел каждого луча и число лучей вперёд', () => {
+    const fan = coneFan({ ...cone, alongBack: 4 }, () => false, CELL, CELL);
+
+    expect(fan.forward).toBe(9);
+    // 9 вперёд и 3 назад
+    expect(fan.reaches).toHaveLength(12);
+    // ось — до дальнего края, луч поперёк — до бокового
+    expect(fan.reaches[4]).toBeCloseTo(100, 3);
+    expect(fan.reaches[0]).toBeCloseTo(50, 3);
+    // в пустом поле луч кончается на своём пределе
+    expect(fan.points[10]).toBeCloseTo(cone.x + fan.reaches[4], 3);
+  });
+
+  it('coneUv — та же формула, что у fanUvs', () => {
+    const frame = {
+      x: 5,
+      y: 55,
+      rotation: 0.3,
+      sx: 0.7,
+      sy: 0.4,
+      margin: 4,
+      width: 136,
+      height: 136,
+    };
+    const uvs = fanUvs(new Float32Array([30, 60]), frame);
+    const [u, v] = coneUv(30, 60, frame);
+
+    expect(u).toBeCloseTo(uvs[0], 6);
+    expect(v).toBeCloseTo(uvs[1], 6);
+  });
+
+  it('стена поперёк конуса — квады между соседними упёршимися лучами', () => {
+    const fan = coneFan(cone, isBlocked, CELL, CELL);
+    const wash = washOf(fan);
+
+    // в грань x = 40 упёрлись лучи −45°…+45° (5 штук) → 4 квада
+    expect(wash.indices).toHaveLength(4 * 6);
+    expect(wash.heights).toHaveLength(4 * 4);
+
+    for (let q = 0; q < 4; q += 1) {
+      // все вершины — на подножии грани
+      for (let j = 0; j < 4; j += 1) {
+        expect(wash.base[(q * 4 + j) * 2]).toBeCloseTo(40, 3);
+      }
+
+      // верх a, верх b — на высоте засветки; низ — на полу
+      expect([...wash.heights.slice(q * 4, q * 4 + 4)]).toEqual([
+        expect.closeTo(0.6, 6),
+        expect.closeTo(0.6, 6),
+        0,
+        0,
+      ]);
+      // нормаль — навстречу лучу
+      expect(wash.normals[q * 2]).toBe(-1);
+      expect(wash.normals[q * 2 + 1]).toBe(0);
+    }
+  });
+
+  it('UV низа — точка упора, UV верха — конец того же луча', () => {
+    const fan = coneFan(cone, isBlocked, CELL, CELL);
+    const wash = washOf(fan);
+
+    for (let q = 0; q < 4; q += 1) {
+      for (const [top, bottom] of [
+        [q * 4, q * 4 + 2],
+        [q * 4 + 1, q * 4 + 3],
+      ]) {
+        const bx = wash.base[bottom * 2];
+        const by = wash.base[bottom * 2 + 1];
+
+        expect(wash.uvs[bottom * 2]).toBeCloseTo(bx, 3);
+        expect(wash.uvs[bottom * 2 + 1]).toBeCloseTo(by, 3);
+
+        // верх — на продолжении луча из вершины, дальше подножия
+        const ux = wash.uvs[top * 2];
+        const uy = wash.uvs[top * 2 + 1];
+        const cross = (bx - cone.x) * (uy - cone.y) - (by - cone.y) * (ux - cone.x);
+
+        expect(cross).toBeCloseTo(0, 2);
+        expect(ux).toBeGreaterThan(bx);
+      }
+    }
+
+    // ось: конец луча — край прямоугольника текстуры
+    const axis = [...Array(wash.heights.length).keys()].find(
+      v =>
+        wash.heights[v] > 0 &&
+        Math.abs(wash.base[v * 2 + 1] - cone.y) < 1e-3,
+    );
+
+    expect(wash.uvs[axis * 2]).toBeCloseTo(cone.x + cone.alongMax, 3);
+  });
+
+  it('засветка не выше самой стены', () => {
+    const fan = coneFan(cone, isBlocked, CELL, CELL);
+    const wash = washOf(fan, () => 0.25);
+
+    for (let v = 0; v < wash.heights.length; v += 1) {
+      expect(wash.heights[v] === 0 || Math.abs(wash.heights[v] - 0.25) < 1e-6).toBe(true);
+    }
+  });
+
+  it('упор в рампу (за кромкой не стена) — засветки нет', () => {
+    const fan = coneFan(cone, isBlocked, CELL, CELL);
+
+    expect(washOf(fan, () => 0)).toBeNull();
+  });
+
+  it('в пустом поле — засветки нет', () => {
+    const fan = coneFan(cone, () => false, CELL, CELL);
+
+    expect(washOf(fan)).toBeNull();
+  });
+
+  it('лучи в две разные грани (угол) — квад через угол не строится', () => {
+    // вершина (0, 0): лучи 1 и 2 — в грань x = 10, луч 3 — в грань y = 10
+    const wash = wallWash({
+      x: 0,
+      y: 0,
+      points: new Float32Array([0, 0, 10, -5, 10, 5, 5, 10]),
+      reaches: new Float32Array([100, 100, 100]),
+      forward: 3,
+      uvOf,
+      wallAt: () => 1,
+      cellW: CELL,
+      cellH: CELL,
+      height: 0.6,
+    });
+
+    expect(wash.indices).toHaveLength(6);
+    expect(wash.base[0]).toBeCloseTo(10);
+    expect(wash.base[2]).toBeCloseTo(10);
+  });
+});
+
 // Рампа как препятствие свету подножия: полоса x 20..60, y 0..30, подъём на
 // восток с уровня 0 на 1; клетка 10 × 10
 describe('lightMath: rampBlocks', () => {
@@ -609,9 +827,33 @@ describe('lightMath: rampBlocks', () => {
     expect(enter(4, 0, 4, -1, 45, 0, 1)).toBe(false);
   });
 
-  it('выход из полосы — стоп: склон конечен', () => {
+  it('выход через верхний торец — стоп: пол под торцом тёмный', () => {
     expect(enter(6, 1, 5, 1, 60, 15)).toBe(true);
-    expect(enter(3, 3, 3, 2, 35, 30)).toBe(true);
+  });
+
+  it('выход вбок — не стоп: край конуса ложится на пол у борта', () => {
+    expect(enter(3, 3, 3, 2, 35, 30)).toBe(false);
+    expect(enter(3, -1, 3, 0, 35, 0)).toBe(false);
+  });
+
+  it('выход в соседнюю полосу — стоп', () => {
+    const other = { ...lane, row0: 3, row1: 6 };
+
+    expect(
+      rampBlocks({
+        lane: other,
+        prevLane: lane,
+        col: 3,
+        row: 3,
+        prevCol: 3,
+        prevRow: 2,
+        x: 35,
+        y: 30,
+        z: 0,
+        cellW: CELL,
+        cellH: CELL,
+      }),
+    ).toBe(true);
   });
 
   it('castRay: снизу по склону до торца, сбоку — до борта', () => {
@@ -622,5 +864,115 @@ describe('lightMath: rampBlocks', () => {
     expect(castRay(45, -15, 0, 1, 200, isBlocked, CELL, CELL)).toBeCloseTo(15);
     // мимо горки — до конца
     expect(castRay(5, 45, 1, 0, 200, isBlocked, CELL, CELL)).toBe(200);
+    // от подножия наискосок: вышел через борт — дальше по полу
+    const diagonal = Math.SQRT1_2;
+
+    expect(
+      castRay(5, 15, diagonal, diagonal, 200, isBlocked, CELL, CELL),
+    ).toBe(200);
+  });
+});
+
+describe('lightMath: rampHeight', () => {
+  it('высота по прогрессу от подножия, обрезана по полосе', () => {
+    const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 6, row0: 0, row1: 3 };
+
+    expect(rampHeight(lane, 20, 5, 10, 10)).toBeCloseTo(0);
+    expect(rampHeight(lane, 40, 5, 10, 10)).toBeCloseTo(0.5);
+    expect(rampHeight(lane, 90, 5, 10, 10)).toBeCloseTo(1);
+    // подъём к меньшим y
+    const down = { axis: 1, sign: -1, from: 1, to: 2, col0: 0, col1: 1, row0: 0, row1: 4 };
+
+    expect(rampHeight(down, 5, 40, 10, 10)).toBeCloseTo(1);
+    expect(rampHeight(down, 5, 10, 10, 10)).toBeCloseTo(1.75);
+  });
+});
+
+describe('lightMath: rampLight', () => {
+  const CELL = 10;
+  // полоса x 20..60, y 0..30, подъём по +x
+  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 6, row0: 0, row1: 3 };
+  const frame = {
+    x: 0,
+    y: 15,
+    rotation: 0,
+    sx: 1,
+    sy: 1,
+    margin: 4,
+    width: 136,
+    height: 136,
+  };
+  // веер из (0, 15) вдоль +x: четыре луча до x = 100, крайние накрывают
+  // углы полосы у подножия
+  const points = new Float32Array([0, 15, 100, -85, 100, -5, 100, 35, 100, 115]);
+  const build = extra =>
+    rampLight({
+      points,
+      closed: false,
+      lane,
+      frame,
+      cellW: CELL,
+      cellH: CELL,
+      segmentsPerCell: 2,
+      ...extra,
+    });
+
+  it('полигон — внутри полосы, высоты по прогрессу вдоль оси', () => {
+    const result = build();
+
+    expect(result).not.toBeNull();
+
+    const { base, heights } = result;
+
+    for (let v = 0; v < heights.length; v += 1) {
+      const x = base[v * 2];
+      const y = base[v * 2 + 1];
+
+      expect(x).toBeGreaterThanOrEqual(20 - 1e-4);
+      expect(x).toBeLessThanOrEqual(60 + 1e-4);
+      expect(y).toBeGreaterThanOrEqual(-1e-4);
+      expect(y).toBeLessThanOrEqual(30 + 1e-4);
+      expect(heights[v]).toBeCloseTo((x - 20) / 40, 5);
+    }
+
+    // склон порезан на отрезки: вершины есть и внутри полосы по оси
+    expect([...heights].some(h => h > 0.1 && h < 0.9)).toBe(true);
+  });
+
+  it('UV — coneUv мировой точки, индексы в пределах вершин', () => {
+    const { base, uvs, indices, heights } = build();
+
+    for (let v = 0; v < heights.length; v += 1) {
+      const [u, w] = coneUv(base[v * 2], base[v * 2 + 1], frame);
+
+      expect(uvs[v * 2]).toBeCloseTo(u, 5);
+      expect(uvs[v * 2 + 1]).toBeCloseTo(w, 5);
+    }
+
+    expect(indices.length % 3).toBe(0);
+    expect(Math.max(...indices)).toBeLessThan(heights.length);
+  });
+
+  it('площадь меша — пересечение веера с полосой', () => {
+    const { base, indices } = build();
+    let area = 0;
+
+    for (let i = 0; i < indices.length; i += 3) {
+      const [a, b, c] = [indices[i], indices[i + 1], indices[i + 2]];
+
+      area += Math.abs(
+        (base[b * 2] - base[a * 2]) * (base[c * 2 + 1] - base[a * 2 + 1]) -
+          (base[c * 2] - base[a * 2]) * (base[b * 2 + 1] - base[a * 2 + 1]),
+      ) / 2;
+    }
+
+    // веер накрывает полосу целиком: 40 × 30
+    expect(area).toBeCloseTo(1200, 1);
+  });
+
+  it('веер вне полосы → null', () => {
+    const away = new Float32Array([0, 100, 100, 90, 100, 110]);
+
+    expect(build({ points: away })).toBeNull();
   });
 });

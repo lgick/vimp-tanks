@@ -66,13 +66,24 @@ export function buildVolumeSlices({
 // открытую сторону клетки.
 //
 // Текстура грани — НЕ общая запечённая картинка слоя, а своя на тайл:
-// ПОЛОСА из `faceTileRepeats` копий его картинки по вертикали (печёт
+// ПОЛОСА из `wallStripCopies` копий его картинки по вертикали (печёт
 // `layerAssets.js`). Полоса, а не повтор координат: аппаратный повтор
 // (`addressMode: 'repeat'`) на батченом меше не действует — координаты
 // зажимаются, и грань размазывала крайний столбец тайла горизонтальными
-// полосами. По ширине грани тайл идёт ровно раз, по высоте — столько
-// копий полосы, сколько грань занимает на экране (`updateWallMesh`),
-// поэтому кирпич везде одного размера.
+// полосами.
+//
+// UV грани привязаны к стене, как у грани блока в GTA 2, и задаются один
+// раз при сборке: по ширине тайл идёт ровно раз, по высоте — `volume ·
+// tilesPerLevel` копий, верхняя кромка — верх картинки тайла. Кирпич
+// тянется и сжимается вместе с проекцией, число его рядов постоянно.
+// Прежняя модель «кирпич одного экранного размера» пересчитывала UV
+// каждый кадр, и разница в высоте грани добиралась рядами у основания:
+// камера приближалась — кирпич «утекал в землю», удалялась — «вырастал».
+//
+// Грань делится по высоте на `ceil(volume · segments)` рядов: сдвиг
+// параллакса `p + (p − cam)·k(h)` по грани билинеен, и квад из двух
+// треугольников интерполировал его аффинно — вертикальные швы кирпича
+// ломались на диагонали. Ряды делят этот излом на своё число.
 //
 // Верх объёма (копия слоя на высоте `level + volume`) здесь не строится:
 // это спрайт запечённой текстуры, его кладёт сборка слоя (`layerAssets.js`)
@@ -85,19 +96,22 @@ const WALL_EPSILON = 1e-6;
 // береговая линия режется на несколько
 const MAX_WALL_QUADS = 1000;
 
-// ровно 4 вершины на квад: две на верхней кромке, две на нижней
+// квад ряда грани от его первой вершины: две вершины на верхней кромке
+// ряда, две — на нижней (следующая пара)
 const QUAD_INDICES = [0, 1, 3, 0, 3, 2];
 
 // Открытые кромки объёма — по одной на СТОРОНУ КЛЕТКИ:
-// `{ col, row, nx, ny, x0, y0, x1, y1 }`, где (nx, ny) — внешняя нормаль
-// грани, отрезок (x0, y0)–(x1, y1) — само ребро на границах клеток, а
-// (col, row) — клетка, чьим тайлом грань и текстурируется.
+// `{ tile, col, row, nx, ny, x0, y0, x1, y1 }`, где (nx, ny) — внешняя
+// нормаль грани, отрезок (x0, y0)–(x1, y1) — само ребро на границах
+// клеток, а (col, row) — клетка, чьим тайлом `tile` грань и
+// текстурируется.
 //
 // Соседние кромки НЕ сливаются в прогон: каждая грань тянет картинку
 // СВОЕЙ клетки (`buildVolumeWalls`), а тайлы лежат в общей запечённой
 // текстуре без повтора — склеенная грань растянула бы один тайл на всю
-// стену. Цена — квад на клетку кромки (у `downtown` это ~1700 квадов на
-// всю карту, доли миллисекунды на кадр)
+// стену. Цена — грань на клетку кромки, в ней `ceil(volume · segments)`
+// квадов по высоте (у `downtown` это ~1700 граней и ~5 тыс. квадов на всю
+// карту: здания по 4 ряда, канал 1, перила 2)
 export function wallEdges(map, tileSet) {
   const edges = [];
   const rows = map.length;
@@ -161,6 +175,15 @@ export function wallEdges(map, tileSet) {
   return edges;
 }
 
+// Копий картинки тайла в полосе боковой текстуры: грань высотой
+// `volume` уровней несёт `volume · tilesPerLevel` копий, полоса — их
+// округление вверх, не меньше одной. Одно число на выпечку полосы
+// (`layerAssets.js`) и на UV граней. Допуск — против float
+// (0.3 · 10 = 3.0000000000000004)
+export function wallStripCopies(volume, tilesPerLevel) {
+  return Math.max(1, Math.ceil(volume * tilesPerLevel - 1e-9));
+}
+
 export function buildVolumeWalls({
   map,
   tiles,
@@ -171,7 +194,8 @@ export function buildVolumeWalls({
   shear,
   sideTint,
   textures,
-  tileRepeats = 1,
+  tilesPerLevel = 1,
+  segments = 1,
 }) {
   const edges = wallEdges(map, new Set(tiles));
   const k0 = level * shear;
@@ -179,9 +203,18 @@ export function buildVolumeWalls({
   // порядок отрисовки — по верху объёма: грань обязана лечь ПОД верх, даже
   // когда нахлёст кадра (`faceBleedPx`) поднимает её кромку выше него
   const kSort = k1 - WALL_EPSILON;
-  // мировой размер клетки: в него укладывается ровно один повтор текстуры
-  // грани и по ширине, и по высоте — кирпич выходит квадратным
-  const cellWorld = step * baseScale.x;
+  const rows = Math.max(1, Math.ceil(volume * segments - 1e-9));
+  // низ грани в полосе: дробная часть копий отрезается снизу, у верхней
+  // кромки картинка тайла всегда начинается с его верха
+  const copies = wallStripCopies(volume, tilesPerLevel);
+  const vBottom = (volume * tilesPerLevel) / copies;
+  // на ребро — пары вершин рядов сверху вниз: вершина ряда r (0 — верх),
+  // стороны s (0 — точка a ребра, 1 — точка b) имеет индекс
+  // `e · vertsPerEdge + r · 2 + s`
+  const vertsPerEdge = (rows + 1) * 2;
+  // батч PixiJS не любит огромные меши: предел — в квадах, а режется меш
+  // по целым рёбрам
+  const edgesPerMesh = Math.max(1, Math.floor(MAX_WALL_QUADS / rows));
   const slices = [];
   // грани группируются по тайлу: у каждого своя текстура с повтором
   const byTile = new Map();
@@ -202,52 +235,54 @@ export function buildVolumeWalls({
       continue;
     }
 
-    for (let first = 0; first < tileEdges.length; first += MAX_WALL_QUADS) {
-      const chunk = tileEdges.slice(first, first + MAX_WALL_QUADS);
-      const quads = chunk.length;
-      const base = new Float32Array(quads * 8);
-      const uvs = new Float32Array(quads * 8);
-      const indices = new Uint32Array(quads * 6);
-      // нормаль и центр ребра на квад: по ним грань каждый кадр решает,
-      // смотрит ли она на камеру (`orderWallMesh`)
-      const normals = new Float32Array(quads * 2);
-      const centers = new Float32Array(quads * 2);
+    for (let first = 0; first < tileEdges.length; first += edgesPerMesh) {
+      const chunk = tileEdges.slice(first, first + edgesPerMesh);
+      const count = chunk.length;
+      const verts = count * vertsPerEdge;
+      const base = new Float32Array(verts * 2);
+      const heights = new Float32Array(verts);
+      const uvs = new Float32Array(verts * 2);
+      const indices = new Uint32Array(count * rows * 6);
+      // нормаль и центр ребра: по ним грань каждый кадр решает, смотрит ли
+      // она на камеру (`orderWallMesh`)
+      const normals = new Float32Array(count * 2);
+      const centers = new Float32Array(count * 2);
 
-      for (let q = 0; q < quads; q += 1) {
-        const { nx, ny, x0, y0, x1, y1 } = chunk[q];
+      for (let e = 0; e < count; e += 1) {
+        const { nx, ny, x0, y0, x1, y1 } = chunk[e];
         const ax = x0 * step;
         const ay = y0 * step;
         const bx = x1 * step;
         const by = y1 * step;
-        // по ширине грани тайл идёт ровно раз: клетка — это и есть его
-        // ширина, поэтому координаты остаются в пределах картинки
-        const ua = 0;
-        const ub = 1;
-        const v = q * 4;
+        const start = e * vertsPerEdge;
 
-        // вершины 0, 1 — верхняя кромка, 2, 3 — нижняя, в тех же точках
-        for (let i = 0; i < 4; i += 1) {
-          const atB = i % 2 === 1;
-          const top = i < 2;
-          const slot = (v + i) * 2;
+        for (let r = 0; r <= rows; r += 1) {
+          for (let s = 0; s < 2; s += 1) {
+            const i = start + r * 2 + s;
 
-          base[slot] = (atB ? bx : ax) * baseScale.x;
-          base[slot + 1] = (atB ? by : ay) * baseScale.y;
-          uvs[slot] = atB ? ub : ua;
-          // высота грани на экране зависит от удаления клетки от центра
-          // камеры, поэтому нижняя координата считается в кадре
-          // (`updateWallMesh`); здесь — стартовое значение до первого кадра
-          uvs[slot + 1] = top ? 0 : 1 / tileRepeats;
+            base[i * 2] = (s === 1 ? bx : ax) * baseScale.x;
+            base[i * 2 + 1] = (s === 1 ? by : ay) * baseScale.y;
+            heights[i] = k1 - ((k1 - k0) * r) / rows;
+            // по ширине грани тайл идёт ровно раз: клетка — это и есть его
+            // ширина. UV задаются здесь и больше не меняются
+            uvs[i * 2] = s;
+            uvs[i * 2 + 1] = (vBottom * r) / rows;
+          }
         }
 
-        for (let i = 0; i < 6; i += 1) {
-          indices[q * 6 + i] = v + QUAD_INDICES[i];
+        for (let r = 0; r < rows; r += 1) {
+          const v = start + r * 2;
+          const slot = (e * rows + r) * 6;
+
+          for (let i = 0; i < 6; i += 1) {
+            indices[slot + i] = v + QUAD_INDICES[i];
+          }
         }
 
-        normals[q * 2] = nx;
-        normals[q * 2 + 1] = ny;
-        centers[q * 2] = ((ax + bx) / 2) * baseScale.x;
-        centers[q * 2 + 1] = ((ay + by) / 2) * baseScale.y;
+        normals[e * 2] = nx;
+        normals[e * 2 + 1] = ny;
+        centers[e * 2] = ((ax + bx) / 2) * baseScale.x;
+        centers[e * 2 + 1] = ((ay + by) / 2) * baseScale.y;
       }
 
       const mesh = batchedMesh({
@@ -263,16 +298,16 @@ export function buildVolumeWalls({
         target: mesh,
         k: kSort,
         base,
+        heights,
+        rows,
         k0,
         k1,
-        cellWorld,
-        tileRepeats,
         occluder: true,
         walls: true,
         normals,
         centers,
-        // сторона каждого квада на прошлом кадре: 2 — ещё не считалась
-        facing: new Uint8Array(quads).fill(2),
+        // сторона каждого ребра на прошлом кадре: 2 — ещё не считалась
+        facing: new Uint8Array(count).fill(2),
       });
     }
   }
@@ -280,74 +315,86 @@ export function buildVolumeWalls({
   return slices;
 }
 
-// Кадр грани объёма: вершины и UV по высоте.
+// Камера, по которой меш уже посчитан. База и высоты меша неизменны,
+// поэтому при той же камере вершины те же — пересчёт и перезаливка
+// буферов на каждый кадр неподвижной камеры не нужны
+function sameCamera(slice, camera, bleedPx) {
+  if (
+    slice.cameraX === camera.x &&
+    slice.cameraY === camera.y &&
+    slice.cameraScale === camera.scaleX &&
+    slice.cameraBleed === bleedPx
+  ) {
+    return true;
+  }
+
+  slice.cameraX = camera.x;
+  slice.cameraY = camera.y;
+  slice.cameraScale = camera.scaleX;
+  slice.cameraBleed = bleedPx;
+
+  return false;
+}
+
+// Кадр грани объёма: только вершины. UV привязаны к стене и заданы при
+// сборке (`buildVolumeWalls`): текстура тянется вместе с гранью, и
+// пересчитывать её незачем.
 //
-// Грань нарисована от кромки клетки до неё же, поднятой на высоту объёма,
-// поэтому её длина на экране растёт с удалением от центра камеры.
-// Растянутая на разную длину картинка давала кирпич разного размера,
-// поэтому нижняя UV-координата считается каждый кадр.
+// Вершина ряда стоит в `p + (p − cam)·k` со своей высотой `k`: вдоль
+// вертикали грани экранная позиция линейна по высоте, поэтому ряды
+// кирпича идут равномерно и на вытянутой грани.
 //
-// Считается она по ГЛУБИНЕ грани — расстоянию до центра камеры вдоль её
-// нормали, а не по радиусу `|p - cam|`. Вдоль прямой стены радиус меняется
-// (в середине он меньше, по краям больше), и ряды кирпича разъезжались
-// веером — стена читалась выпуклой. Глубина вдоль нормали вдоль такой
-// стены постоянна, поэтому ряды идут параллельно, а размер кирпича
-// остаётся тем же: и глубина, и экранная длина грани растут вместе.
-//
-// На одну копию тайла в полосе приходится `cellWorld` мировых единиц —
-// столько же, сколько по ширине грани. Полоса конечна, поэтому у самых
-// длинных граней координата упирается в её конец и последняя копия
-// тянется.
-//
-// `bleedPx` — нахлёст под верх объёма в ЭКРАННЫХ пикселях: щель между
-// мешем грани и спрайтом верха открывается на дробном масштабе сцены, а
-// движок плавно меняет зум от скорости, поэтому запас в мировых единицах
-// на отдалённой камере переставал её закрывать
+// `bleedPx` — нахлёст под верх объёма в ЭКРАННЫХ пикселях, только у
+// верхнего ряда: щель между мешем грани и спрайтом верха открывается на
+// дробном масштабе сцены, а движок плавно меняет зум от скорости, поэтому
+// запас в мировых единицах на отдалённой камере переставал её закрывать
 export function updateWallMesh(slice, camera, bleedPx = 0) {
-  const { target, base, k0, k1, cellWorld, tileRepeats, normals } = slice;
+  if (sameCamera(slice, camera, bleedPx)) {
+    return;
+  }
+
+  const { target, base, heights, rows } = slice;
   const vertices = target.vertices;
-  const uvs = target.geometry.uvs;
-  const rise = k1 - k0;
+  const vertsPerEdge = (rows + 1) * 2;
   const bleedWorld = bleedPx && camera.scaleX ? bleedPx / camera.scaleX : 0;
 
-  for (let i = 0, len = base.length / 2; i < len; i += 1) {
+  for (let i = 0, len = heights.length; i < len; i += 1) {
     const x = base[i * 2];
     const y = base[i * 2 + 1];
     const dx = x - camera.x;
     const dy = y - camera.y;
+    const top = i % vertsPerEdge < 2;
     // клетка ровно в центре камеры сдвига не получает: делить на ноль
     // нельзя, а нахлёст и высота там и так вырождены
     const dist = Math.sqrt(dx * dx + dy * dy) || 1e-6;
-    const top = i % 4 < 2;
     // нахлёст под верх — вдоль луча от камеры: так он остаётся ровно
     // `bleedPx` экранными пикселями на любом удалении
-    const k = top ? k1 + bleedWorld / dist : k0;
+    const k = heights[i] + (top ? bleedWorld / dist : 0);
 
     vertices[i * 2] = x + dx * k;
     vertices[i * 2 + 1] = y + dy * k;
-
-    if (!top) {
-      const quad = i >> 2;
-      const depth = normals[quad * 2 + 1] !== 0 ? Math.abs(dy) : Math.abs(dx);
-      const span = (depth * rise) / cellWorld / tileRepeats;
-
-      uvs[i * 2 + 1] = span > 1 ? 1 : span;
-    }
   }
 
-  // autoUpdate меша заливает буфер позиций сам; UV обновляются вручную —
-  // сеттер буфера видит тот же массив и только отмечает его грязным
+  // autoUpdate меша заливает буфер позиций сам
   target.vertices = vertices;
-  target.geometry.uvs = uvs;
 }
 
 // Порядок граней объёма. Грань, отвёрнутая от камеры, обязана рисоваться
 // раньше видимой: иначе дальняя грань узкой стены ложится поверх ближней.
-// Индексы переписываются только при смене стороны хоть одного квада.
+// Индексы переписываются только при смене стороны хоть одной грани.
 // Возвращает true, если порядок поменялся
 export function orderWallMesh(slice, camera) {
-  const { target, normals, centers, facing } = slice;
+  // стороны граней зависят только от точки камеры
+  if (slice.orderX === camera.x && slice.orderY === camera.y) {
+    return false;
+  }
+
+  slice.orderX = camera.x;
+  slice.orderY = camera.y;
+
+  const { target, normals, centers, facing, rows } = slice;
   const quads = facing.length;
+  const vertsPerEdge = (rows + 1) * 2;
   let changed = false;
 
   for (let q = 0; q < quads; q += 1) {
@@ -376,9 +423,14 @@ export function orderWallMesh(slice, camera) {
         continue;
       }
 
-      for (let i = 0; i < 6; i += 1) {
-        indices[slot] = q * 4 + QUAD_INDICES[i];
-        slot += 1;
+      // все ряды грани — подряд
+      for (let r = 0; r < rows; r += 1) {
+        const v = q * vertsPerEdge + r * 2;
+
+        for (let i = 0; i < 6; i += 1) {
+          indices[slot] = v + QUAD_INDICES[i];
+          slot += 1;
+        }
       }
     }
   }
@@ -678,6 +730,10 @@ export function buildRampSkirt(surface) {
 // считаем поточечно той же формулой, что и offsetPoint
 // (src/client/parallax.js)
 export function updateHeightMesh(slice, camera) {
+  if (sameCamera(slice, camera, 0)) {
+    return;
+  }
+
   const { target, base, heights } = slice;
   const vertices = target.vertices;
 

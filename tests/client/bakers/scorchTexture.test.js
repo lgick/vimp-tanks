@@ -27,6 +27,8 @@ vi.mock('pixi.js', () => {
       // Pixi сам выставляет padding в конструкторе
       this.padding = options.strength * 2;
     }
+
+    destroy() {}
   }
 
   class Rectangle {

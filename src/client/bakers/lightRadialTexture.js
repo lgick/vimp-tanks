@@ -1,5 +1,7 @@
-import { Graphics, BlurFilter, Rectangle } from 'pixi.js';
-import blurMargin, { blurPadding } from './blurMargin.js';
+import { Graphics } from 'pixi.js';
+import blurMargin from './blurMargin.js';
+import bakeBlurred from './bakeBlurred.js';
+import { radialProfile } from '../lighting/lightMath.js';
 
 // Кольца радиального спада: `rings` непересекающихся колец от центра к
 // краю, прозрачность каждого — по функции `alphaAt(t)`, где `t` — доля
@@ -38,20 +40,14 @@ export default function lightRadialTexture(params, renderer) {
   const center = textureSize / 2;
 
   // спад (1 - t)² — свет сходит на нет к краю, центр не пересвечен плато
-  drawRadialRings(graphics, center, radius, rings, t => (1 - t) * (1 - t));
+  drawRadialRings(graphics, center, radius, rings, radialProfile);
 
-  const filter = new BlurFilter({ strength: blur, quality });
-
-  // область фильтра шире рамки: мусор пула с края не попадёт в текстуру
-  filter.padding = blurPadding(blur);
-  graphics.filters = [filter];
-
-  const texture = renderer.generateTexture({
-    target: graphics,
-    frame: new Rectangle(0, 0, textureSize, textureSize),
+  const texture = bakeBlurred(renderer, graphics, {
+    blur,
+    quality,
+    width: textureSize,
+    height: textureSize,
   });
-
-  graphics.destroy(true);
 
   return { texture, contentSize: radius * 2 };
 }

@@ -580,4 +580,13 @@ describe('MapObject: засвет и тень в лучах (ночь)', () => {
 
     expect(setCaster).toHaveBeenLastCalledWith(mode, null);
   });
+
+  it('днём тени лучей не регистрируются', async () => {
+    const { part, service } = await makeLitProp({ night: false });
+    const setCaster = vi.spyOn(service, 'setCaster');
+
+    step(part);
+
+    expect(setCaster).not.toHaveBeenCalled();
+  });
 });

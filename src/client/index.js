@@ -11,6 +11,7 @@ import { createLevelView } from './levelView.js';
 import { createLighting } from './lighting/createLighting.js';
 import { createShotEvents } from './shotEvents.js';
 import { createBlastEvents } from './blastEvents.js';
+import { createVolumes } from './volumes.js';
 
 // стрелка клетки по индексу `surface_dir_at`: север/юг/запад/восток, как у
 // рамп (north = −y, east = +x)
@@ -64,6 +65,7 @@ export default {
     'mapDynamics',
     'rampRuns',
     'surfaces',
+    'volumes',
     'lighting',
     'shots',
     'blasts',
@@ -77,7 +79,9 @@ export default {
     // levelView — где и на каком уровне локальный игрок: по нему плита моста
     // над ним становится полупрозрачной (2.5D).
     // rampRuns — прогоны рамп из ядра: клин горки рисуется по ТОЙ ЖЕ
-    // геометрии, по которой физика ставит стражей прогона
+    // геометрии, по которой физика ставит стражей прогона.
+    // volumes — высоты объёмов карты по клеткам: выстрел в стену кончается
+    // на её видимой грани, а не на подножии
     services(core) {
       // экземпляр на ядро, а не на модуль: в headless-раннере
       // (`npm run sim:scenarios`) в одном процессе живёт несколько
@@ -103,6 +107,7 @@ export default {
         }),
         // «взрыв»: эффект взрыва будит реакцию танков в его радиусе
         blasts: createBlastEvents(),
+        volumes: createVolumes(),
         mapDynamics: {
           // локальная точка тела → мировая в рендерном фрейме;
           // null — ключ неизвестен (карта сменилась, ящика больше нет)

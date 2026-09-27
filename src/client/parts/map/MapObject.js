@@ -3,12 +3,10 @@ import { degToRad } from 'vimp-engine/lib/math.js';
 import { levelZ, renderLevel } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
-import {
-  lighting as lightingConfig,
-  parallax as parallaxConfig,
-} from '../../../config/render.js';
+import { parallax as parallaxConfig } from '../../../config/render.js';
 import { baseScale } from './tileGrid.js';
 import DebrisEffect from '../effects/DebrisEffect.js';
+import { glintHit, ensureGlint, hideGlint, placeGlint } from '../glint.js';
 import {
   C_X,
   C_Y,
@@ -55,6 +53,8 @@ export default class MapObject {
       ? dependencies.lighting
       : null;
     this._glint = null;
+    // тень в лучах, зарегистрированная в сервисе; null — не нужна
+    this._caster = null;
 
     // масштаб карты держим числами: у тела сам контейнер несёт `data.scale`,
     // а в мир переводит базовый масштаб, а не текущий (его каждый кадр
@@ -246,46 +246,33 @@ export default class MapObject {
   // Градиент `glintTexture` режется маской — копией спрайта тела; блик
   // ложится по центру тела поверх него
   _updateGlint() {
-    const glints = lightingConfig.glints;
-    const asset = this._lighting?.texture('glint');
     // строка кадра везёт угол тела: свет меряется от его центра
     const center = this._localCenter();
-    const worldX = center.x * this._baseScale.x;
-    const worldY = center.y * this._baseScale.y;
-    const reach = Math.max(
-      this._width * this._baseScale.x,
-      this._height * this._baseScale.y,
-    );
     const hit =
-      glints?.enabled &&
-      asset &&
-      this.sprite.visible &&
-      this._standing() &&
-      this._lighting.isNight() &&
-      this._lighting.onScreen(worldX, worldY, this._z, reach)
-        ? this._lighting.lightsAt(worldX, worldY, this._level, 1)[0]
+      this.sprite.visible && this._standing()
+        ? glintHit(this._lighting, {
+            x: center.x * this._baseScale.x,
+            y: center.y * this._baseScale.y,
+            z: this._z,
+            level: this._level,
+            reach: Math.max(
+              this._width * this._baseScale.x,
+              this._height * this._baseScale.y,
+            ),
+          })
         : null;
 
     if (!hit) {
-      if (this._glint) {
-        this._glint.sprite.visible = false;
-      }
+      hideGlint(this._glint);
 
       return;
     }
 
-    if (!this._glint) {
-      const sprite = new Sprite(asset.texture);
-      const mask = new Sprite();
+    const asset = this._lighting.texture('glint');
 
-      sprite.anchor.set(0.5);
-      sprite.blendMode = 'add';
-      sprite.mask = mask;
-      this._container.addChild(mask, sprite);
-      this._glint = { sprite, mask };
-    }
+    this._glint = ensureGlint(this._glint, this._container, asset.texture);
 
-    const { sprite, mask } = this._glint;
+    const { mask } = this._glint;
     const body = this.sprite;
 
     // маска повторяет спрайт тела: текстура состояния, габариты и поворот
@@ -294,43 +281,49 @@ export default class MapObject {
     mask.scale.copyFrom(body.scale);
     mask.rotation = body.rotation;
 
-    sprite.texture = asset.texture;
-    sprite.visible = true;
-    sprite.position.set(center.x, center.y);
-    sprite.rotation = hit.angle;
-    sprite.scale.set(
-      (Math.max(this._width, this._height) * glints.size) / asset.contentSize,
-    );
-    sprite.tint = hit.color;
-    sprite.alpha = Math.min(1, glints.intensity * hit.strength);
+    placeGlint(this._glint, {
+      hit,
+      asset,
+      x: center.x,
+      y: center.y,
+      rotation: hit.angle,
+      size: Math.max(this._width, this._height),
+    });
   }
 
   // тень тела в лучах фонарей: круг с полудиагональю тела вокруг центра.
-  // Копоть тени не бросает
+  // Копоть тени не бросает. Объект заводится и регистрируется один раз:
+  // сервис хранит ссылку, дальше меняются только поля
   _updateCaster() {
     if (!this._lighting) {
       return;
     }
 
-    if (!this._standing()) {
-      this._lighting.setCaster(this, null);
+    if (!this._lighting.castsShadows() || !this._standing()) {
+      if (this._caster) {
+        this._lighting.setCaster(this, null);
+        this._caster = null;
+      }
 
       return;
     }
 
+    if (!this._caster) {
+      this._caster = {};
+      this._lighting.setCaster(this, this._caster);
+    }
+
     const local = this._localCenter();
 
-    this._lighting.setCaster(this, {
-      x: local.x * this._baseScale.x,
-      y: local.y * this._baseScale.y,
-      z: this._z,
-      level: this._level,
-      radius:
-        Math.hypot(
-          this._width * this._baseScale.x,
-          this._height * this._baseScale.y,
-        ) / 2,
-    });
+    this._caster.x = local.x * this._baseScale.x;
+    this._caster.y = local.y * this._baseScale.y;
+    this._caster.z = this._z;
+    this._caster.level = this._level;
+    this._caster.radius =
+      Math.hypot(
+        this._width * this._baseScale.x,
+        this._height * this._baseScale.y,
+      ) / 2;
   }
 
   // картинка и порядок отрисовки состояния
