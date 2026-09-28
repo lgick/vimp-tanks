@@ -694,11 +694,11 @@ impl ShotPredictor {
 
     // высота чужого танка на единицу `size`: строка m1 модель не несёт, а
     // все модели пропорциональны `size` (как width = size·4) — отношение
-    // берётся у своей модели; не ниже ствола, как `Tank::turret_top`
+    // берётся у своей модели
     fn turret_top_per_size(&self) -> f32 {
         self.model.as_ref().map_or(0.0, |model| {
             if model.size > 0.0 {
-                model.turret_top.max(model.barrel_height) / model.size
+                model.hull_top() / model.size
             } else {
                 0.0
             }
@@ -740,6 +740,7 @@ impl ShotPredictor {
             .remote_tanks
             .map(|tanks| tanks.sim_boxes())
             .unwrap_or_default();
+        let turret_top_per_size = self.turret_top_per_size();
 
         for segment in segments {
             let length = segment.t1 - segment.t0;
@@ -847,7 +848,7 @@ impl ShotPredictor {
 
                     if !tank_reaches(
                         tank.z,
-                        self.turret_top_per_size() * tank.size,
+                        turret_top_per_size * tank.size,
                         levels.level_height(),
                         line.at(t),
                     ) {

@@ -244,7 +244,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 
 ---
 
-## Этап 3. Высота танка — одно правило (DRY, низкий приоритет)
+## Этап 3. Высота танка — одно правило (DRY, низкий приоритет) ✅ выполнен
 
 **Проблема.** `Tank::turret_top()` (`core/src/tank.rs` ≈ 284) и `ShotPredictor::turret_top_per_size()`
 (`core/src/client/shot.rs` ≈ 698) повторяют одну формулу `turret_top.max(barrel_height)`. Вдобавок `cast_ray`

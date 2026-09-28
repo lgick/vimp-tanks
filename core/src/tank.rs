@@ -249,7 +249,7 @@ impl Tank {
             width,
             height,
             barrel_height: model.barrel_height,
-            turret_top: model.turret_top,
+            turret_top: model.hull_top(),
             mass,
             inertia,
             current_keys: 0,
@@ -278,11 +278,9 @@ impl Tank {
         self.barrel_height
     }
 
-    /// Высота танка над полом, мировые единицы (`ModelConfig::turret_top`),
-    /// но не ниже ствола: танк без объявленной высоты достаётся пулей своего
-    /// уровня, как прежде.
+    /// Высота танка над полом, мировые единицы (`ModelConfig::hull_top`).
     pub fn turret_top(&self) -> f32 {
-        self.turret_top.max(self.barrel_height)
+        self.turret_top
     }
 
     /// Обновляет состояние клавиш (BaseModel.updateKeys).
