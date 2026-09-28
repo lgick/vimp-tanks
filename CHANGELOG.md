@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.11] - 2026-09-28
+
 ### Added
 
 - A destroyed tank now explodes: a flash, a fireball, sparks and a burst of
