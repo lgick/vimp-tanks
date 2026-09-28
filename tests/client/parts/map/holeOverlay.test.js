@@ -5,6 +5,7 @@ import {
   advance,
   apply,
   dispose,
+  holeCenterAlpha,
   tickRate,
 } from '../../../../src/client/parts/map/holeOverlay.js';
 import { seeThrough, parallax } from '../../../../src/config/render.js';
@@ -163,5 +164,15 @@ describe('holeOverlay', () => {
 
       expect(tickRate(hole, 2)).toBe(1);
     });
+  });
+});
+
+describe('holeOverlay: alpha центра дыры', () => {
+  it('holeCenterAlpha: 1 без дыры, minAlpha у открытой', () => {
+    const cfg = { minAlpha: 0.2 };
+
+    expect(holeCenterAlpha({ strength: 0 }, cfg)).toBe(1);
+    expect(holeCenterAlpha({ strength: 1 }, cfg)).toBeCloseTo(0.2);
+    expect(holeCenterAlpha({ strength: 0.5 }, cfg)).toBeCloseTo(0.6);
   });
 });

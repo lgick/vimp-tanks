@@ -84,15 +84,20 @@ export default {
     // выстрела кладёт осколки попадания на склон, и пол под концом
     // выстрела (`floorAt`).
     // volumes — высоты объёмов карты по клеткам: выстрел в стену кончается
-    // на её видимой грани, а не на подножии
+    // на её видимой грани, а не на подножии; по ним же освещение строит
+    // сетку препятствий фар и вершины объёмов
     services(core) {
       // экземпляр на ядро, а не на модуль: в headless-раннере
       // (`npm run sim:scenarios`) в одном процессе живёт несколько
       // VirtualClient, и общее на модуль состояние «где игрок» перезаписывал
       // бы тот из них, кто обновился последним
       const levelView = createLevelView();
-      // ночь и освещение: камеру и прозрачность над игроком берёт у levelView
-      const lighting = createLighting(undefined, { levelView });
+      // высоты объёмов карты: пишут слои Map, читают эффект выстрела и
+      // освещение (src/client/volumes.js)
+      const volumes = createVolumes();
+      // ночь и освещение: камеру и прозрачность над игроком берёт у
+      // levelView, стены — у volumes
+      const lighting = createLighting(undefined, { levelView, volumes });
       // разбор прогонов рамп: общий на все слои карты, живёт до её смены
       let runsCache = [];
       let runsGeneration = null;
@@ -126,7 +131,7 @@ export default {
         }),
         // «взрыв»: эффект взрыва будит реакцию танков в его радиусе
         blasts: createBlastEvents(),
-        volumes: createVolumes(),
+        volumes,
         mapDynamics: {
           // локальная точка тела → мировая в рендерном фрейме;
           // null — ключ неизвестен (карта сменилась, ящика больше нет)

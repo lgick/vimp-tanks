@@ -3,7 +3,11 @@ import { levelZ } from '../../levelZ.js';
 import { cameraCenter } from '../../camera.js';
 import { applyParallax } from '../../parallax.js';
 import { baseScale, tileGrid } from './tileGrid.js';
-import { createHole, dispose as disposeHole } from './holeOverlay.js';
+import {
+  createHole,
+  dispose as disposeHole,
+  holeCenterAlpha,
+} from './holeOverlay.js';
 import { buildLayerAssets, rampLanes } from './layerAssets.js';
 import { updateSeeThrough } from './layerSeeThrough.js';
 import {
@@ -206,22 +210,12 @@ export default class MapLayer {
           this,
         );
       }
-
-      // вершины объёмов: карта освещённости уровня закрывает их полумраком,
-      // иначе верхний срез стены ловит фары танка на земле
-      if (this._volume > 0) {
-        this._lighting.setVolumeTops(
-          this._level,
-          cellsOfTiles(this._map, this._tiles),
-          this._volume,
-          this,
-        );
-      }
     }
 
     // высоты объёмов по клеткам (сервис игры, src/client/volumes.js): по
-    // ним выстрел в стену кончается на её видимой грани. Днём тоже —
-    // освещение тут ни при чём
+    // ним выстрел в стену кончается на её видимой грани, а ночью освещение
+    // строит сетку препятствий фар и закрывает вершины объёмов полумраком.
+    // Регистрируется всегда: выстрелу он нужен и днём
     this._volumes = dependencies.volumes || null;
 
     if (this._volume > 0) {
@@ -340,7 +334,7 @@ export default class MapLayer {
       return this._container.alpha;
     }
 
-    return 1 + (this._levelView.cfg.minAlpha - 1) * this._hole.strength;
+    return holeCenterAlpha(this._hole, this._levelView.cfg);
   }
 
   // Каждый кадр у статического слоя: видимость (плита моста) и параллакс —

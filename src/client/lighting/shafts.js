@@ -6,6 +6,7 @@ import {
   shadowWedge,
   shaftSway,
 } from './lightMath.js';
+import { hasLevelMap } from './LevelLightMap.js';
 
 // наибольшее покачивание лучей фонаря, рад
 const SHAFT_SWAY = 0.08;
@@ -78,10 +79,7 @@ export function layoutShafts({
 
   for (const lamp of map.lamps) {
     // у уровня фонаря нет карты освещённости — ни обычной, ни крыш
-    if (
-      !lamp.head ||
-      !(map.levels.has(lamp.level) || map.roofLevels.has(lamp.level))
-    ) {
+    if (!lamp.head || !hasLevelMap(map, lamp.level)) {
       continue;
     }
 

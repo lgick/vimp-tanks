@@ -42,6 +42,13 @@ export function advance(hole, wanted, rate) {
   return hole.strength;
 }
 
+// alpha слоя в центре дыры силы `hole.strength`: `minAlpha` у открытой
+// дыры, 1 — без неё. Её получает шейдер дыры (`apply`) и вывески крыши
+// (`MapLayer._roofAlpha`) — вывеска гаснет вместе с центром дыры
+export function holeCenterAlpha(hole, cfg) {
+  return 1 + (cfg.minAlpha - 1) * hole.strength;
+}
+
 // внутри слоя нужна не одна alpha, а поле по пикселям, поэтому единственный
 // способ — фильтр. Центр приходит в пикселях кадра фильтра, то есть в
 // экранных: мировая точка умножается на трансформ сцены (камера — он и есть,
@@ -82,7 +89,7 @@ export function apply(target, hole, cfg, view, stage, camera) {
     radius: cfg.radius * stage.scale.x,
     softness: cfg.softness,
     // дыра открывается не рывком: сила перехода живёт в минимальной alpha
-    minAlpha: 1 + (cfg.minAlpha - 1) * hole.strength,
+    minAlpha: holeCenterAlpha(hole, cfg),
   });
 }
 

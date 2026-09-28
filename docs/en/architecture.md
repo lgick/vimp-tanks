@@ -161,6 +161,9 @@ host's ray runs over the floor and stops at the edge of the wall's
 footprint, while the drawn wall is the volume face from the foot up. The
 `volumes` service (`src/client/volumes.js`) holds the volume height of
 every level cell, filled by the `Map` layers that have `data.volume`.
+The lighting service reads the same registry (`levels()`, `version`) for its
+headlight obstacle grid and the volume tops of its light maps, so light and
+shots see the same walls.
 `ShotEffect` recognises a wall hit by geometry (`src/client/wallFace.js`):
 the ray's end lies on a cell edge (`edgeFace`, tolerance 0.15 — the host
 rounds the hit point to 0.1) and the cell beyond it is a volume of the floor
@@ -517,7 +520,7 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   stage transform), and its ordinary `lights` get an **inverse** mask of the
   same outline, so no floor-projected light remains on a wedge. The light
   on a slope is a mesh in the wedge's projection
-  (`lightMath.rampLight`, `LevelLightMap.layoutRampLights`): the source's
+  (`lightGeometry.rampLight`, `LevelLightMap.layoutRampLights`): the source's
   fan (the headlight's occlusion fan, or its texture rectangle for lamps,
   flashes and unoccluded cones) is clipped by the lane rectangle, cut along
   the axis into `volume.rampSegments` pieces per cell like the wedge mesh,
@@ -529,10 +532,10 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   added twice. The ground under the bridge stays dark — it is outside the
   mask. Meshes are cached per fan, so a standing lamp builds them once.
 - **Headlights and walls.** The cells of a level's volumes (building,
-  canal and railing walls — what `setVolumeTops` hands over) form its
+  canal and railing walls — what the `volumes` service holds) form its
   obstacle grid, rebuilt with the masks. A headlight cone of that level
   casts `headlights.occlusion.rays` rays across its texture rectangle
-  (`lightMath.coneFan`, a grid DDA `castRay`); when any ray stops at a wall
+  (`lightGeometry.coneFan`, a grid DDA `castRay`); when any ray stops at a wall
   the cone is drawn as a fan mesh over that visibility polygon with the
   same texture (`fanUvs`), in the light map's `lights` container
   (on ramp wedges — see the ramp paragraph), projected by the mesh transform — no stencil mask per cone.
@@ -541,7 +544,7 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   until it moves, turns or the grid changes. Since the fan stops at the
   wall's footprint, the floor behind it gets no light. The part of the beam
   a wall stops is folded onto the wall's visible face instead
-  (`lightMath.wallWash`, `headlights.wash`): for each pair of neighbouring
+  (`lightGeometry.wallWash`, `headlights.wash`): for each pair of neighbouring
   rays hitting the same face (`edgeFace`, the obstacle grid stores the
   volume height) a quad rises from the foot to `min(wash.height, volume)`;
   its bottom UV is the hit point, its top UV the end of the same ray, so the
@@ -554,7 +557,7 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   bounce spot is added in front of it. `lightsAt` skips a cone whose line
   of sight to the point is blocked, so there are no glints behind walls.
   Ramps rising from the light's level (`setRampWedges`) are obstacles too,
-  by direction (`lightMath.rampBlocks`): a ray entering through the foot
+  by direction (`lightGeometry.rampBlocks`): a ray entering through the foot
   lights the slope; leaving the lane sideways it goes on along the floor
   (the soft cone edge lands on the floor by the sides), leaving it through
   the top end (or into another lane) it stops, so the floor under the

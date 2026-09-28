@@ -13,6 +13,7 @@ import {
 } from '../../../src/client/lighting/createLighting.js';
 import LevelLightMap from '../../../src/client/lighting/LevelLightMap.js';
 import { createLevelView } from '../../../src/client/levelView.js';
+import { createVolumes } from '../../../src/client/volumes.js';
 import { levelZ } from '../../../src/client/levelZ.js';
 import {
   LIGHT_OVERLAY_BASE_Z,
@@ -55,14 +56,15 @@ const STEP = 32;
 // камера в начале координат: сцена сдвинута на полэкрана
 const setup = (cfg = lighting) => {
   const levelView = createLevelView();
-  const service = createLighting(cfg, { levelView });
+  const volumes = createVolumes();
+  const service = createLighting(cfg, { levelView, volumes });
   const stage = new Container();
 
   stage.sortableChildren = true;
   stage.position.set(screen.width / 2, screen.height / 2);
   service.attachStage(stage, renderer);
 
-  return { service, stage, levelView };
+  return { service, stage, levelView, volumes };
 };
 
 const frame = service => {
@@ -723,14 +725,14 @@ describe('lighting: крыши и вершины объёмов', () => {
     expect(roofMap.shafts.children.some(entry => entry.visible)).toBe(true);
   });
 
-  it('setVolumeTops рисует вершины, releaseMap снимает их вместе с владельцем', () => {
-    const { service } = setup();
+  it('вершины объёмов берутся из volumes, release снимает их', () => {
+    const { service, volumes } = setup();
     const layout = spyLayout();
     const walls = {};
 
     makeParts(service, 'k', nightLighting([]));
     service.acquireMap('k', nightLighting([]), STEP, 1);
-    service.setVolumeTops(0, [[0, 0], [1, 0]], 1, walls);
+    volumes.setLayerVolume(0, [[0, 0], [1, 0]], 1, walls, { step: STEP, scale: 1 });
     frame(service);
 
     const ground = levelMaps(layout).find(map => map.level === 0);
@@ -739,11 +741,28 @@ describe('lighting: крыши и вершины объёмов', () => {
     expect(ground.topGroups[0].volume).toBe(1);
     expect(ground.tops.children).toHaveLength(1);
 
-    service.releaseMap('k', walls);
+    volumes.release(walls);
     frame(service);
 
     expect(ground.topGroups).toHaveLength(0);
     expect(ground.tops.children).toHaveLength(0);
+  });
+
+  it('слой объёма после первой отрисовки подхватывается без смены камеры', () => {
+    const { service, volumes } = setup();
+    const layout = spyLayout();
+
+    makeParts(service, 'k', nightLighting([]));
+    service.acquireMap('k', nightLighting([]), STEP, 1);
+    frame(service);
+
+    volumes.setLayerVolume(0, [[0, 0]], 1, {}, { step: STEP, scale: 1 });
+    // тот же тик: ранний выход render() обязан заметить новую правку реестра
+    service.render();
+
+    const ground = levelMaps(layout).find(map => map.level === 0);
+
+    expect(ground.topGroups).toHaveLength(1);
   });
 });
 
@@ -1317,9 +1336,9 @@ describe('lighting: свет верхнего уровня на рампах', (
   });
 });
 
-// Фары и стены (этап 12): конус у стены рисуется веером по полигону
+// Фары и стены: конус у стены рисуется веером по полигону
 // видимости, ось, упёршаяся в стену, даёт отсвет; засвет за стеной не
-// считается. Клетка 32 × 32, стены — вершины объёмов уровня (`setVolumeTops`)
+// считается. Клетка 32 × 32, стены — вершины объёмов уровня (`volumes.setLayerVolume`)
 describe('lighting: фары и стены', () => {
   const size = { cols: 20, rows: 20 };
   // столбец клеток 3 (x 96..128) — стена
@@ -1331,7 +1350,7 @@ describe('lighting: фары и стены', () => {
 
     service.registerTextures(textures());
     service.acquireMap('w', nightLighting([]), STEP, 1, size);
-    service.setVolumeTops(0, walls, volume, {});
+    context.volumes.setLayerVolume(0, walls, volume, {}, { step: STEP, scale: 1 });
 
     const cone = service.addLight({
       kind: 'cone',
@@ -1482,7 +1501,7 @@ describe('lighting: фары и стены', () => {
 
     service.registerTextures(textures());
     service.acquireMap('w', nightLighting([{ cell: [5, 5], radius: 50 }]), STEP, 1, size);
-    service.setVolumeTops(0, column, 1, {});
+    context.volumes.setLayerVolume(0, column, 1, {}, { step: STEP, scale: 1 });
     service.addLight({
       kind: 'cone',
       level: 0,
@@ -1581,7 +1600,7 @@ describe('lighting: фары и стены', () => {
     expect(open.service.lightsAt(120, 48, 0)).toHaveLength(1);
   });
 
-  // засветка грани (этап 14 ревью): часть луча, упёршаяся в стену, — квады
+  // засветка грани: часть луча, упёршаяся в стену, — квады
   // на её видимой грани в карте уровня фары
   const groundOf = spy => spy.mock.contexts.find(map => map.level === 0);
   // квад грани скрыт — все шесть индексов равны его первой вершине
@@ -1711,7 +1730,7 @@ describe('lighting: фары и стены', () => {
   });
 });
 
-// Горка — препятствие фарам своего подножия (этап 14): полоса x 64..256,
+// Горка — препятствие фарам своего подножия: полоса x 64..256,
 // y 96..192, подъём на восток с уровня 0 на 1; клетка 32
 describe('lighting: фары и рампы', () => {
   const size = { cols: 20, rows: 20 };
@@ -1976,6 +1995,41 @@ describe('LevelLightMap: свет на клиньях', () => {
     expect(map.rampLightPool).toHaveLength(2);
     expect(map.rampLightPool[0]).toBe(first);
     expect(map.rampLightPool[1].visible).toBe(false);
+
+    map.destroy();
+  });
+
+  it('layoutWashes проецирует абсолютной высотой и прячет отвёрнутый квад', () => {
+    const map = make();
+    const wash = {
+      // верх a, верх b, низ a, низ b — стена уровня 1, засветка на 0.5
+      base: new Float32Array([10, 10, 20, 10, 10, 10, 20, 10]),
+      heights: new Float32Array([1.5, 1.5, 1, 1]),
+      uvs: new Float32Array(8),
+      indices: new Uint32Array([0, 1, 3, 0, 3, 2]),
+      normals: new Float32Array([0, 1]),
+      mids: new Float32Array([15, 10]),
+    };
+    const washItem = { wash, texture: Texture.WHITE, color: 0xffffff, alpha: 1 };
+
+    // грань смотрит на камеру
+    map.layoutWashes([washItem], { x: 15, y: 100 }, 0.2);
+
+    const [mesh] = map.washPool;
+    const { positions } = mesh.geometry;
+
+    // k = 1.5 · 0.2 у верха, k = 0.2 у низа
+    expect(positions[0]).toBeCloseTo(8.5, 5);
+    expect(positions[1]).toBeCloseTo(-17, 5);
+    expect(positions[4]).toBeCloseTo(9, 5);
+    expect(positions[5]).toBeCloseTo(-8, 5);
+    expect([...mesh.geometry.indices]).toEqual([...wash.indices]);
+
+    // грань отвёрнута — вырожденные индексы
+    map.layoutWashes([washItem], { x: 15, y: -100 }, 0.2);
+
+    expect([...mesh.geometry.indices]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(map.washPool).toHaveLength(1);
 
     map.destroy();
   });

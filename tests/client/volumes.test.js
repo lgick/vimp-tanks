@@ -59,4 +59,40 @@ describe('volumes', () => {
   it('без слоёв — 0', () => {
     expect(createVolumes().heightAt(0, 5, 5)).toBe(0);
   });
+
+  it('version растёт на вкладе и снятии известного слоя', () => {
+    const volumes = createVolumes();
+    const walls = {};
+
+    expect(volumes.version).toBe(0);
+
+    volumes.setLayerVolume(0, [[0, 0]], 1, walls, geometry);
+    expect(volumes.version).toBe(1);
+
+    volumes.release({});
+    expect(volumes.version).toBe(1);
+
+    volumes.release(walls);
+    expect(volumes.version).toBe(2);
+  });
+
+  it('levels() группирует вклады по уровням, release убирает владельца', () => {
+    const volumes = createVolumes();
+    const bridge = {};
+
+    volumes.setLayerVolume(0, [[0, 0]], 1, {}, geometry);
+    volumes.setLayerVolume(0, [[1, 0]], 0.35, {}, geometry);
+    volumes.setLayerVolume(1, [[2, 0]], 1, bridge, geometry);
+
+    const levels = volumes.levels();
+
+    expect([...levels.keys()].sort()).toEqual([0, 1]);
+    expect(levels.get(0)).toHaveLength(2);
+    expect(levels.get(1)).toEqual([{ cells: [[2, 0]], volume: 1 }]);
+
+    volumes.release(bridge);
+
+    expect(volumes.levels().has(1)).toBe(false);
+    expect(volumes.levels().get(0)).toHaveLength(2);
+  });
 });

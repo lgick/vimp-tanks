@@ -17,28 +17,28 @@ import {
   volume as volumeConfig,
 } from '../../config/render.js';
 import { offsetPoint } from '../parallax.js';
-import LevelLightMap from './LevelLightMap.js';
+import LevelLightMap, { hasLevelMap } from './LevelLightMap.js';
 import {
   EMISSIVE_BASE_Z,
   LAMP_HEAD_BASE_Z,
   buildLightGrid,
   cellCenter,
   cellRuns,
-  rampLight,
   flashFactor,
   flicker,
   isOnScreen,
   projectLight,
 } from './lightMath.js';
-import { createOcclusion, frameOf } from './occlusion.js';
+import { createOcclusion } from './occlusion.js';
+import { createRampLights } from './rampLights.js';
 import { createGlintQuery } from './glints.js';
 import { layoutShafts } from './shafts.js';
 
 // цвет полумрака, если карта его не задала
 const DEFAULT_AMBIENT = 0x3a4260;
 
-// ключи текстур, которые принимает сервис (7.3); `glint` и `shaft` —
-// засветы и лучи фонарей
+// ключи текстур, которые принимает сервис (`registerTextures`); `glint` и
+// `shaft` — засветы и лучи фонарей
 const TEXTURE_KEYS = ['radial', 'cone', 'head', 'glint', 'shaft'];
 
 // Область карт освещённости в мировых единицах: карта плюс запас на
@@ -63,7 +63,7 @@ export function lightArea(size, step, scale) {
 //
 // Два вида состояния:
 // - состояние КАРТЫ — оверлеи уровней, фонари (источники и головы), вклады
-//   масок этажей и крыш, вершины объёмов и клинья рамп (`tops`, `ramps`),
+//   масок этажей и крыш, клинья рамп (`ramps`),
 //   сетки препятствий фар (`map.blockers`, `map.rampCells`) и кеш вееров
 //   (`fans`). Живёт по ключу карты (`lightMath.mapKeyOf`), освобождается
 //   `clear()` и при переключении ключа;
@@ -71,9 +71,12 @@ export function lightArea(size, step, scale) {
 //   записи эмиссива, предметы-тени лучей (`setCaster`) и бюджет засветов
 //   на тик (`lightsAt`). Переживает смену карты: танки и эффекты — не части
 //   карты, движок уничтожает их отдельно, и снимают своё они сами.
+// Вершины объёмов и сетку препятствий фар сервис берёт из реестра `volumes`
+// (`deps.volumes`, src/client/volumes.js).
 export function createLighting(cfg = lightingConfig, deps = {}) {
   const enabled = Boolean(cfg.enabled);
   const levelView = deps.levelView || null;
+  const volumes = deps.volumes || null;
   const shear = deps.shear ?? parallaxConfig.shear;
 
   let stage = null;
@@ -97,8 +100,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   const masks = new Map();
   // то же для крыш (`game.roofs`): у них своя карта освещённости уровня
   const roofMasks = new Map();
-  // level -> Map(owner -> { cells, volume }) — вершины объёмов
-  const tops = new Map();
+  // вершины объёмов и сетка препятствий фар — из сервиса `volumes`
+  // (src/client/volumes.js); номер его правки, по которому они собраны
+  let volumesVersion = null;
   // level -> Map(owner -> lanes) — клинья рамп, ведущих с уровня вверх
   // (полосы `buildRampLanes`): на них светят источники уровня вершины
   const ramps = new Map();
@@ -118,13 +122,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     reachesPoint: occlusion.reachesPoint,
   });
 
-  // веер-прямоугольник текстуры источника без окклюзии: источник ->
-  // { key, fan } (`quadFanOf`)
-  const quads = new WeakMap();
-  // свет на клиньях: массив точек веера -> Map(полоса -> меш `rampLight`
-  // или null). Веер фары у стены и прямоугольник фонаря живут, пока
-  // источник стоит, — и меши вместе с ними
-  const rampMeshes = new WeakMap();
+  // свет на клиньях рамп: меши на источник и полосу, уровни подножия
+  const rampLights = createRampLights({ getMap: () => map, textures });
 
   const seeThroughCfg = () => levelView?.cfg || null;
 
@@ -186,6 +185,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       ambient: source.ambient ?? DEFAULT_AMBIENT,
       step,
       scale: mapScale,
+      // размер клетки в мировых единицах: сетки препятствий фар, веера и
+      // свет на клиньях
+      cellW: step * mapScale.x,
+      cellH: step * mapScale.y,
       area: lightArea(size, step, mapScale),
       cols: size?.cols ?? 0,
       rows: size?.rows ?? 0,
@@ -307,9 +310,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     releaseMapResources();
     masks.clear();
     roofMasks.clear();
-    tops.clear();
     ramps.clear();
     masksDirty = false;
+    volumesVersion = null;
     mapKey = null;
   };
 
@@ -318,9 +321,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   // все карты освещённости карты: обычные и крыш
   const allLevelMaps = () => [...map.levels.values(), ...map.roofLevels.values()];
 
-  // есть ли у уровня хоть одна карта освещённости — обычная или крыш:
-  // уровень может состоять из одних крыш, и его свет обязан дойти до них
-  const hasLevelMap = level => map.levels.has(level) || map.roofLevels.has(level);
+  // вклады объёмов по уровням: level -> [{ cells, volume }]
+  const volumeTops = () => volumes?.levels() ?? new Map();
 
   // объединение вкладов уровня без повторов: `[cells, keys]`, где `keys` —
   // Set('col,row'); клетки из `exclude` пропускаются
@@ -375,7 +377,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   const topGroupsOf = level => {
     const byVolume = new Map();
 
-    for (const { cells, volume } of tops.get(level)?.values() || []) {
+    for (const { cells, volume } of volumeTops().get(level) || []) {
       if (!byVolume.has(volume)) {
         byVolume.set(volume, []);
       }
@@ -390,6 +392,13 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   };
 
   const syncLevels = () => {
+    // вклады объёмов сменились (слой карты пришёл или ушёл) — вершины и
+    // сетка препятствий пересобираются, как при правке масок
+    if (volumes && volumes.version !== volumesVersion) {
+      volumesVersion = volumes.version;
+      masksDirty = true;
+    }
+
     const dirty = masksDirty;
 
     if (masksDirty) {
@@ -434,7 +443,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
     // вершины объёмов и клинья рамп — в обычную карту своего уровня
     if (dirty) {
-      occlusion.sync(tops, ramps);
+      occlusion.sync(volumeTops(), ramps);
 
       for (const levelMap of map.levels.values()) {
         levelMap.setTops(topGroupsOf(levelMap.level), map.step, map.scale);
@@ -544,100 +553,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     item.rampFan = occluded.fan;
   };
 
-  // Веер-прямоугольник текстуры источника (вершина и четыре угла,
-  // замкнут) — свету на клине нужен веер и там, где окклюзии нет: фонарь,
-  // вспышка, фара без стен рядом
-  const quadFanOf = (light, asset) => {
-    const key = `${light.kind},${light.x},${light.y},${light.rotation},${light.radius},${light.spread}`;
-    const cached = quads.get(light);
-
-    if (cached && cached.key === key && cached.texture === asset.texture) {
-      return cached.fan;
-    }
-
-    const frame = frameOf(light, asset);
-    const cos = Math.cos(frame.rotation);
-    const sin = Math.sin(frame.rotation);
-    const back = -frame.margin * frame.sx;
-    const front = (frame.width - frame.margin) * frame.sx;
-    const side = (frame.height / 2) * frame.sy;
-    const points = new Float32Array(10);
-
-    points[0] = frame.x;
-    points[1] = frame.y;
-
-    [
-      [back, -side],
-      [front, -side],
-      [front, side],
-      [back, side],
-    ].forEach(([along, across], i) => {
-      points[(i + 1) * 2] = frame.x + along * cos - across * sin;
-      points[(i + 1) * 2 + 1] = frame.y + along * sin + across * cos;
-    });
-
-    const fan = { points, closed: true, frame };
-
-    quads.set(light, { key, texture: asset.texture, fan });
-
-    return fan;
-  };
-
-  // Свет источника на клиньях `lanes` в проекции клина — в `target`
-  // (level подножия -> items). Веер — окклюзии фары (`item.rampFan`) или
-  // прямоугольник текстуры. Возвращает, задел ли свет хоть один клин
-  const pushRampLights = (target, level, lanes, light, item, alpha) => {
-    if (!lanes?.length) {
-      return false;
-    }
-
-    const asset = light.kind === 'cone' ? textures.cone : textures.radial;
-    const fan = item.rampFan ?? quadFanOf(light, asset);
-    let byLane = rampMeshes.get(fan.points);
-
-    if (!byLane) {
-      byLane = new Map();
-      rampMeshes.set(fan.points, byLane);
-    }
-
-    let added = false;
-
-    for (const lane of lanes) {
-      if (!byLane.has(lane)) {
-        byLane.set(
-          lane,
-          rampLight({
-            points: fan.points,
-            closed: fan.closed,
-            lane,
-            frame: fan.frame,
-            cellW: map.step * map.scale.x,
-            cellH: map.step * map.scale.y,
-            segmentsPerCell: volumeConfig.rampSegments,
-          }),
-        );
-      }
-
-      const ramp = byLane.get(lane);
-
-      if (ramp) {
-        if (!target.has(level)) {
-          target.set(level, []);
-        }
-
-        target.get(level).push({
-          ramp,
-          texture: item.texture,
-          color: item.color,
-          alpha,
-        });
-        added = true;
-      }
-    }
-
-    return added;
-  };
-
   const layoutLights = (camera, screen, now) => {
     const perLevel = new Map();
     // свет на клиньях рамп в проекции клина — источников уровня подножия
@@ -649,17 +564,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
     // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
     // его источники в `rampLights`
-    const rampTargets = new Map();
-
-    for (const levelMap of map.levels.values()) {
-      for (const top of levelMap.rampLevels()) {
-        if (!rampTargets.has(top)) {
-          rampTargets.set(top, []);
-        }
-
-        rampTargets.get(top).push(levelMap.level);
-      }
-    }
+    const rampTargets = rampLights.targets();
 
     const spill = cfg.rampSpill ?? 1;
     const bounces = [];
@@ -668,7 +573,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     // проекция одна (по `z`), лимит считается по добавленным спрайтам
     const push = (light, factor) => {
       const own = light.levels ?? [light.level];
-      const levels = own.filter(hasLevelMap);
+      const levels = own.filter(level => hasLevelMap(map, level));
       // подножия рамп, ведущих на уровни источника. Уровень, в чью карту
       // источник уже светит (танк на рампе — `levels [0, 1]`), не
       // получает его второй раз
@@ -711,7 +616,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
         perWash.get(washLevel).push({
           wash: item.wash,
-          level: washLevel,
           texture: item.texture,
           color: item.color,
           alpha: item.alpha * cfg.headlights.wash.intensity,
@@ -733,7 +637,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         // на клиньях рамп своего уровня свет источника — в проекции клина
         // (обычные источники там закрыты инверсной маской). В `maxLights`
         // не входит: это тот же источник
-        pushRampLights(
+        rampLights.push(
           perRamp,
           level,
           map.levels.get(level)?.ramps,
@@ -753,7 +657,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
           ?.ramps.filter(lane => own.includes(lane.to));
 
         if (
-          pushRampLights(perRamp, level, lanes, light, item, item.alpha * spill)
+          rampLights.push(perRamp, level, lanes, light, item, item.alpha * spill)
         ) {
           count += 1;
         }
@@ -954,7 +858,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       }
 
       if (owner !== undefined) {
-        for (const registry of [masks, roofMasks, tops, ramps]) {
+        for (const registry of [masks, roofMasks, ramps]) {
           for (const byOwner of registry.values()) {
             if (byOwner.delete(owner)) {
               masksDirty = true;
@@ -1000,26 +904,6 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         registry.get(level).set(owner, cells);
       } else {
         registry.get(level).delete(owner);
-      }
-
-      masksDirty = true;
-    },
-
-    // вклад части в вершины объёмов уровня: клетки тайлов объёма и его
-    // высота в уровнях. Снимается `releaseMap` вместе с масками
-    setVolumeTops(level, cells, volume, owner) {
-      if (!enabled || !(level >= 0)) {
-        return;
-      }
-
-      if (!tops.has(level)) {
-        tops.set(level, new Map());
-      }
-
-      if (cells && cells.length > 0 && volume > 0) {
-        tops.get(level).set(owner, { cells, volume });
-      } else {
-        tops.get(level).delete(owner);
       }
 
       masksDirty = true;
@@ -1269,7 +1153,8 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         key.scaleY === stage.scale.y &&
         key.width === screen.width &&
         key.height === screen.height &&
-        !masksDirty
+        !masksDirty &&
+        volumesVersion === (volumes ? volumes.version : null)
       ) {
         return;
       }

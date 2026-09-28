@@ -8,7 +8,7 @@ import {
   rampBlocks,
   rampHeight,
   wallWash,
-} from './lightMath.js';
+} from './lightGeometry.js';
 
 // отступ отсвета фары от стены в долях его радиуса
 const BOUNCE_PULL = 0.6;
@@ -61,9 +61,9 @@ export function createOcclusion({ getMap, cfg }) {
 
   // Сетка препятствий свету фар: на уровень — клетки его объёмов с высотой
   // (стены зданий, канала, перила; то же, что закрывают вершины `setTops`)
-  // и клетки рамп, ведущих с него вверх. `tops`/`ramps` — вклады частей
-  // сервиса: level -> Map(owner -> { cells, volume }) и level -> Map(owner
-  // -> lanes)
+  // и клетки рамп, ведущих с него вверх. `tops` — вклады объёмов из реестра
+  // `volumes` (`levels()`): level -> [{ cells, volume }]; `ramps` — вклады
+  // частей сервиса: level -> Map(owner -> lanes)
   const sync = (tops, ramps) => {
     const map = getMap();
 
@@ -128,8 +128,7 @@ export function createOcclusion({ getMap, cfg }) {
     const level = light.level ?? 0;
     const grid = map.blockers.get(level) || null;
     const { cols, rows } = map;
-    const cellW = map.step * map.scale.x;
-    const cellH = map.step * map.scale.y;
+    const { cellW, cellH } = map;
     const indexOf = (col, row) =>
       col >= 0 && col < cols && row >= 0 && row < rows ? row * cols + col : -1;
     const ramp = map.rampCells.get(level) || null;
@@ -187,8 +186,7 @@ export function createOcclusion({ getMap, cfg }) {
     const map = getMap();
     const level = light.level ?? 0;
     const { cols, rows } = map;
-    const cellW = map.step * map.scale.x;
-    const cellH = map.step * map.scale.y;
+    const { cellW, cellH } = map;
     const cos = Math.cos(rotation);
     const sin = Math.sin(rotation);
     let minX = Infinity;
@@ -233,8 +231,8 @@ export function createOcclusion({ getMap, cfg }) {
   const volumeAt = (level, x, y) => {
     const map = getMap();
     const grid = map.blockers.get(level);
-    const col = Math.floor(x / (map.step * map.scale.x));
-    const row = Math.floor(y / (map.step * map.scale.y));
+    const col = Math.floor(x / map.cellW);
+    const row = Math.floor(y / map.cellH);
 
     if (!grid || col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
       return 0;
@@ -247,8 +245,7 @@ export function createOcclusion({ getMap, cfg }) {
   const rampHeightAt = (level, x, y) => {
     const map = getMap();
     const ramp = map.rampCells.get(level);
-    const cellW = map.step * map.scale.x;
-    const cellH = map.step * map.scale.y;
+    const { cellW, cellH } = map;
     const col = Math.floor(x / cellW);
     const row = Math.floor(y / cellH);
 
@@ -291,8 +288,7 @@ export function createOcclusion({ getMap, cfg }) {
     }
 
     const map = getMap();
-    const cellW = map.step * map.scale.x;
-    const cellH = map.step * map.scale.y;
+    const { cellW, cellH } = map;
     const frame = frameOf(light, asset);
     const alongMax = (frame.width - frame.margin) * frame.sx;
     const alongBack = frame.margin * frame.sx;
@@ -367,6 +363,7 @@ export function createOcclusion({ getMap, cfg }) {
               cellW,
               cellH,
               height: wash.height,
+              level,
             })
           : null,
     };
@@ -404,8 +401,8 @@ export function createOcclusion({ getMap, cfg }) {
         (y - light.y) / distance,
         distance,
         isBlocked,
-        map.step * map.scale.x,
-        map.step * map.scale.y,
+        map.cellW,
+        map.cellH,
       ) >= distance
     );
   };

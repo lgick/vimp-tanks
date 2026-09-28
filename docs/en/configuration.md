@@ -242,7 +242,7 @@ it changes both sides at once.
 | --- | --- |
 | `enabled` | `false` switches layer extrusion and the ramp wedge off entirely — the fallback path on a weak machine |
 | `faces` | `true` (default) draws a volume as one solid piece: the side walls as a mesh (one quad per exposed cell side, inner edges skipped) plus a single copy of the layer at the top height. A wall does NOT sample the layer's baked picture — every tile gets its own side texture, a strip of `ceil(volume · faceTilesPerLevel)` copies of its image, fixed to the wall like a GTA 2 block face: the tile spans the wall once across and `volume · faceTilesPerLevel` times down, so bricks stretch and squeeze with the projection (flattened near the screen centre, elongated toward its edges) and no rows appear or vanish at the base. `false` falls back to the stack of `slices` copies, whose steps show at the screen edge and with the camera zoomed out |
-| `faceTilesPerLevel` | Copies of the tile image per level of wall height (default `2`). The texture is fixed to the wall, so a brick keeps the tile's proportions only at `faceTilesPerLevel · cell / shear` from the camera centre (≈ 116 world units on `downtown` at `2`, ~0.6 of the half-screen); nearer it is flattened, farther it is elongated. Hardware texture repeat is not used — a batched mesh clamps the coordinates instead, which smeared the tile's edge column into horizontal stripes — so each volume tile costs one `step × step·ceil(volume · faceTilesPerLevel)` strip texture |
+| `faceTilesPerLevel` | Copies of the tile image per level of wall height (default `3`). The texture is fixed to the wall, so a brick keeps the tile's proportions only at `faceTilesPerLevel · cell / shear` from the camera centre (≈ 175 world units on `downtown` at `3`, ~0.9 of the half-screen); nearer it is flattened, farther it is elongated. Hardware texture repeat is not used — a batched mesh clamps the coordinates instead, which smeared the tile's edge column into horizontal stripes — so each volume tile costs one `step × step·ceil(volume · faceTilesPerLevel)` strip texture |
 | `faceSegments` | Mesh rows per level of wall height (default `4`). The parallax shift across a wall is bilinear, and a two-triangle quad bent the vertical brick joints along its diagonal (up to ~0.7 world units on a one-level wall); 4 rows bring that under a pixel |
 | `faceBleedPx` | How far, in SCREEN pixels, a side wall reaches above the volume's top. The top is a sprite and the wall is a mesh, so at a fractional stage scale a one-pixel crack opens between the two rasterisations and the seam flickers; the overlap hides under the top, which is drawn later. Screen pixels rather than world units because the engine zooms the camera out with speed — a world-sized margin stopped covering the crack once the camera pulled back. `0` brings the flicker back |
 | `slices` | With `faces: false` — the number of layer copies, i.e. `slices` draw calls per layer; unused with `faces: true`, but `0` still turns extrusion off. Layer VOLUMES only (buildings, railings) |
@@ -381,15 +381,15 @@ Roofs (`game.roofs`, [below](#roofs-gameroofs)) get a light map of their own
 per level, with the same sources as the level's ordinary map; the ordinary
 floor mask leaves roof cells out. Its hole opens only while a roof covers the
 drawn point of the local tank, not whenever the player is lower. A level's
-map also covers the tops of its volumes: over the sources it draws the cells
-of every volume tile in the projection `(L + volume) · shear` in `ambient`.
+map also covers the tops of its volumes (their cells come from the `volumes`
+service): over the sources it draws the cells of every volume tile in the projection `(L + volume) · shear` in `ambient`.
 Headlights of a tank on the ground still light the side walls, but not the
 top of a building.
 
 The service (`componentDependencies.lighting`: `Map`, `Tank`,
 `ExplosionEffect`, `ShotEffect`) exposes `enabled`, `attachStage`,
 `acquireMap`/`releaseMap` (per-key counter, owner-bound mask),
-`setLevelMask` (with `{ roof }`), `setVolumeTops`, `setRampWedges`, `registerTextures`, `texture`,
+`setLevelMask` (with `{ roof }`), `setRampWedges`, `registerTextures`, `texture`,
 `addLight`/`updateLight`/`removeLight`, `flash`,
 `addEmissive`/`removeEmissive`, `isNight`, `lightsAt` (the strongest
 sources at a world point of a level — lamps through a cell grid, cones,

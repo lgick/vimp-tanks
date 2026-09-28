@@ -11,11 +11,8 @@ import {
 import { levelZ } from '../levelZ.js';
 import { applyParallax } from '../parallax.js';
 import { createHole, dispose as disposeHole } from '../parts/map/holeOverlay.js';
-import {
-  LIGHT_OVERLAY_BASE_Z,
-  fanIndices,
-  rampWedgePolygon,
-} from './lightMath.js';
+import { LIGHT_OVERLAY_BASE_Z } from './lightMath.js';
+import { fanIndices, rampWedgePolygon } from './lightGeometry.js';
 
 const WHITE = 0xffffff;
 
@@ -297,28 +294,20 @@ export default class LevelLightMap {
     layoutFans(this.fanPool, this.lights, items.filter(item => item.fan));
   }
 
-  // Засветка граней стен фарами: `items` — `{ wash, level, texture, color,
-  // alpha }`, где `wash` — квады `wallWash` в мировых единицах. Оверлей
-  // мировой, без трансформа, поэтому вершины проецируются здесь:
-  // `p + (p − cam)·k`, `k = (level + высота вершины)·shear`. UV и индексы
+  // Засветка граней стен фарами: `items` — `{ wash, texture, color, alpha }`,
+  // где `wash` — квады `wallWash` в мировых единицах. Оверлей мировой, без
+  // трансформа, поэтому вершины проецируются здесь: `p + (p − cam)·k`,
+  // `k = высота вершины·shear` (высоты абсолютные, `wallWash`). UV и индексы
   // заливаются только на смене засветки; квад грани, отвёрнутой от камеры
   // (она под крышей), получает вырожденные индексы — переписываются они
   // только при смене видимости, как в `orderWallMesh`
   layoutWashes(items, camera, shear) {
-    while (this.washPool.length < items.length) {
-      const geometry = new MeshGeometry({
-        positions: new Float32Array(8),
-        uvs: new Float32Array(8),
-        indices: new Uint32Array(6),
-      });
-      const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
-
-      mesh.blendMode = 'add';
-      mesh.wash = null;
-      mesh.facing = null;
-      this.washPool.push(mesh);
-      this.lights.addChild(mesh);
-    }
+    growMeshPool(
+      this.washPool,
+      this.lights,
+      items.length,
+      () => new Uint32Array(6),
+    );
 
     for (let i = 0; i < this.washPool.length; i += 1) {
       const mesh = this.washPool[i];
@@ -341,19 +330,12 @@ export default class LevelLightMap {
       }
 
       const positions = geometry.positions;
-      const { base, heights, normals, mids } = wash;
 
-      for (let v = 0; v < heights.length; v += 1) {
-        const x = base[v * 2];
-        const y = base[v * 2 + 1];
-        const k = camera ? (item.level + heights[v]) * shear : 0;
-
-        positions[v * 2] = camera ? x + (x - camera.x) * k : x;
-        positions[v * 2 + 1] = camera ? y + (y - camera.y) * k : y;
-      }
-
+      projectVertices(positions, wash.base, wash.heights, camera, shear);
       // тот же массив: сеттер буфера только отмечает обновление
       geometry.positions = positions;
+
+      const { normals, mids } = wash;
 
       const indices = geometry.indices;
       let changed = false;
@@ -383,10 +365,7 @@ export default class LevelLightMap {
         geometry.indices = indices;
       }
 
-      mesh.visible = true;
-      mesh.texture = item.texture;
-      mesh.tint = item.color;
-      mesh.alpha = item.alpha;
+      showLight(mesh, item);
     }
   }
 
@@ -396,19 +375,12 @@ export default class LevelLightMap {
   // cam)·k`, `k = высота·shear`. UV и индексы заливаются только на смене
   // меша
   layoutRampLights(items, camera, shear) {
-    while (this.rampLightPool.length < items.length) {
-      const geometry = new MeshGeometry({
-        positions: new Float32Array(6),
-        uvs: new Float32Array(6),
-        indices: new Uint32Array(3),
-      });
-      const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
-
-      mesh.blendMode = 'add';
-      mesh.ramp = null;
-      this.rampLightPool.push(mesh);
-      this.rampLights.addChild(mesh);
-    }
+    growMeshPool(
+      this.rampLightPool,
+      this.rampLights,
+      items.length,
+      () => new Uint32Array(3),
+    );
 
     for (let i = 0; i < this.rampLightPool.length; i += 1) {
       const mesh = this.rampLightPool[i];
@@ -430,24 +402,12 @@ export default class LevelLightMap {
       }
 
       const positions = geometry.positions;
-      const { base, heights } = ramp;
 
-      for (let v = 0; v < heights.length; v += 1) {
-        const x = base[v * 2];
-        const y = base[v * 2 + 1];
-        const k = camera ? heights[v] * shear : 0;
-
-        positions[v * 2] = camera ? x + (x - camera.x) * k : x;
-        positions[v * 2 + 1] = camera ? y + (y - camera.y) * k : y;
-      }
-
+      projectVertices(positions, ramp.base, ramp.heights, camera, shear);
       // тот же массив: сеттер буфера только отмечает обновление
       geometry.positions = positions;
 
-      mesh.visible = true;
-      mesh.texture = item.texture;
-      mesh.tint = item.color;
-      mesh.alpha = item.alpha;
+      showLight(mesh, item);
     }
   }
 
@@ -565,6 +525,54 @@ export default class LevelLightMap {
   }
 }
 
+// Есть ли у уровня карта освещённости — обычная или крыш (`map` —
+// состояние карты сервиса `lighting`): уровень может состоять из одних
+// крыш, и его свет обязан дойти до них
+export function hasLevelMap(map, level) {
+  return map.levels.has(level) || map.roofLevels.has(level);
+}
+
+// Пул мешей-добавок света в `container`: растёт до `count`. Меш — режим
+// `add`, пустая текстура; `indices()` — индексы новой геометрии (у
+// каждого меша свой массив). Лишние меши прячет вызывающий
+function growMeshPool(pool, container, count, indices) {
+  while (pool.length < count) {
+    const geometry = new MeshGeometry({
+      positions: new Float32Array(6),
+      uvs: new Float32Array(6),
+      indices: indices(),
+    });
+    const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
+
+    mesh.blendMode = 'add';
+    pool.push(mesh);
+    container.addChild(mesh);
+  }
+}
+
+// меш-добавка кадра: видим, с текстурой, цветом и силой источника
+function showLight(mesh, item) {
+  mesh.visible = true;
+  mesh.texture = item.texture;
+  mesh.tint = item.color;
+  mesh.alpha = item.alpha;
+}
+
+// Вершины меша с повершинной высотой в мировом оверлее: точка `p` с
+// абсолютной высотой `z` (уровни) ложится в `p + (p − cam)·z·shear` — та
+// же формула, что у `offsetPoint` (src/client/parallax.js). Без камеры —
+// мировая точка. Не для срезов extrusion.js: там `heights` — уже `k`
+function projectVertices(positions, base, heights, camera, shear) {
+  for (let v = 0; v < heights.length; v += 1) {
+    const x = base[v * 2];
+    const y = base[v * 2 + 1];
+    const k = camera ? heights[v] * shear : 0;
+
+    positions[v * 2] = camera ? x + (x - camera.x) * k : x;
+    positions[v * 2 + 1] = camera ? y + (y - camera.y) * k : y;
+  }
+}
+
 // спрайты источников переиспользуются между кадрами: число видимых
 // источников меняется, объекты — нет
 function layoutPool(pool, container, items) {
@@ -601,20 +609,7 @@ function layoutPool(pool, container, items) {
 // стоит; проекцию высоты даёт трансформ меша `p·scale + (x, y)` — ровно
 // `offsetPoint`
 function layoutFans(pool, container, items) {
-  while (pool.length < items.length) {
-    const geometry = new MeshGeometry({
-      positions: new Float32Array(6),
-      uvs: new Float32Array(6),
-      indices: fanIndices(2),
-    });
-    const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
-
-    mesh.blendMode = 'add';
-    mesh.shape = null;
-    mesh.topology = null;
-    pool.push(mesh);
-    container.addChild(mesh);
-  }
+  growMeshPool(pool, container, items.length, () => fanIndices(2));
 
   for (let i = 0; i < pool.length; i += 1) {
     const mesh = pool[i];
@@ -645,11 +640,8 @@ function layoutFans(pool, container, items) {
       mesh.shape = shape;
     }
 
-    mesh.visible = true;
-    mesh.texture = item.texture;
+    showLight(mesh, item);
     mesh.position.set(fan.x, fan.y);
     mesh.scale.set(fan.scale);
-    mesh.tint = item.color;
-    mesh.alpha = item.alpha;
   }
 }
