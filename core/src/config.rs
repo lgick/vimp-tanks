@@ -45,6 +45,11 @@ pub struct Fixture {
 pub struct ModelConfig {
     pub current_weapon: String,
     pub size: f32,
+    /// Высота ствола над полом, мировые единицы (`barrelHeight`): пуля hitscan
+    /// летит на ней (`shot_height::bullet_line`). Нет в конфиге — 0, пуля у
+    /// самого пола.
+    #[serde(default)]
+    pub barrel_height: f32,
     pub acceleration_factor: f32,
     pub braking_factor: f32,
     pub max_forward_speed: f32,

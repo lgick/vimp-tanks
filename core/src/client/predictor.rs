@@ -170,6 +170,9 @@ pub struct RenderState {
     /// предсказанные теми же правилами, что считает хост
     pub z: f32,
     pub level: u8,
+    /// уклон под корпусом (`LevelState::slope_vec` реплики): по нему пуля
+    /// стоящего на склоне идёт вдоль склона (`shot_height::bullet_line`)
+    pub slope_vec: [f32; 2],
     /// танк падает (ввод заблокирован): правило уровня сброшенной бомбы
     /// (`level::bomb_level`) обязано видеть его так же, как хост
     pub falling: bool,
@@ -1008,6 +1011,7 @@ impl Predictor {
             angvel: self.state.angvel,
             z: self.level_state.z,
             level: self.level_state.level,
+            slope_vec: self.level_state.slope_vec,
             falling: self.level_state.input_locked(),
             pitch: self.pitch,
             roll: self.roll,

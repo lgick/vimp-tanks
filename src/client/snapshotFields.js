@@ -36,6 +36,13 @@ export const W1_END_LEVEL = 9;
 // хвост сверх схемы: якорь попадания, который дописывает клиентское ядро
 // (core/src/client/mod.rs) — по сети он не едет
 export const W1_ANCHOR = 10;
+// значения W1_WAS_HIT — зеркало `HIT_*` в core/src/shot_height.rs
+export const W1_HIT_NONE = 0;
+export const W1_HIT_TARGET = 1;
+// склон рампы сверху: высота пули в точке — высота склона
+export const W1_HIT_SLOPE = 2;
+// грань насыпи (борт или торец снаружи): рисуется как грань стены
+export const W1_HIT_EMBANKMENT_FACE = 3;
 
 // w2 — бомба (event)
 export const W2_X = 0;

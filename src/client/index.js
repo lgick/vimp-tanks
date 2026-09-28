@@ -12,7 +12,7 @@ import { createLighting } from './lighting/createLighting.js';
 import { createShotEvents } from './shotEvents.js';
 import { createBlastEvents } from './blastEvents.js';
 import { createVolumes } from './volumes.js';
-import { rampSurfaceAt } from './rampSurface.js';
+import { rampFaceAt, rampSlopeAt, rampSurfaceAt } from './rampSurface.js';
 
 // стрелка клетки по индексу `surface_dir_at`: север/юг/запад/восток, как у
 // рамп (north = −y, east = +x)
@@ -148,6 +148,16 @@ export default {
           // выстрела кладёт осколки на склон
           heightAt(level, x, y) {
             return rampSurfaceAt(allRuns(), level, x, y);
+          },
+          // склон под точкой `{ height, axis }` (src/client/rampSurface.js); по
+          // нему конец выстрела в склон ложится на склон на высоте пули
+          slopeAt(level, x, y) {
+            return rampSlopeAt(allRuns(), level, x, y);
+          },
+          // грань насыпи под концом луча `{ face, volume }` (src/client/rampSurface.js);
+          // по ней выстрел в борт рисуется как в стену
+          faceAt(level, x, y, dx, dy, tolerance) {
+            return rampFaceAt(allRuns(), level, x, y, dx, dy, tolerance);
           },
         },
         // поверхности клеток из ядра: та же таблица, по которой физика

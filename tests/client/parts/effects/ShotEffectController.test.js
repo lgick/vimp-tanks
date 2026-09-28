@@ -4,8 +4,17 @@ import ShotEffectController from '../../../../src/client/parts/effects/shot/Shot
 import { parallax, tracer } from '../../../../src/config/render.js';
 import { cameraCenter } from '../../../../src/client/camera.js';
 import { OCCLUDER_BASE_Z, levelZ } from '../../../../src/client/levelZ.js';
-import { raisedPoint } from '../../../../src/client/wallFace.js';
-import { offsetPoint } from '../../../../src/client/parallax.js';
+import { offsetPoint, reproject } from '../../../../src/client/parallax.js';
+import {
+  rampSurfaceAt,
+  rampSlopeAt,
+  rampFaceAt,
+} from '../../../../src/client/rampSurface.js';
+import { crossingDistance } from '../../../../src/client/wallFace.js';
+import {
+  W1_HIT_SLOPE,
+  W1_HIT_EMBANKMENT_FACE,
+} from '../../../../src/client/snapshotFields.js';
 
 // Проверяется проводка якоря попадания, а не отрисовка: контроллер обязан
 // пересчитать точку удара по ТЕКУЩЕМУ трансформу задетого ящика и уметь
@@ -501,7 +510,7 @@ describe('ShotEffectController: попадание в грань стены', ()
 
     controller.run();
 
-    const end = raisedPoint(
+    const end = reproject(
       96,
       40,
       { x: 0, y: 40 },
@@ -604,14 +613,22 @@ describe('ShotEffectController: попадание в грань стены', ()
   });
 });
 
+// подъём 0 → 1 вдоль +x на [64, 128], полоса по y 16..80
+const runs = [
+  { axis: 0, sign: 1, from: 0, to: 1, min: 64, max: 128, crossMin: 16, crossMax: 80 },
+];
+// сервис rampRuns на настоящих функциях src/client/rampSurface.js
+const makeRampRuns = () => ({
+  heightAt: vi.fn((level, x, y) => rampSurfaceAt(runs, level, x, y)),
+  slopeAt: vi.fn((level, x, y) => rampSlopeAt(runs, level, x, y)),
+  faceAt: vi.fn((...args) => rampFaceAt(runs, ...args)),
+});
+
 describe('ShotEffectController: осколки на склоне рампы', () => {
-  // выстрел с земли, попадание у верха рампы
-  const row = [10, 40, 120, 40, 0, 0, true, 1, 0, 0];
+  // попадание в танк на склоне у верха рампы: танк виден лучам обоих
+  // уровней, и его осколки лежат на склоне
+  const row = [10, 40, 120, 40, 10, 40, 1, 1, 0, 0];
   const renderer = { screen: { width: 800, height: 600 } };
-  // подъём 0 → 1 вдоль +x на [64, 128]
-  const makeRampRuns = () => ({
-    heightAt: vi.fn((level, x) => (x >= 64 && x <= 128 ? (x - 64) / 64 : null)),
-  });
   // центр камеры в (camX, 40): сцена сдвинута на полэкрана
   const rampShot = (camX, { data = row, ...dependencies } = {}) => {
     const controller = makeController(data, { renderer, ...dependencies });
@@ -724,5 +741,114 @@ describe('ShotEffectController: осколки на склоне рампы', ()
     expect(controller.impact.parent).not.toBe(controller);
     expect(controller.impact.parent.label).toBe('shot-impact');
     expect(rampRuns.heightAt).not.toHaveBeenCalled();
+  });
+});
+
+describe('ShotEffectController: выстрел в насыпь рампы', () => {
+  const WALL_HIT_Z = levelZ(OCCLUDER_BASE_Z + 0.5, 0);
+  const renderer = { screen: { width: 800, height: 600 } };
+  // ядро остановило пулю на склоне x = 76 (склон там 12/64)
+  const slopeRow = [10, 40, 76, 40, 10, 40, W1_HIT_SLOPE, 1, 0, 0];
+  // выстрел на север в борт y = 80
+  const faceRow = [96, 100, 96, 80, 96, 100, W1_HIT_EMBANKMENT_FACE, 1, 0, 0];
+  // центр камеры в `camera`: сцена сдвинута на полэкрана
+  const embankmentShot = (camera, data, dependencies = {}) => {
+    let stage = null;
+    const levelView = {
+      camera: () => cameraCenter(stage, renderer),
+      alphaFor: () => 1,
+      tintFor: () => 0xffffff,
+    };
+    const controller = makeController(data, {
+      levelView,
+      renderer,
+      ...dependencies,
+    });
+
+    stage = controller.parent;
+    stage.position.set(400 - camera.x, 300 - camera.y);
+    controller.run();
+
+    return controller;
+  };
+
+  it('склон: конец на склоне на высоте пули, осколки там же', () => {
+    const camera = { x: 0, y: 40 };
+    const rampRuns = makeRampRuns();
+    const controller = embankmentShot(camera, slopeRow, { rampRuns });
+    const end = reproject(76, 40, camera, 0, (12 / 64) * parallax.shear);
+
+    expect(rampRuns.slopeAt).toHaveBeenCalledWith(0, 76, 40);
+    expect(controller.tracer.endPositionX).toBeCloseTo(end.x, 6);
+    expect(controller.tracer._stopLine).toEqual({
+      axis: 'x',
+      coord: controller.tracer.endPositionX,
+    });
+    expect(controller.endPositionX).toBe(76);
+
+    finishTracer(controller);
+
+    expect(controller.impact.parent).toBe(controller);
+    expect(controller.impact.x).toBe(76);
+  });
+
+  it('грань насыпи к камере: конец на высоте ствола, искры в слое shot-impact', () => {
+    const camera = { x: 96, y: 200 };
+    const controller = embankmentShot(camera, faceRow, {
+      rampRuns: makeRampRuns(),
+    });
+    const end = reproject(96, 80, camera, 0, tracer.height * parallax.shear);
+
+    expect(controller.zIndex).toBe(WALL_HIT_Z);
+    expect(controller.tracer.endPositionY).toBeCloseTo(end.y, 6);
+
+    finishTracer(controller);
+
+    expect(controller.impact.parent.label).toBe('shot-impact');
+  });
+
+  it('грань насыпи от камеры: обрыв на силуэте', () => {
+    const camera = { x: 96, y: 0 };
+    const controller = embankmentShot(camera, faceRow, {
+      rampRuns: makeRampRuns(),
+    });
+    // верх борта над x = 96: (96 − 64)/64 = 0.5 уровня
+    const t = crossingDistance({
+      x0: 96,
+      y0: 100,
+      dx: 0,
+      dy: -1,
+      face: { axis: 'y', coord: 80, nx: 0, ny: 1 },
+      camera,
+      kBase: 0,
+      kLine: 0.5 * parallax.shear,
+    });
+
+    expect(t).toBeGreaterThan(0);
+    expect(t).toBeLessThan(20);
+    expect(controller.tracer.endPositionY).toBeCloseTo(100 - t, 6);
+  });
+
+  it('без сервиса rampRuns — прежнее поведение', () => {
+    const slope = embankmentShot({ x: 0, y: 40 }, slopeRow);
+
+    expect(slope.tracer.endPositionX).toBe(76);
+    expect(slope.tracer._stopLine).toBeNull();
+
+    const face = embankmentShot({ x: 96, y: 200 }, faceRow);
+
+    expect(face.tracer.endPositionY).toBe(80);
+    expect(face.tracer._stopLine).toBeNull();
+  });
+
+  it('код 1 — конец не переносится', () => {
+    const controller = embankmentShot(
+      { x: 0, y: 40 },
+      [10, 40, 76, 40, 10, 40, 1, 1, 0, 0],
+      { rampRuns: makeRampRuns() },
+    );
+
+    expect(controller.tracer.endPositionX).toBe(76);
+    expect(controller.tracer._stopLine).toBeNull();
   });
 });

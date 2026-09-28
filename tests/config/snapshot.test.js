@@ -20,8 +20,11 @@ describe('snapshotFields.js согласован со схемой snapshot.js',
   for (const [prefix, key] of Object.entries(blocks)) {
     it(`${key}: имя поля по индексу совпадает с суффиксом константы`, () => {
       const schemaFields = snapshot[key].fields;
+      // W1_HIT_* — значения поля wasHit, а не индексы полей
       const constants = Object.entries(fields).filter(
-        ([name]) => name.slice(0, name.indexOf('_')) === prefix,
+        ([name]) =>
+          name.slice(0, name.indexOf('_')) === prefix &&
+          !name.startsWith('W1_HIT_'),
       );
 
       expect(constants.length).toBeGreaterThan(0);

@@ -74,6 +74,7 @@ export default {
       { name: 'endY', ty: 'f32' },
       { name: 'bodyX', ty: 'f32' },
       { name: 'bodyY', ty: 'f32' },
+      // код попадания: `W1_HIT_*` (src/client/snapshotFields.js)
       { name: 'wasHit', ty: 'u8' },
       { name: 'shooterId', ty: 'u8' },
       // 2.5D: уровень начала и конца луча. Клиент мог бы вывести оба сам

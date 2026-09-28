@@ -4,6 +4,7 @@ use std::f32::consts::PI;
 use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::shot_height::bullet_line;
 use crate::tanks::BotView;
 use vimp_engine_core::map::{level_group, levels_interaction_on_ramp};
 use vimp_engine_core::nav::navigation::PathPoint;
@@ -598,6 +599,29 @@ impl BotBrain {
             if !crate::shot_levels::covers_level(&segments, direction.length(), target_level) {
                 return;
             }
+
+            // насыпь рампы выше пули закрывает цель (`shot_height`): танк высоко на
+            // рампе с земли не достать — не тратим выстрел, путь приведёт к нему
+            let bullet = bullet_line(
+                tank.level_state.z,
+                tank.level_state.slope_vec,
+                [dir.x, dir.y],
+                tank.barrel_height(),
+                0.0,
+                levels.level_height(),
+            );
+
+            if crate::shot_height::first_embankment_hit(
+                levels,
+                &segments,
+                [my_position.x, my_position.y],
+                [dir.x, dir.y],
+                &bullet,
+            )
+            .is_some_and(|hit| hit.t < direction.length())
+            {
+                return;
+            }
         }
         let distance_sq = direction.length_squared();
         let should_use_bomb = distance_sq < BOMB_USAGE_DISTANCE * BOMB_USAGE_DISTANCE
@@ -870,7 +894,8 @@ mod tests {
             "strainFactor": 1.5,
             "maxGunAngle": 1.4,
             "gunRotationSpeed": 3.0,
-            "gunCenterSpeed": 10.0
+            "gunCenterSpeed": 10.0,
+            "barrelHeight": 2.4
         }))
         .unwrap()
     }
@@ -1112,6 +1137,45 @@ mod tests {
         assert!(
             fires_within(&mut fixture, &mut brain, 100),
             "наземная цель в окне пробы должна обстреливаться"
+        );
+    }
+
+    #[test]
+    fn bot_holds_fire_at_a_tank_high_on_the_ramp() {
+        let mut fixture = Fixture::new();
+
+        // бот на земле западнее рампы (строка 9, x 192..320), цель — высоко
+        // на ней: склон дорастает до пули (0.075) на x = 201.6
+        fixture.add_tank(1, 1, 100.0, 304.0, 0);
+        fixture.add_tank(2, 2, 282.0, 304.0, 0);
+
+        let mut brain = brain_at(1, [100.0, 304.0], 0);
+
+        brain.state = BotState::Attacking;
+        brain.target = Some(2);
+
+        assert!(
+            !fires_within(&mut fixture, &mut brain, 100),
+            "насыпь рампы закрывает цель — выстрела быть не должно"
+        );
+    }
+
+    #[test]
+    fn bot_fires_at_a_tank_at_the_foot_of_the_ramp() {
+        let mut fixture = Fixture::new();
+
+        // дальше `BOMB_USAGE_DISTANCE`, иначе бот берёт бомбу
+        fixture.add_tank(1, 1, 90.0, 304.0, 0);
+        fixture.add_tank(2, 2, 196.0, 304.0, 0);
+
+        let mut brain = brain_at(1, [90.0, 304.0], 0);
+
+        brain.state = BotState::Attacking;
+        brain.target = Some(2);
+
+        assert!(
+            fires_within(&mut fixture, &mut brain, 100),
+            "у подножия насыпь ниже пули — цель достижима"
         );
     }
 

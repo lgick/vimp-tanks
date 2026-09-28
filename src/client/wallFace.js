@@ -1,7 +1,8 @@
 // Геометрия видимой грани стены для эффектов у стены: свет фар и попадание
 // выстрела. Стена в физике и в лучах — след клеток на полу, а видимая стена —
 // грань объёма от подножия до верха (`extrusion.js`). Здесь — какую грань
-// задел луч, видна ли она из центра проекции и где на ней рисуется точка.
+// задел луч, видна ли она из центра проекции; точку на грани на высоте даёт
+// `reproject` (`src/client/parallax.js`).
 
 // ближайшая к координате кромка клеток размера `size`
 const edgeOf = (value, size) => Math.round(value / size) * size;
@@ -31,23 +32,6 @@ export function edgeFace(x, y, dx, dy, cellW, cellH, tolerance) {
 // Видна ли грань из центра проекции: смотрит на камеру
 export function faceIsFront(face, x, y, camera) {
   return face.nx * (camera.x - x) + face.ny * (camera.y - y) > 0;
-}
-
-// Мировая точка, которая в проекции высоты `kBase` рисуется там же, где
-// точка (x, y) в проекции `kRaised`: контейнер куска трассера стоит в
-// проекции пола, а конец обязан лечь на грань на высоте ствола.
-// q = (p·(1 + kRaised) − cam·kRaised + cam·kBase) / (1 + kBase)
-export function raisedPoint(x, y, camera, kBase, kRaised) {
-  if (!camera) {
-    return { x, y };
-  }
-
-  const scale = 1 + kBase;
-
-  return {
-    x: (x * (1 + kRaised) - camera.x * kRaised + camera.x * kBase) / scale,
-    y: (y * (1 + kRaised) - camera.y * kRaised + camera.y * kBase) / scale,
-  };
 }
 
 // Расстояние вдоль луча (x0, y0) + (dx, dy)·t, на котором его рисунок в

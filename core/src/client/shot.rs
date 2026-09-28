@@ -17,6 +17,9 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use crate::config::{ModelConfig, WeaponConfig, WeaponKind};
+use crate::shot_height::{
+    BulletLine, HIT_NONE, HIT_TARGET, bullet_line, first_embankment_hit,
+};
 use vimp_engine_core::client::interpolator::InterpolatedGame;
 use vimp_engine_core::client::raycast::{Box2, ray_vs_box, ray_vs_grid};
 use vimp_engine_core::map::MapLevels;
@@ -82,11 +85,15 @@ pub struct ShotWorld<'a> {
     pub remote_tanks: Option<&'a RemoteTanks>,
 }
 
-// что луч встретил ближе всего: стену, ящик динамики карты или чужой танк
+// что луч встретил ближе всего: стену, ящик динамики карты, чужой танк или
+// насыпь рампы
 enum RayTarget {
     Wall,
     Dynamic(String),
     Tank(u32),
+    // насыпь рампы (`shot_height::embankment_hit`): код `HIT_SLOPE` или
+    // `HIT_EMBANKMENT_FACE`
+    Embankment(u8),
 }
 
 struct PendingShot {
@@ -576,7 +583,17 @@ impl ShotPredictor {
 
         let range = weapon.range.unwrap_or(1000.0);
         let start_level = render.level;
-        let hit = self.cast_ray(muzzle, direction, range, shooter, start_level, world);
+        let bullet = self.levels.as_ref().map(|levels| {
+            bullet_line(
+                render.z,
+                render.slope_vec,
+                direction,
+                model.barrel_height,
+                (muzzle[0] - render.x) * direction[0] + (muzzle[1] - render.y) * direction[1],
+                levels.level_height(),
+            )
+        });
+        let hit = self.cast_ray(muzzle, direction, range, shooter, start_level, bullet, world);
         let end_distance = hit.as_ref().map_or(range, |(distance, _, _)| *distance);
         let mut end_x = muzzle[0] + direction[0] * end_distance;
         let mut end_y = muzzle[1] + direction[1] * end_distance;
@@ -621,6 +638,12 @@ impl ShotPredictor {
             None => self.miss_level(muzzle, direction, range, start_level),
         };
 
+        let hit_code = match &hit {
+            None => HIT_NONE,
+            Some((_, RayTarget::Embankment(code), _)) => *code,
+            Some(_) => HIT_TARGET,
+        };
+
         let mut tracer = json!([
             muzzle[0],
             muzzle[1],
@@ -628,7 +651,7 @@ impl ShotPredictor {
             end_y,
             render.x,
             render.y,
-            hit.is_some(),
+            hit_code,
             shooter,
             start_level,
             end_level,
@@ -668,6 +691,7 @@ impl ShotPredictor {
         range: f32,
         my_id: u32,
         shooter_level: u8,
+        bullet: Option<BulletLine>,
         world: ShotWorld<'_>,
     ) -> Option<(f32, RayTarget, u8)> {
         let mut closest: Option<(f32, RayTarget, u8)> = None;
@@ -799,6 +823,13 @@ impl ShotPredictor {
             }
         }
 
+        // насыпь рамп выше пули — тем же правилом, что у хоста
+        if let (Some(levels), Some(bullet)) = (&self.levels, bullet.as_ref())
+            && let Some(hit) = first_embankment_hit(levels, &segments, origin, dir, bullet)
+        {
+            consider(Some(hit.t), RayTarget::Embankment(hit.code), hit.level);
+        }
+
         closest
     }
 
@@ -863,7 +894,8 @@ mod tests {
                 "strainFactor": 1.5,
                 "maxGunAngle": 1.4,
                 "gunRotationSpeed": 3.0,
-                "gunCenterSpeed": 10.0
+                "gunCenterSpeed": 10.0,
+                "barrelHeight": 1.0
             }
         }))
         .unwrap()
@@ -914,6 +946,7 @@ mod tests {
             angvel: 0.0,
             z: 0.0,
             level: 0,
+            slope_vec: [0.0, 0.0],
             falling: false,
             pitch: 0.0,
             roll: 0.0,
@@ -994,7 +1027,7 @@ mod tests {
         assert!((tracer[1].as_f64().unwrap() - 20.0).abs() < 1e-3);
         // промах: конец на дистанции range
         assert!((tracer[2].as_f64().unwrap() - 114.4).abs() < 1e-3);
-        assert_eq!(tracer[6], Value::Bool(false));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_NONE)));
         assert_eq!(tracer[7].as_u64(), Some(2));
         // центр танка для визуализации
         assert_eq!(tracer[4].as_f64(), Some(10.0));
@@ -1035,7 +1068,7 @@ mod tests {
             .unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(true));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)));
         assert!((tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3);
     }
 
@@ -1079,7 +1112,7 @@ mod tests {
         let tracer = tracer_of(&spawn);
 
         // чужой танк: центр 60, halfW = size·2 = 4 → грань на 56
-        assert_eq!(tracer[6], Value::Bool(true));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)));
         assert!((tracer[2].as_f64().unwrap() - 56.0).abs() < 1e-3);
     }
 
@@ -1241,7 +1274,7 @@ mod tests {
         let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(true));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)));
         assert!((tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3);
 
         // элемент за хвостом уровней — якорь: ключ тела и точка удара в
@@ -1291,7 +1324,7 @@ mod tests {
         let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(false));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_NONE)));
     }
 
     #[test]
@@ -1311,7 +1344,7 @@ mod tests {
         let spawn = shot.try_fire(&render_at(0.0, 0.0), 1, 0.0, world).unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(true));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)));
         // конец трассера — та же материальная точка НАРИСОВАННОГО ящика
         assert!((tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3);
         assert!((tracer[3].as_f64().unwrap() - 1000.0).abs() < 1e-3);
@@ -1336,7 +1369,7 @@ mod tests {
         let tracer = tracer_of(&spawn);
 
         // хост по своей геометрии попадает — попадает и клиент
-        assert_eq!(tracer[6], Value::Bool(true));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)));
         // точка удара перенесена на нарисованный корпус (левая грань)
         assert!((tracer[2].as_f64().unwrap() - 40.0).abs() < 1e-3);
         assert!((tracer[3].as_f64().unwrap() - 20.0).abs() < 1e-3);
@@ -1387,6 +1420,93 @@ mod tests {
         assert_eq!(tracer[9].as_u64(), Some(0), "endLevel");
     }
 
+    // рампа в строке 1, колонки 3..5 (x 30..60), подъём на восток 0 → 1;
+    // плита уровня 1 в колонках 6..9. Ствол 1.0 при клетке 10 — пуля пола
+    // на 0.1 уровня
+    fn ramp_shot_map() -> String {
+        let mut grid0 = vec![vec![0; 10]; 3];
+
+        for cell in grid0[1].iter_mut().take(6).skip(3) {
+            *cell = 3;
+        }
+
+        let mut grid1 = vec![vec![0; 10]; 3];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().skip(6) {
+                *cell = 2;
+            }
+        }
+
+        serde_json::json!({
+            "step": 10,
+            "scale": 1,
+            "map": grid0,
+            "physicsStatic": [1],
+            "physicsDynamic": [],
+            "ramps": [{ "tile": 3, "dir": "east", "from": 0, "to": 1 }],
+            "levels": { "1": { "map": grid1, "floor": [2] } },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn tracer_stops_on_the_ramp_slope() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &ramp_shot_map());
+
+        // с земли вверх по рампе: склон дорос до пули (0.1) на x = 33
+        let spawn = shot
+            .try_fire(&render_at(5.0, 15.0), 1, 0.0, ShotWorld::default())
+            .unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert!((tracer[2].as_f64().unwrap() - 33.0).abs() < 0.01, "{tracer:?}");
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(crate::shot_height::HIT_SLOPE)));
+        assert_eq!(tracer[9].as_u64(), Some(0), "endLevel");
+    }
+
+    #[test]
+    fn tracer_passes_down_the_ramp_from_the_slab() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &ramp_shot_map());
+
+        // с плиты на запад: насыпь (не выше 1) ниже пули (1.1)
+        let render = RenderState {
+            angle: std::f32::consts::PI,
+            ..render_at_level(75.0, 15.0, 1)
+        };
+        let spawn = shot.try_fire(&render, 1, 0.0, ShotWorld::default()).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_NONE)), "{tracer:?}");
+        assert!(tracer[2].as_f64().unwrap() < 30.0, "{tracer:?}");
+        assert_eq!(tracer[9].as_u64(), Some(0), "endLevel");
+    }
+
+    #[test]
+    fn tracer_stops_on_the_embankment_side() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &ramp_shot_map());
+
+        // сбоку по −y в борт y = 20: склон там 0.5 — выше пули
+        let render = RenderState {
+            angle: -std::f32::consts::FRAC_PI_2,
+            ..render_at(45.0, 28.0)
+        };
+        let spawn = shot.try_fire(&render, 1, 0.0, ShotWorld::default()).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert!((tracer[3].as_f64().unwrap() - 20.0).abs() < 0.01, "{tracer:?}");
+        assert_eq!(
+            tracer[6].as_u64(),
+            Some(u64::from(crate::shot_height::HIT_EMBANKMENT_FACE))
+        );
+    }
+
     #[test]
     fn tracer_stops_on_the_railing_of_its_level() {
         let mut shot = make_shot();
@@ -1400,7 +1520,7 @@ mod tests {
             .unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(true));
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)));
         assert!(
             (tracer[2].as_f64().unwrap() - 50.0).abs() < 1e-3,
             "{tracer:?}"
@@ -1435,7 +1555,7 @@ mod tests {
             .unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(false), "{tracer:?}");
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_NONE)), "{tracer:?}");
         assert_eq!(tracer[8].as_u64(), Some(0), "startLevel");
     }
 
@@ -1471,7 +1591,7 @@ mod tests {
             .unwrap();
         let tracer = tracer_of(&spawn);
 
-        assert_eq!(tracer[6], Value::Bool(true), "{tracer:?}");
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)), "{tracer:?}");
     }
 
     // строка чужого танка уровня 1 (size 2 → корпус 8×6, живой)
@@ -1595,7 +1715,7 @@ mod tests {
             .unwrap();
 
         // нарисованный корпус выше линии огня — промах
-        assert_eq!(tracer_of(&spawn)[6], Value::Bool(false));
+        assert_eq!(tracer_of(&spawn)[6].as_u64(), Some(u64::from(HIT_NONE)));
     }
 
     #[test]

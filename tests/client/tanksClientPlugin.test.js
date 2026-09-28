@@ -156,12 +156,30 @@ describe('ClientPlugin: сервис rampRuns', () => {
     expect(rampRuns.heightAt(2, 96, 32)).toBe(null);
   });
 
-  it('forLevel и heightAt делят один разбор до смены карты', () => {
+  it('slopeAt даёт высоту и ось склона, вне рампы — null', () => {
+    const { rampRuns } = clientPlugin.hooks.services(makeRampCore());
+
+    expect(rampRuns.slopeAt(0, 96, 32)).toEqual({ height: 0.5, axis: 0 });
+    expect(rampRuns.slopeAt(0, 40, 32)).toBe(null);
+  });
+
+  it('faceAt даёт грань насыпи под концом луча', () => {
+    const { rampRuns } = clientPlugin.hooks.services(makeRampCore());
+    const hit = rampRuns.faceAt(0, 96, 64, 0, -1, 0.15);
+
+    expect(hit.face).toEqual({ axis: 'y', coord: 64, nx: 0, ny: 1 });
+    expect(hit.volume).toBeCloseTo(0.5);
+    expect(rampRuns.faceAt(0, 96, 32, 0, -1, 0.15)).toBe(null);
+  });
+
+  it('forLevel, heightAt, slopeAt и faceAt делят один разбор до смены карты', () => {
     const core = makeRampCore();
     const { rampRuns } = clientPlugin.hooks.services(core);
 
     rampRuns.forLevel(0);
     rampRuns.heightAt(0, 96, 32);
+    rampRuns.slopeAt(0, 96, 32);
+    rampRuns.faceAt(0, 96, 64, 0, -1, 0.15);
     expect(core.ramp_runs).toHaveBeenCalledTimes(1);
 
     core.map_generation.mockReturnValue(2);

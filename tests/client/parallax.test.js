@@ -141,6 +141,18 @@ describe('parallax: reproject', () => {
     }
   });
 
+  it('конец трассера на грани стены: рисунок q в kHost совпадает с рисунком p в k', () => {
+    const wallCamera = { x: 10, y: -20 };
+    const kHost = 0.22;
+    const k = 0.22 + 0.19 * 0.22;
+    const q = reproject(120, 80, wallCamera, kHost, k);
+    const drawn = offsetPoint(q.x, q.y, wallCamera, kHost);
+    const target = offsetPoint(120, 80, wallCamera, k);
+
+    expect(drawn.x).toBeCloseTo(target.x, 6);
+    expect(drawn.y).toBeCloseTo(target.y, 6);
+  });
+
   it('без камеры — исходная точка и масштаб 1', () => {
     expect(reproject(120, 700, null, 0.22, 0.44)).toEqual({
       x: 120,

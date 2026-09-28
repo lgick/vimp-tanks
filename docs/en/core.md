@@ -38,6 +38,8 @@ src/
 │                              #   masks — pure functions over the engine's MapLevels
 ├── shot_levels.rs             # 2.5D shot ray split into single-level segments
 │                              #   (shared by the authoritative hitscan and the client)
+├── shot_height.rs             # bullet height and ramp embankments for hitscan
+│                              #   (host, shot predictor and bots)
 ├── bots/
 │   └── controller.rs         # BotBrain — bot AI (input is generated inside the core)
 └── client/                    # the core's client mode: TanksClient (impl GameClientDef)
@@ -904,7 +906,10 @@ to the segments of both levels. The level of a remote hull is taken from the
 predicted world (`RemoteTanks::sim_boxes()`) whenever the tank is predicted
 there, and from the frame row only as a fallback — the same rule the OBB
 already followed. The resulting `startLevel`/`endLevel` go into the local
-tracer row, and the level of a locally planted bomb is decided by
+tracer row. The ramp embankment is checked by the same
+`first_embankment_hit()` the host uses (the own tank's slope comes as
+`RenderState::slope_vec`), and the row's hit field carries the numeric
+`HIT_*` code, not a `bool`. The level of a locally planted bomb is decided by
 `level::bomb_level()` — ONE function for the replica and the host
 (`TanksSim::create_weapon_action` calls the same one). The rule: over a
 cell with no slab of its own level, and for a falling tank (input locked),
@@ -938,8 +943,10 @@ exactly it.
 - The level segments overlap on purpose: `process_hitscan` casts a ray per
   segment and takes the **nearest** hit, so a ground wall in front of the
   ledge still beats the probe. Each segment is filtered with
-  `level_interaction(segment.level)`; on a flat map no group filter is set
-  at all and the shooting path stays exactly as it was.
+  `levels_interaction_on_ramp(level_group(segment.level))` — the level as a
+  body on a ramp run sees it, without the ramp guards: the embankment is
+  judged by the bullet's height (`shot_height.rs`, below). On a flat map no
+  group filter is set at all and the shooting path stays exactly as it was.
 - An explosion reads its target's level **from the target's collider masks**
   (`collision_groups().memberships`) rather than from the game tag: that way
   a tank and dynamic map geometry (which carries no tag) read the same.
@@ -951,6 +958,38 @@ exactly it.
 
 The levels reach the client as `startLevel`/`endLevel` (`w1`) and `level`
 (`w2`, `w2e`).
+
+#### Bullet height and ramp embankments (`core/src/shot_height.rs`)
+
+Physics and rays are 2D, but a ramp is a slope. The ramp guards
+(`map::ramp_guards`) are obstacles for BODIES; for a bullet they gave wrong
+answers — a stop at the top edge, at the bridge edge, on the floor by a
+side. So a bullet has a height, one model for the host
+(`TanksSim::process_hitscan`), the shot predictor (`ShotPredictor::cast_ray`)
+and the bots (`bots::controller`):
+
+- `bullet_line()` — the bullet flies at the shooter's gun height: in levels
+  along the ray `h(t) = base + rate·t`, `base = z + barrelHeight /
+  level_height` (`barrelHeight` of the model, `src/data/models.js`). On a
+  flat floor and in flight `rate = 0`; a tank standing on a slope is tilted
+  with its hull, so the barrel follows the slope: `rate = (slope_vec · dir)
+  / level_height`.
+- `embankment_hit()` — the first meeting with the embankment of the runs
+  whose LOWER level is the segment's level, by three rules: the ray enters
+  the run from outside while the embankment there is higher than the bullet
+  — a face (side or end face); inside the run the slope rises above the
+  bullet — the slope; the ray reaches the upper end going up the slope — the
+  slope at the end face (the bullet does not carry on over the slab above).
+  `first_embankment_hit()` takes the nearest one over all segments; the host
+  ends the ray there if it is nearer than the collider hit, with no damage
+  or impulse.
+- The hit code in the tracer row (`wasHit`, `u8` of `w1`): `HIT_NONE` 0 —
+  miss, `HIT_TARGET` 1 — body or wall, `HIT_SLOPE` 2 — the slope's top,
+  `HIT_EMBANKMENT_FACE` 3 — an embankment face. The mirror is `W1_HIT_*` in
+  `src/client/snapshotFields.js`.
+- `ShotPredictor` applies the same model (the own tank's slope from
+  `RenderState::slope_vec`); a bot does not fire when the embankment is
+  nearer than its target.
 
 ### Destructible props (`core/src/props.rs`)
 

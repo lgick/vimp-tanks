@@ -186,7 +186,13 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   geometry the physics puts its guards on, instead of a second grid walk on
   JS. `heightAt(level, x, y)` gives the height of the ramp surface under a
   world point, in levels (`null` off a ramp of that level): the shot effect
-  lays its debris on the slope by it. `surfaces` is the game's service over `ClientCore.surface_at`/
+  lays its debris on the slope by it. `slopeAt(level, x, y)` gives
+  `{ height, axis }` — the slope's height in levels and its run's axis
+  (0 = x, 1 = y): a shot into the slope ends on it at the bullet's height.
+  `faceAt(level, x, y, dx, dy, tolerance)` gives `{ face, volume }` — the
+  embankment face under the ray's end in the `edgeFace` format and the
+  face's height above the level: a side shot is drawn like a wall hit.
+  `surfaces` is the game's service over `ClientCore.surface_at`/
   `surface_dir_at`: `kindAt(x, y, level)` and `dirAt(x, y, level)` tell the
   dust, the track marks and the tank what cell the tank is on (see
   [architecture.md](architecture.md)); on a map without `game.surfaces` they
@@ -606,7 +612,9 @@ ends with `startLevel`/`endLevel` — the level the ray started at and the one
 it ended at (they differ where the ray drops off a ledge) — while the bomb
 (`w2`) and its explosion (`w2e`) each carry a `level`. The client could
 derive all four from its own copy of the layers, but then the picture would
-depend on one more repeated algorithm; four bytes are cheaper.
+depend on one more repeated algorithm; four bytes are cheaper. The
+tracer's `wasHit` is a hit code (`W1_HIT_*`, `src/client/snapshotFields.js`):
+0 — miss, 1 — body or wall, 2 — ramp slope, 3 — embankment face.
 
 The dynamic map row (`c1`/`c2`) is `[x, y, angle, z, level, state, vx, vy,
 angvel]`, and `z`/`level` must declare `role: 'z'` and `role: 'level'`:
@@ -636,6 +644,11 @@ The only model — the `m1` tank: the `Tank` constructor, starting weapon
 turn torque, damping, lateral grip), physics (`density`, `friction`,
 `restitution`), "driving feel" (throttle/turn thresholds and rates), and
 the turret (`maxGunAngle: 1.4` rad, rotation/centering rates).
+
+`barrelHeight: 2.4` is the gun height above the floor in world units: the
+hitscan bullet flies at it and stops on a ramp embankment that is higher
+(`core/src/shot_height.rs`). It is kept in a pair with the renderer's
+`tankModel.barrelHeight`/`tracer.height` (a guard test checks it).
 
 `brakingFactor: 0.3` is the braking coefficient: the higher it is, the
 sharper the tank stops. The value is deliberately low — the tank body is

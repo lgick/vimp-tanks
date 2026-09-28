@@ -21,21 +21,23 @@ use crate::props::{DamageCause, PropTransition, Props};
 use crate::surface::{self, SurfaceMap};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
-use vimp_engine_core::map::{level_group, level_interaction, MapLevels};
+use vimp_engine_core::map::{level_group, levels_interaction_on_ramp, MapLevels};
 use vimp_engine_core::physics::{is_map_object, round1, round2};
 use vimp_engine_core::rng::Rng;
 use vimp_engine_core::sim::{GameDef, GameSim, SimCtx};
 use vimp_engine_core::snapshot::Block;
+use crate::shot_height::{bullet_line, first_embankment_hit, HIT_NONE, HIT_TARGET};
 use crate::tank::{PlayerKeyBits, ShotCommand, Tank, TankRow};
 
 /// Маркер игры для `EngineSim<TanksGame>` (единственная игра в дереве).
 pub struct TanksGame;
 
-/// Строка снапшота трассера: startX/Y, endX/Y, bodyX/Y + wasHit + shooterId
-/// + уровни начала и конца луча (движковый `BlockKind::List16`).
+/// Строка снапшота трассера: startX/Y, endX/Y, bodyX/Y + код попадания
+/// (`shot_height::HIT_*`) + shooterId + уровни начала и конца луча
+/// (движковый `BlockKind::List16`).
 struct TracerRow {
     floats: [f32; 6],
-    was_hit: bool,
+    hit: u8,
     shooter: u8,
     start_level: u8,
     end_level: u8,
@@ -45,7 +47,7 @@ impl TracerRow {
     fn fields(&self) -> Vec<FieldValue> {
         let mut fields: Vec<FieldValue> = self.floats.iter().copied().map(FieldValue::F32).collect();
 
-        fields.push(FieldValue::U8(self.was_hit as u8));
+        fields.push(FieldValue::U8(self.hit));
         fields.push(FieldValue::U8(self.shooter));
         fields.push(FieldValue::U8(self.start_level));
         fields.push(FieldValue::U8(self.end_level));
@@ -1445,6 +1447,19 @@ impl TanksSim {
             None => vec![crate::shot_levels::RaySegment { t0: 0.0, t1: range, level: 0 }],
         };
 
+        let shooter = &self.tanks[&shooter_id];
+        let muzzle_offset = (origin - shot.body_position).dot(dir);
+        let bullet = self.levels.as_ref().map(|levels| {
+            bullet_line(
+                shooter.level_state.z,
+                shooter.level_state.slope_vec,
+                [dir.x, dir.y],
+                shooter.barrel_height(),
+                muzzle_offset,
+                levels.level_height(),
+            )
+        });
+
         // ближайшее попадание среди сегментов: сегменты уровней 0 и 1
         // перекрываются у кромки плиты, минимальная дистанция выигрывает
         let mut hit: Option<(ColliderHandle, f32, u8)> = None;
@@ -1462,7 +1477,9 @@ impl TanksSim {
             // одноуровневая карта фильтр по группам не ставит вовсе —
             // путь стрельбы обязан остаться прежним бит-в-бит
             if layered {
-                filter = filter.groups(level_interaction(segment.level));
+                // пуля видит уровень как тело на прогоне — без стражей рамп:
+                // насыпь судит её высота (`shot_height::embankment_hit`)
+                filter = filter.groups(levels_interaction_on_ramp(level_group(segment.level)));
             }
 
             if let Some((collider_handle, toi)) = ctx.world.cast_ray(&ray, 1.0, true, filter) {
@@ -1474,7 +1491,25 @@ impl TanksSim {
             }
         }
 
-        let was_hit = hit.is_some();
+        // насыпь рамп выше пули (`shot_height`): ближе попадания в коллайдер —
+        // луч кончается на ней, без урона и импульса
+        let embankment = match (self.levels.as_ref(), bullet.as_ref()) {
+            (Some(levels), Some(bullet)) => {
+                first_embankment_hit(levels, &segments, [origin.x, origin.y], [dir.x, dir.y], bullet)
+            }
+            _ => None,
+        }
+        .filter(|e| hit.is_none_or(|(_, distance, _)| e.t < distance));
+
+        if embankment.is_some() {
+            hit = None;
+        }
+
+        let hit_code = match (hit, embankment) {
+            (Some(_), _) => HIT_TARGET,
+            (None, Some(e)) => e.code,
+            _ => HIT_NONE,
+        };
         let mut end_x = round1(end_point_ray.x);
         let mut end_y = round1(end_point_ray.y);
         // промах: уровень, действующий В КОНЦЕ луча, а не последний в
@@ -1483,6 +1518,15 @@ impl TanksSim {
         // наземный трассер рисовался бы на слое моста
         let mut end_level =
             crate::shot_levels::level_at_distance(&segments, range).unwrap_or(start_level);
+
+        // луч кончился на насыпи рампы
+        if let Some(e) = embankment {
+            let point = origin + dir * e.t;
+
+            end_x = round1(point.x);
+            end_y = round1(point.y);
+            end_level = e.level;
+        }
 
         if let Some((collider_handle, distance, level)) = hit {
             let impact = origin + dir * distance;
@@ -1537,7 +1581,7 @@ impl TanksSim {
                 round2(shot.body_position.x),
                 round2(shot.body_position.y),
             ],
-            was_hit,
+            hit: hit_code,
             shooter: shooter_id as u8,
             start_level,
             end_level,

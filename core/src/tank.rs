@@ -117,6 +117,7 @@ pub struct Tank {
     // производные от модели
     width: f32,
     height: f32,
+    barrel_height: f32,
     mass: f32,
     inertia: f32,
 
@@ -246,6 +247,7 @@ impl Tank {
             level_state: LevelState::default(),
             width,
             height,
+            barrel_height: model.barrel_height,
             mass,
             inertia,
             current_keys: 0,
@@ -267,6 +269,11 @@ impl Tank {
 
     pub fn is_alive(&self) -> bool {
         self.condition > 0
+    }
+
+    /// Высота ствола над полом, мировые единицы (`ModelConfig::barrel_height`).
+    pub fn barrel_height(&self) -> f32 {
+        self.barrel_height
     }
 
     /// Обновляет состояние клавиш (BaseModel.updateKeys).

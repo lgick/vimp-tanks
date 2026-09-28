@@ -28,6 +28,7 @@ fn flat_config_json() -> serde_json::Value {
             "m1": {
                 "currentWeapon": "w1",
                 "size": 2,
+                "barrelHeight": 2.4,
                 "accelerationFactor": 1000,
                 "brakingFactor": 0.3,
                 "maxForwardSpeed": 260,
@@ -1082,6 +1083,69 @@ fn ramp_lifts_tank_to_level_one() {
     steps(&mut core, 120);
 
     assert_eq!(level_of(&core, 1), 1, "проехав рампу, танк наверху");
+}
+
+// Пуля летит на высоте ствола (`shot_height`): ствол 2.4 при уровне 32 —
+// пуля пола на 0.075 уровня, склон рампы (x 192..320) дорастает до неё на
+// x = 201.6. Танк дальше по склону с земли недосягаем.
+#[test]
+fn ground_shot_stops_on_the_slope_before_a_tank_high_on_the_ramp() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(2, "m1", 2, 208.0, 304.0, 0.0).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 304.0, 0.0).unwrap();
+    core.apply_input(2, 1, "down", "forward");
+
+    for _ in 0..200 {
+        steps(&mut core, 1);
+
+        if tank_z(&core, 2) >= 0.6 {
+            break;
+        }
+    }
+
+    assert!(tank_z(&core, 2) >= 0.6, "цель не поднялась: z={}", tank_z(&core, 2));
+
+    core.take_events();
+    fire(&mut core, 1, 1);
+
+    assert_eq!(health_of(&events(&mut core), 2), None, "насыпь закрыла цель");
+}
+
+#[test]
+fn ground_shot_hits_a_tank_at_the_foot_of_the_ramp() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(2, "m1", 2, 196.0, 304.0, 0.0).unwrap();
+    core.spawn_actor(1, "m1", 1, 100.0, 304.0, 0.0).unwrap();
+    steps(&mut core, 2);
+    core.take_events();
+    fire(&mut core, 1, 1);
+
+    let health = health_of(&events(&mut core), 2);
+
+    assert!(health.is_some_and(|h| h < 100.0), "цель у подножия поражена: {health:?}");
+}
+
+// Луч с моста падает на уровень 0 в верхней клетке рампы, на кромке, где
+// стоит страж торца: пуля стражей не видит, а насыпь ниже пули с моста.
+#[test]
+fn shot_from_the_bridge_goes_down_the_ramp() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 352.0, 304.0, 180.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 150.0, 304.0, 0.0).unwrap();
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1, "стрелок на плите");
+    core.take_events();
+    fire(&mut core, 1, 1);
+
+    let health = health_of(&events(&mut core), 2);
+
+    assert!(health.is_some_and(|h| h < 100.0), "цель под рампой поражена: {health:?}");
 }
 
 #[test]

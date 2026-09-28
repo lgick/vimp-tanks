@@ -3,7 +3,6 @@ import {
   crossingDistance,
   edgeFace,
   faceIsFront,
-  raisedPoint,
 } from '../../src/client/wallFace.js';
 import { offsetPoint } from '../../src/client/parallax.js';
 
@@ -59,25 +58,6 @@ describe('wallFace: faceIsFront', () => {
   it('грань смотрит на камеру — видна, камера за стеной — нет', () => {
     expect(faceIsFront(face, 64, 40, { x: 0, y: 0 })).toBe(true);
     expect(faceIsFront(face, 64, 40, { x: 200, y: 0 })).toBe(false);
-  });
-});
-
-describe('wallFace: raisedPoint', () => {
-  const camera = { x: 10, y: -20 };
-
-  it('рисунок q в kBase совпадает с рисунком p в kRaised', () => {
-    const kBase = 0.22;
-    const kRaised = 0.22 + 0.19 * 0.22;
-    const q = raisedPoint(120, 80, camera, kBase, kRaised);
-    const drawn = offsetPoint(q.x, q.y, camera, kBase);
-    const target = offsetPoint(120, 80, camera, kRaised);
-
-    expect(drawn.x).toBeCloseTo(target.x, 6);
-    expect(drawn.y).toBeCloseTo(target.y, 6);
-  });
-
-  it('без камеры — исходная точка', () => {
-    expect(raisedPoint(5, 6, null, 0, 0.1)).toEqual({ x: 5, y: 6 });
   });
 });
 

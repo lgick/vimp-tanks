@@ -351,7 +351,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       expect(tracer).toHaveLength(10);
       expect(tracer[7]).toBe(1); // shooterId
-      expect(tracer[6]).toBe(false); // мир пуст — промах
+      expect(tracer[6]).toBe(0); // мир пуст — промах (HIT_NONE)
       // 2.5D-хвост: одноуровневая карта — оба уровня нулевые
       expect(tracer[8]).toBe(0);
       expect(tracer[9]).toBe(0);
@@ -621,6 +621,52 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(segments[0].t1).toBeCloseTo(64, 0);
       expect(segments.at(-1).level).toBe(0);
       expect(segments.at(-1).t1).toBeCloseTo(500, 3);
+    });
+  });
+
+  describe('насыпь рампы', () => {
+    // предсказанный трассер своего танка на слоёной карте: рампа в строке 9,
+    // колонки 6..9 (x 192..320), подъём на восток 0 → 1. Ожидания — те же,
+    // что у хоста (tests/core/core.test.js, «насыпь рампы»)
+    const predictedTracer = (x, y, angle) => {
+      const core = makeCore();
+      const client = makeClientCore();
+
+      core.load_map(layeredMap);
+      client.set_map(layeredMap);
+      core.spawn_actor(1, 'm1', 1, x, y, angle);
+      stepTicks(core, 1);
+      client.set_model('m1');
+      client.set_active(true);
+      push(client, packFrame(core, 1000, 1, { playerId: 1 }), 1000);
+      client.sample(1150);
+      client.take_frames();
+
+      return JSON.parse(client.try_fire(1200)).w1[0];
+    };
+
+    it('с земли вверх по рампе — склон у подножия, на высоте пули', () => {
+      const tracer = predictedTracer(150, 304, 0);
+
+      expect(tracer[2]).toBeCloseTo(201.6, 1);
+      expect(tracer[6]).toBe(2);
+      expect(tracer[9]).toBe(0);
+    });
+
+    it('с моста вниз по рампе — пуля идёт дальше, до западной стены', () => {
+      const tracer = predictedTracer(352, 304, 180);
+
+      expect(tracer[2]).toBeCloseTo(32, 0);
+      expect(tracer[6]).toBe(1);
+      expect(tracer[9]).toBe(0);
+    });
+
+    it('с земли в борт — грань насыпи', () => {
+      const tracer = predictedTracer(272, 360, 270);
+
+      expect(tracer[3]).toBeCloseTo(320, 0);
+      expect(tracer[6]).toBe(3);
+      expect(tracer[9]).toBe(0);
     });
   });
 });

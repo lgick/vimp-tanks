@@ -166,7 +166,7 @@ the ray's end lies on a cell edge (`edgeFace`, tolerance 0.15 — the host
 rounds the hit point to 0.1) and the cell beyond it is a volume of the end
 level. When the face looks at the projection centre (`faceIsFront`), the
 tracer's end is moved onto it at the bullet height `tracer.height` (the
-barrel height of the model; `raisedPoint`), and the controller rises over
+barrel height of the model; `reproject`, `src/client/parallax.js`), and the controller rises over
 the occluder (`levelZ(OCCLUDER_BASE_Z + 0.5, L)`, under the light map).
 When the face is turned away (camera past the wall), the tracer stops at
 the roof's silhouette (`crossingDistance`, the face's top edge in
@@ -178,22 +178,28 @@ it. The impact sparks of a wall hit live in their own `shot-impact` layer
 on the stage, projected at the bullet height; its side (over or under the
 occluder) is re-picked every frame.
 
-Debris of a hit that lands on a ramp lies on the drawn slope. The host
-knows no slope: a ground ray up a ramp stops at the guard of its top end
-with end level `0`, and a tank on a ramp is hit on the level of the ray's
-segment while it is drawn at its own `z`. The controller's end-level
-projection therefore left the debris on the floor under the wedge, sliding
-across it as the camera moved. `ImpactEffect` now takes `surfaceK(x, y)`
-from the controller: the projection of the surface under a world point, by
-`rampRuns.heightAt(level, x, y)` (`src/client/rampSurface.js`). It picks
-the run under the point whose foot and top enclose the level and returns
-`lerp(from, to, progress)`, the same height as the wedge's vertices and the
-core's tank `z`; off a ramp it returns `null`. Every frame the controller's
-`onRender` calls `ImpactEffect.project`, which moves each piece inside the
-controller's projection into the projection of its own point (`reproject`,
-`src/client/parallax.js`, the same move as the muzzle flash of a shot from a
-bridge). The height is re-read only while a piece flies. Off a ramp, and for
-the sparks of a wall hit, nothing changes.
+Debris of a hit lies on the surface under it. A tank on a ramp is hit on
+the level of the ray's segment but is drawn at its own `z`. So
+`ImpactEffect` takes `surfaceK(x, y)` from the controller: the projection
+of the ramp surface under a world point, computed by
+`rampRuns.heightAt(level, x, y)` in `src/client/rampSurface.js`. The value
+is `lerp(from, to, progress)`, the height of the wedge's vertices and of the
+core's tank `z`, or `null` off a ramp. Every frame the controller's
+`onRender` calls `ImpactEffect.project`, which moves each piece into the
+projection of its own point (`reproject`). The height is re-read only while
+a piece flies.
+
+A shot into a ramp's embankment ends where the core stopped the bullet
+(`core/src/shot_height.rs`, see [core.md](core.md)); the row's `wasHit`
+tells how. Code 2 (`W1_HIT_SLOPE`) means the slope's top: the slope's
+height there IS the bullet's height. `_slopeEnd` lifts the tracer's end
+onto the slope (`rampRuns.slopeAt`, `reproject`) with the slope's contour
+line as its `stopLine`, and the debris lies there. Code 3
+(`W1_HIT_EMBANKMENT_FACE`) means a side or the end face entered from
+outside below its top. `_wallAt` takes that face from `rampRuns.faceAt`,
+and from there the shot is drawn exactly like a wall hit: on the face at
+gun height, cut at the face's silhouette when the face turns away, sparks
+in `shot-impact`.
 
 `blasts` (`src/client/blastEvents.js`) is the same kind of bus for
 explosions: `ExplosionEffect` (bomb or barrel) reports `{ x, y, radius,

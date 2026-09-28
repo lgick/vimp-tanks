@@ -233,6 +233,82 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
     });
   });
 
+  // Пуля летит на высоте ствола (core/src/shot_height.rs): barrelHeight 2.4
+  // при уровне 32 — пуля пола на 0.075 уровня. Рампа — строка 9, x 192..320,
+  // подъём на восток 0 → 1; плита моста — колонки 10..12.
+  describe('насыпь рампы', () => {
+    // выстрел игрока 1 и строка его трассера:
+    // [startX, startY, endX, endY, bodyX, bodyY, wasHit, shooterId,
+    //  startLevel, endLevel]
+    const shoot = () => {
+      core.apply_input(1, 1, 'down', 'fire');
+      stepTicks(core, 1);
+      core.pack_body();
+      core.pack_frame(0, 1, false, 0, 0, false, undefined, -1);
+
+      return decode(frameBuffer(core)).snapshot.w1[0];
+    };
+
+    it('с земли вверх по рампе — склон у подножия, на высоте пули', () => {
+      core.load_map(layeredMap);
+      core.spawn_actor(1, 'm1', 1, 150, 304, 0);
+      stepTicks(core, 2);
+
+      const tracer = shoot();
+
+      expect(tracer[2]).toBeCloseTo(201.6, 1);
+      expect(tracer[6]).toBe(2);
+      expect(tracer[9]).toBe(0);
+    });
+
+    it('с моста вниз по рампе — пуля идёт дальше, до западной стены', () => {
+      core.load_map(layeredMap);
+      core.spawn_actor(1, 'm1', 1, 352, 304, 180);
+      stepTicks(core, 2);
+
+      const tracer = shoot();
+
+      expect(tracer[2]).toBeCloseTo(32, 0);
+      expect(tracer[6]).toBe(1);
+      expect(tracer[9]).toBe(0);
+    });
+
+    it('с земли в борт — грань насыпи', () => {
+      core.load_map(layeredMap);
+      core.spawn_actor(1, 'm1', 1, 272, 360, 270);
+      stepTicks(core, 2);
+
+      const tracer = shoot();
+
+      expect(tracer[3]).toBeCloseTo(320, 0);
+      expect(tracer[6]).toBe(3);
+      expect(tracer[9]).toBe(0);
+    });
+
+    it('со склона вверх — склон на верхнем торце', () => {
+      core.load_map(layeredMap);
+      core.spawn_actor(1, 'm1', 1, 208, 304, 0);
+      core.apply_input(1, 1, 'down', 'forward');
+
+      for (let i = 0; i < 200; i += 1) {
+        stepTicks(core, 1);
+
+        if (JSON.parse(core.players_data()).m1['1'][11] >= 0.2) {
+          break;
+        }
+      }
+
+      expect(JSON.parse(core.players_data()).m1['1'][11]).toBeGreaterThanOrEqual(
+        0.2,
+      );
+
+      const tracer = shoot();
+
+      expect(tracer[2]).toBeCloseTo(320, 0);
+      expect(tracer[6]).toBe(2);
+    });
+  });
+
   describe('round-trip кадра v5 через decode_frame', () => {
     it('кадр играющего: заголовок, камера, player-блок, танки, динамика', () => {
       core.load_map(JSON.stringify(poolMini));
