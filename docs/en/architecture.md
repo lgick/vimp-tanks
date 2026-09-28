@@ -178,6 +178,23 @@ it. The impact sparks of a wall hit live in their own `shot-impact` layer
 on the stage, projected at the bullet height; its side (over or under the
 occluder) is re-picked every frame.
 
+Debris of a hit that lands on a ramp lies on the drawn slope. The host
+knows no slope: a ground ray up a ramp stops at the guard of its top end
+with end level `0`, and a tank on a ramp is hit on the level of the ray's
+segment while it is drawn at its own `z`. The controller's end-level
+projection therefore left the debris on the floor under the wedge, sliding
+across it as the camera moved. `ImpactEffect` now takes `surfaceK(x, y)`
+from the controller: the projection of the surface under a world point, by
+`rampRuns.heightAt(level, x, y)` (`src/client/rampSurface.js`). It picks
+the run under the point whose foot and top enclose the level and returns
+`lerp(from, to, progress)`, the same height as the wedge's vertices and the
+core's tank `z`; off a ramp it returns `null`. Every frame the controller's
+`onRender` calls `ImpactEffect.project`, which moves each piece inside the
+controller's projection into the projection of its own point (`reproject`,
+`src/client/parallax.js`, the same move as the muzzle flash of a shot from a
+bridge). The height is re-read only while a piece flies. Off a ramp, and for
+the sparks of a wall hit, nothing changes.
+
 `blasts` (`src/client/blastEvents.js`) is the same kind of bus for
 explosions: `ExplosionEffect` (bomb or barrel) reports `{ x, y, radius,
 level }` once per explosion, and every `Tank` decides itself whether it was
@@ -250,8 +267,8 @@ The consequences the parts implement themselves:
   contract: there is no centre until the scene has been handed to the
   service, and none in a frame without a scene transform (the engine owns the
   stage's scale). Every consumer of the projection must read `null` as "no
-  projection this frame" and carry on: `offsetPoint` and `applyParallax`
-  (`src/client/parallax.js`) and `modelLean`
+  projection this frame" and carry on: `offsetPoint`, `applyParallax` and
+  `reproject` (`src/client/parallax.js`) and `modelLean`
   (`src/client/tank3d/project.js`) do — no lean — and so do the early exits
   in `MapLayer`, `createLighting` and the shot's muzzle flash. Dereferencing
   such a centre throws inside `onRender`, that is, kills the whole scene. A

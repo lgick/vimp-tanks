@@ -125,3 +125,47 @@ describe('ClientPlugin: сервис surfaces', () => {
     expect(surfaces.dirAt(0, 0, 0)).toEqual([0, -1]);
   });
 });
+
+describe('ClientPlugin: сервис rampRuns', () => {
+  const runs = [
+    {
+      axis: 0,
+      sign: 1,
+      from: 0,
+      to: 1,
+      min: 64,
+      max: 128,
+      crossMin: 0,
+      crossMax: 64,
+      block: 0,
+      railMin: 76.8,
+      railMax: 128,
+    },
+  ];
+
+  const makeRampCore = () => ({
+    'map_generation': vi.fn(() => 1),
+    'ramp_runs': vi.fn(() => JSON.stringify(runs)),
+  });
+
+  it('heightAt даёт высоту склона под мировой точкой, вне рампы — null', () => {
+    const { rampRuns } = clientPlugin.hooks.services(makeRampCore());
+
+    expect(rampRuns.heightAt(0, 96, 32)).toBe(0.5);
+    expect(rampRuns.heightAt(0, 40, 32)).toBe(null);
+    expect(rampRuns.heightAt(2, 96, 32)).toBe(null);
+  });
+
+  it('forLevel и heightAt делят один разбор до смены карты', () => {
+    const core = makeRampCore();
+    const { rampRuns } = clientPlugin.hooks.services(core);
+
+    rampRuns.forLevel(0);
+    rampRuns.heightAt(0, 96, 32);
+    expect(core.ramp_runs).toHaveBeenCalledTimes(1);
+
+    core.map_generation.mockReturnValue(2);
+    rampRuns.heightAt(0, 96, 32);
+    expect(core.ramp_runs).toHaveBeenCalledTimes(2);
+  });
+});

@@ -12,7 +12,9 @@
 // смещается ОБЪЕКТ, а его тень остаётся в мировой точке (см.
 // Tank._updateShadow). Поэтому формулы больше нигде нет: её потребители —
 // слой уровня N и его объём (`Map`), клин рампы, корпус танка, следы
-// (`Tracks`) — зовут только эти две функции.
+// (`Tracks`) — зовут `offsetPoint`/`applyParallax`, а перенос ребёнка
+// внутри контейнера в проекцию другой высоты (вспышка у дула выстрела с
+// моста, осколки на склоне рампы) делает `reproject`.
 
 // смещённая мировая точка. `camera` — центр камеры в мировых единицах
 // (src/client/camera.js); null (парт ещё не на сцене) и k === 0 дают
@@ -46,4 +48,26 @@ export function applyParallax(target, camera, k, baseScale = 1) {
 
   target.scale.set(scaleX * (1 + k), scaleY * (1 + k));
   target.position.set(-camera.x * k, -camera.y * k);
+}
+
+// Перенос точки внутри контейнера, который уже стоит в проекции `kHost`
+// (`applyParallax`): куда поставить ребёнка из мировой точки `(x, y)`,
+// чтобы после трансформа контейнера он лёг в проекцию СВОЕЙ высоты `k`.
+// Из cam + (q − cam)·(1 + kHost) = cam + (p − cam)·(1 + k):
+//   q = cam + (p − cam)·(1 + k)/(1 + kHost),
+// масштаб ребёнка — то же отношение. Без камеры (кадр без трансформа
+// сцены: `applyParallax` сбросил контейнер в единичный) — исходная точка
+// и масштаб 1
+export function reproject(x, y, camera, kHost, k) {
+  if (!camera) {
+    return { x, y, scale: 1 };
+  }
+
+  const scale = (1 + (k || 0)) / (1 + (kHost || 0));
+
+  return {
+    x: camera.x + (x - camera.x) * scale,
+    y: camera.y + (y - camera.y) * scale,
+    scale,
+  };
 }

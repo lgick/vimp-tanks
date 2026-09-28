@@ -163,7 +163,7 @@
   (`renderer` → Map, Tank, Tracks, Smoke, Dust, Bomb, ShotEffect,
   ExplosionEffect; `assetsBase` → Map;
   `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust, Map; `mapDynamics` →
-  ShotEffect; `rampRuns` → Map; `surfaces` → Dust, Tracks, Tank;
+  ShotEffect; `rampRuns` → Map, ShotEffect; `surfaces` → Dust, Tracks, Tank;
   `levelView` → Tank, Map, MapRadar, Smoke, Bomb,
   ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` → Tank,
   ShotEffect; `diagnostics` → Tank, Map).
@@ -182,7 +182,9 @@
   игры поверх `ClientCore.ramp_runs`: `forLevel(level)` отдаёт прогоны рамп
   уровня в мировых единицах, и по ним слой строит клин горки — ту же
   геометрию, по которой физика ставит стражей, вместо второго обхода грида
-  на JS. `surfaces` — сервис игры поверх `ClientCore.surface_at`/
+  на JS. `heightAt(level, x, y)` — высота поверхности рампы под мировой
+  точкой в уровнях (`null` — не рампа этого уровня): по ней эффект выстрела
+  кладёт осколки на склон. `surfaces` — сервис игры поверх `ClientCore.surface_at`/
   `surface_dir_at`: `kindAt(x, y, level)` и `dirAt(x, y, level)` сообщают
   пыли, следам и танку, на какой клетке танк (см.
   [architecture.md](architecture.md)); на карте без `game.surfaces` они

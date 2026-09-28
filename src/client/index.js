@@ -12,6 +12,7 @@ import { createLighting } from './lighting/createLighting.js';
 import { createShotEvents } from './shotEvents.js';
 import { createBlastEvents } from './blastEvents.js';
 import { createVolumes } from './volumes.js';
+import { rampSurfaceAt } from './rampSurface.js';
 
 // стрелка клетки по индексу `surface_dir_at`: север/юг/запад/восток, как у
 // рамп (north = −y, east = +x)
@@ -79,7 +80,8 @@ export default {
     // levelView — где и на каком уровне локальный игрок: по нему плита моста
     // над ним становится полупрозрачной (2.5D).
     // rampRuns — прогоны рамп из ядра: клин горки рисуется по ТОЙ ЖЕ
-    // геометрии, по которой физика ставит стражей прогона.
+    // геометрии, по которой физика ставит стражей прогона; по ним же эффект
+    // выстрела кладёт осколки попадания на склон.
     // volumes — высоты объёмов карты по клеткам: выстрел в стену кончается
     // на её видимой грани, а не на подножии
     services(core) {
@@ -93,6 +95,22 @@ export default {
       // разбор прогонов рамп: общий на все слои карты, живёт до её смены
       let runsCache = [];
       let runsGeneration = null;
+      // все прогоны карты.
+      //
+      // Разбор держится в кеше до смены карты: `core.ramp_runs()`
+      // сериализует ВСЕ прогоны карты в строку через WASM-границу, а
+      // спрашивает его каждый слой. Протухание ловит поколение карты
+      // (`core.map_generation()` растёт на каждом `set_map`)
+      const allRuns = () => {
+        const generation = core.map_generation();
+
+        if (generation !== runsGeneration) {
+          runsGeneration = generation;
+          runsCache = JSON.parse(core.ramp_runs());
+        }
+
+        return runsCache;
+      };
       // имена типов поверхностей по индексу `surface_at`: живут до смены карты
       let surfaceNames = [];
       let surfaceGeneration = null;
@@ -121,21 +139,15 @@ export default {
           // прогоны рамп этого уровня в МИРОВЫХ единицах; [] — карты нет,
           // она одноуровневая или рамп на уровне нет. Клин строит слой, в
           // чьём гриде лежат тайлы рампы, то есть уровень `from` — так же
-          // движок раздаёт партам сами конфиги рамп.
-          //
-          // Разбор держится в кеше до смены карты: `core.ramp_runs()`
-          // сериализует ВСЕ прогоны карты в строку через WASM-границу, а
-          // спрашивает его каждый слой. Протухание ловит поколение карты
-          // (`core.map_generation()` растёт на каждом `set_map`)
+          // движок раздаёт партам сами конфиги рамп
           forLevel(level) {
-            const generation = core.map_generation();
-
-            if (generation !== runsGeneration) {
-              runsGeneration = generation;
-              runsCache = JSON.parse(core.ramp_runs());
-            }
-
-            return runsCache.filter(run => run.from === level);
+            return allRuns().filter(run => run.from === level);
+          },
+          // высота поверхности рампы под мировой точкой, в уровнях; null — точка
+          // не на рампе уровня `level` (src/client/rampSurface.js). По ней эффект
+          // выстрела кладёт осколки на склон
+          heightAt(level, x, y) {
+            return rampSurfaceAt(allRuns(), level, x, y);
           },
         },
         // поверхности клеток из ядра: та же таблица, по которой физика

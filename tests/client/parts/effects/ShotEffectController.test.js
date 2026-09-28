@@ -5,6 +5,7 @@ import { parallax, tracer } from '../../../../src/config/render.js';
 import { cameraCenter } from '../../../../src/client/camera.js';
 import { OCCLUDER_BASE_Z, levelZ } from '../../../../src/client/levelZ.js';
 import { raisedPoint } from '../../../../src/client/wallFace.js';
+import { offsetPoint } from '../../../../src/client/parallax.js';
 
 // Проверяется проводка якоря попадания, а не отрисовка: контроллер обязан
 // пересчитать точку удара по ТЕКУЩЕМУ трансформу задетого ящика и уметь
@@ -600,5 +601,128 @@ describe('ShotEffectController: попадание в грань стены', ()
     finishTracer(controller);
 
     expect(controller.impact.parent).toBe(controller);
+  });
+});
+
+describe('ShotEffectController: осколки на склоне рампы', () => {
+  // выстрел с земли, попадание у верха рампы
+  const row = [10, 40, 120, 40, 0, 0, true, 1, 0, 0];
+  const renderer = { screen: { width: 800, height: 600 } };
+  // подъём 0 → 1 вдоль +x на [64, 128]
+  const makeRampRuns = () => ({
+    heightAt: vi.fn((level, x) => (x >= 64 && x <= 128 ? (x - 64) / 64 : null)),
+  });
+  // центр камеры в (camX, 40): сцена сдвинута на полэкрана
+  const rampShot = (camX, { data = row, ...dependencies } = {}) => {
+    const controller = makeController(data, { renderer, ...dependencies });
+
+    controller.parent.position.set(400 - camX, 300 - 40);
+    controller.run();
+    finishTracer(controller);
+
+    return controller;
+  };
+  // осколки встают в мировых x (первый — xs[0], остальные — последний из
+  // xs) за один тик: нулевая скорость, высота берётся в точке остановки
+  const land = (controller, xs) => {
+    const { impact } = controller;
+
+    impact.particlesData.forEach((p, i) => {
+      p.x = xs[Math.min(i, xs.length - 1)] - impact.x;
+      p.y = 0;
+      p.vx = 0;
+      p.vy = 0;
+      p.isMoving = true;
+    });
+
+    impact._update(0);
+
+    return impact.particlesData;
+  };
+  const camera = { x: 0, y: 40 };
+
+  it('осколок на склоне — в проекции склона', () => {
+    const rampRuns = makeRampRuns();
+    const controller = rampShot(0, { rampRuns });
+    const [p] = land(controller, [96]);
+
+    expect(typeof controller._onRender).toBe('function');
+
+    controller.onRender();
+
+    const expected = offsetPoint(96, 40, camera, 0.5 * parallax.shear);
+
+    expect(controller.impact.x + p.sprite.x).toBeCloseTo(expected.x, 6);
+    expect(controller.impact.y + p.sprite.y).toBeCloseTo(expected.y, 6);
+    expect(rampRuns.heightAt).toHaveBeenCalledWith(0, 96, 40);
+  });
+
+  it('два осколка на разной высоте сдвинуты каждый по своей', () => {
+    const controller = rampShot(0, { rampRuns: makeRampRuns() });
+    const [low, high] = land(controller, [72, 120]);
+
+    controller.onRender();
+
+    const lowPoint = offsetPoint(72, 40, camera, (8 / 64) * parallax.shear);
+    const highPoint = offsetPoint(120, 40, camera, (56 / 64) * parallax.shear);
+    const lowX = controller.impact.x + low.sprite.x;
+    const highX = controller.impact.x + high.sprite.x;
+
+    expect(lowX).toBeCloseTo(lowPoint.x, 6);
+    expect(highX).toBeCloseTo(highPoint.x, 6);
+    expect(lowX - 72).not.toBeCloseTo(highX - 120, 3);
+  });
+
+  it('уровень конца 1: мировая точка после трансформа контроллера — на склоне', () => {
+    const rampRuns = makeRampRuns();
+    const controller = rampShot(0, {
+      data: [10, 40, 120, 40, 0, 0, true, 1, 0, 1],
+      rampRuns,
+    });
+    const [p] = land(controller, [96]);
+
+    controller.onRender();
+
+    const expected = offsetPoint(96, 40, camera, 0.5 * parallax.shear);
+    const worldX =
+      (controller.impact.x + p.sprite.x) * controller.scale.x +
+      controller.position.x;
+
+    expect(controller.scale.x).toBeCloseTo(1 + parallax.shear, 6);
+    expect(worldX).toBeCloseTo(expected.x, 6);
+    expect(rampRuns.heightAt).toHaveBeenCalledWith(1, 96, 40);
+  });
+
+  it('вне рампы и без сервиса rampRuns — сырая позиция', () => {
+    const off = rampShot(0, { rampRuns: makeRampRuns() });
+    const [offPiece] = land(off, [40]);
+
+    off.onRender();
+    expect(offPiece.sprite.x).toBe(offPiece.x);
+
+    const bare = rampShot(0);
+    const [barePiece] = land(bare, [96]);
+
+    bare.onRender();
+    expect(barePiece.sprite.x).toBe(barePiece.x);
+  });
+
+  it('попадание в стену: осколки в слое shot-impact, склон не спрашивается', () => {
+    const rampRuns = makeRampRuns();
+    const volumes = {
+      cellSize: () => ({ cellW: 32, cellH: 32 }),
+      heightAt: vi.fn((level, x) => (x >= 96 && x < 128 ? 1 : 0)),
+    };
+    const controller = rampShot(0, {
+      data: [10, 40, 96, 40, 0, 0, true, 1, 0, 0],
+      volumes,
+      rampRuns,
+    });
+
+    controller.onRender();
+
+    expect(controller.impact.parent).not.toBe(controller);
+    expect(controller.impact.parent.label).toBe('shot-impact');
+    expect(rampRuns.heightAt).not.toHaveBeenCalled();
   });
 });

@@ -164,8 +164,8 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   components (`renderer` → Map, Tank, Tracks, Smoke, Dust, Bomb, ShotEffect,
   ExplosionEffect; `assetsBase` → Map;
   `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust, Map;
-  `mapDynamics` → ShotEffect; `rampRuns` → Map; `surfaces` → Dust, Tracks,
-  Tank; `levelView` → Tank, Map, MapRadar,
+  `mapDynamics` → ShotEffect; `rampRuns` → Map, ShotEffect; `surfaces` →
+  Dust, Tracks, Tank; `levelView` → Tank, Map, MapRadar,
   Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` →
   Tank, ShotEffect; `diagnostics` → Tank, Map).
   `diagnostics` is the engine's client error log (vimp-engine ≥ 0.35.0,
@@ -184,7 +184,9 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   `ClientCore.ramp_runs`: `forLevel(level)` gives the level's ramp runs in
   world units, and the layer draws the ramp wedge by them — the same
   geometry the physics puts its guards on, instead of a second grid walk on
-  JS. `surfaces` is the game's service over `ClientCore.surface_at`/
+  JS. `heightAt(level, x, y)` gives the height of the ramp surface under a
+  world point, in levels (`null` off a ramp of that level): the shot effect
+  lays its debris on the slope by it. `surfaces` is the game's service over `ClientCore.surface_at`/
   `surface_dir_at`: `kindAt(x, y, level)` and `dirAt(x, y, level)` tell the
   dust, the track marks and the tank what cell the tank is on (see
   [architecture.md](architecture.md)); on a map without `game.surfaces` they

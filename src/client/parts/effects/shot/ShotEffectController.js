@@ -5,7 +5,7 @@ import ImpactEffect from './ImpactEffect.js';
 import MuzzleFlashEffect from './MuzzleFlashEffect.js';
 import { OCCLUDER_BASE_Z, levelZ } from '../../../levelZ.js';
 import { cameraCenter } from '../../../camera.js';
-import { applyParallax } from '../../../parallax.js';
+import { applyParallax, reproject } from '../../../parallax.js';
 import { EMISSIVE_BASE_Z } from '../../../lighting/lightMath.js';
 import {
   crossingDistance,
@@ -103,6 +103,9 @@ export default class ShotEffectController extends Container {
     // высоты объёмов карты (src/client/volumes.js): попадание в стену
     // рисуется на её видимой грани, а не на подножии
     this._volumes = dependencies.volumes || null;
+    // прогоны рамп (сервис `rampRuns`): осколки на склоне лежат на склоне,
+    // а не на полу уровня конца луча (`_surfaceK`, `_placeDebris`)
+    this._rampRuns = dependencies.rampRuns || null;
     // задетая стена `{ face, volume }` (`_wallEnd`); null — не стена
     this._wall = null;
     // слой искр попадания в стену (`_impactHost`)
@@ -124,7 +127,8 @@ export default class ShotEffectController extends Container {
           this.tint = this._levelView.tintFor(this.endLevel);
         }
 
-        // проекция высоты: трассер и осколки на мосту стоят на мосту.
+        // проекция высоты: трассер и осколки на мосту стоят на мосту, а
+        // осколки на склоне рампы — на склоне (`_placeDebris`).
         // Дети контроллера авторятся в мировых координатах, сам он
         // единичный — трансформ контейнера даёт им ровно offsetPoint
         const camera = cameraCenter(this.parent, this._renderer);
@@ -142,6 +146,7 @@ export default class ShotEffectController extends Container {
 
         this._followMuzzle();
         this._placeFlash(camera);
+        this._placeDebris(camera);
         this._placeImpact(camera);
       };
     }
@@ -382,6 +387,42 @@ export default class ShotEffectController extends Container {
     return layer;
   }
 
+  // Коэффициент проекции поверхности под мировой точкой для осколков: на
+  // склоне рампы — высота склона (`rampRuns.heightAt`, та же, что у вершин
+  // клина), иначе null — пол уровня конца. Хост склона не знает: луч с
+  // земли вверх по рампе упирается в стража её верхнего торца с уровнем
+  // конца 0, а осколки ложатся на склон. Искрам в грани стены не нужен —
+  // у них свой слой на высоте ствола (`_impactHost`)
+  _surfaceK() {
+    const ramps = this._rampRuns;
+
+    if (this._wall || typeof ramps?.heightAt !== 'function') {
+      return null;
+    }
+
+    const level = this.endLevel;
+    const { shear } = parallaxConfig;
+
+    return (x, y) => {
+      const height = ramps.heightAt(level, x, y);
+
+      return height === null ? null : height * shear;
+    };
+  }
+
+  // Осколки попадания в самом контроллере (не в стену) лежат на
+  // поверхности под собой: на склоне рампы — в его проекции, а не пола
+  // уровня конца (`ImpactEffect.project`)
+  _placeDebris(camera) {
+    const impact = this.impact;
+
+    if (!impact || impact.destroyed || impact.parent !== this) {
+      return;
+    }
+
+    impact.project(camera, this.endLevel * parallaxConfig.shear);
+  }
+
   // Слой искр попадания в стену: проекция высоты ствола над полом уровня
   // конца, сторона грани — каждый кадр (камера за время искр сдвигается
   // заметно). Отвёрнутая грань — искры под перекрывателем, под крышей
@@ -485,35 +526,26 @@ export default class ShotEffectController extends Container {
   }
 
   // Контроллер рисуется в проекции уровня КОНЦА луча, а дуло — на уровне
-  // начала. Если они разные (выстрел с моста вниз), вспышку переносим так,
-  // чтобы после проекции контроллера она легла в проекцию дула:
-  // q = cam + (p − cam)·(1 + k_s)/(1 + k_e), масштаб — то же отношение
+  // начала. Если они разные (выстрел с моста вниз), вспышку переносим в
+  // проекцию дула внутри проекции контроллера (`reproject`, parallax.js)
   _placeFlash(camera) {
     if (!this.flash || this.flash.destroyed) {
       return;
     }
 
-    // Кадр без центра камеры: проекции нет ни у кого, и `applyParallax`
-    // сбросил трансформ самого контроллера в единичный — дети рисуются по
-    // сырым мировым точкам. Оставить вспышку в проекции ПРОШЛОГО кадра
-    // значило бы увести её от дула на величину параллакса, поэтому здесь
-    // тот же случай, что `ratio === 1`: вспышка ровно в точке вылета
-    if (!camera) {
-      this.flash.position.set(this.startPositionX, this.startPositionY);
-      this.flash.scale.set(1);
-
-      return;
-    }
-
-    const ratio =
-      (1 + this.startLevel * parallaxConfig.shear) /
-      (1 + this.endLevel * parallaxConfig.shear);
-
-    this.flash.position.set(
-      camera.x + (this.startPositionX - camera.x) * ratio,
-      camera.y + (this.startPositionY - camera.y) * ratio,
+    // кадр без центра камеры: вспышка ровно в точке вылета, а не в
+    // проекции прошлого кадра (это делает `reproject`)
+    const { shear } = parallaxConfig;
+    const point = reproject(
+      this.startPositionX,
+      this.startPositionY,
+      camera,
+      this.endLevel * shear,
+      this.startLevel * shear,
     );
-    this.flash.scale.set(ratio);
+
+    this.flash.position.set(point.x, point.y);
+    this.flash.scale.set(point.scale);
   }
 
   // трассер завершил анимацию.
@@ -564,6 +596,7 @@ export default class ShotEffectController extends Container {
         impactDirectionY,
         this._onImpactComplete.bind(this), // callback
         this._assets,
+        { surfaceK: this._surfaceK() },
       );
 
       this._impactHost().addChild(this.impact);

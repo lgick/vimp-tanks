@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Hit debris that lands on a ramp's slope lies on the drawn slope instead of
+  sliding across it as the camera moves.
+
 ## [0.22.9] - 2026-09-28
 
 ### Added

@@ -35,7 +35,7 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
   });
 
   it('rampRuns объявлен и в componentDependencies, и в serviceNames', () => {
-    expect(deps.rampRuns).toEqual(['Map']);
+    expect(deps.rampRuns).toEqual(['Map', 'ShotEffect']);
     expect(clientPlugin.serviceNames).toContain('rampRuns');
   });
 

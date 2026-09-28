@@ -1,6 +1,7 @@
 import { Sprite } from 'pixi.js';
 import BaseEffect from '../BaseEffect.js';
 import { lerp, randomRange } from 'vimp-engine/lib/math.js';
+import { reproject } from '../../../parallax.js';
 
 export default class ImpactEffect extends BaseEffect {
   // Осколки живут в мировых координатах и остаются лежать там, где пуля
@@ -8,7 +9,17 @@ export default class ImpactEffect extends BaseEffect {
   // «попасть в правильную точку» решается на стороне ShotEffectController:
   // он пересчитывает точку удара по актуальному трансформу ящика в момент
   // запуска эффекта (см. якорь трассера в core/src/client/shot.rs).
-  constructor(x, y, impactDirectionX, impactDirectionY, onComplete, assets) {
+  // Высоту поверхности под осколками (склон рампы) даёт контроллер через
+  // `surfaceK`, а проекцию — `project`.
+  constructor(
+    x,
+    y,
+    impactDirectionX,
+    impactDirectionY,
+    onComplete,
+    assets,
+    { surfaceK = null } = {},
+  ) {
     super(onComplete);
 
     this.x = x; // координата X центра эффекта
@@ -69,7 +80,18 @@ export default class ImpactEffect extends BaseEffect {
     this.particlesData = []; // хранение данные для управления логикой
     this.elapsedTime = 0;
 
+    // 2.5D: коэффициент проекции поверхности под мировой точкой (склон
+    // рампы) или null — пол контейнера-хозяина. Даёт контроллер выстрела
+    this._surfaceK = typeof surfaceK === 'function' ? surfaceK : null;
+
     this._createParticles();
+  }
+
+  // коэффициент проекции поверхности под осколком; null — пол хозяина
+  _kAt(pData) {
+    return this._surfaceK
+      ? this._surfaceK(this.x + pData.x, this.y + pData.y)
+      : null;
   }
 
   _createParticles() {
@@ -125,7 +147,10 @@ export default class ImpactEffect extends BaseEffect {
         active: true,
         isMoving: true,
         timeSinceStopped: 0,
+        k: null,
       };
+
+      particleData.k = this._kAt(particleData);
 
       // начальный цвет
       sprite.tint = particleData.color;
@@ -173,6 +198,9 @@ export default class ImpactEffect extends BaseEffect {
 
         pData.x += pData.vx * deltaSeconds;
         pData.y += pData.vy * deltaSeconds;
+
+        // высота поверхности под осколком меняется, только пока он летит
+        pData.k = this._kAt(pData);
 
         const currentSpeed = Math.hypot(pData.vx, pData.vy);
 
@@ -237,6 +265,37 @@ export default class ImpactEffect extends BaseEffect {
 
     if (activeParticlesCount === 0 && this._isStarted) {
       this._completeEffect();
+    }
+  }
+
+  // 2.5D: осколок на склоне рампы лежит на склоне. Контейнер-хозяин уже в
+  // проекции `kHost` (контроллер — уровень конца луча), осколок с высотой
+  // поверхности `pData.k` переносится внутри неё в проекцию своей высоты
+  // (`reproject`). Считается из `pData`, а не из спрайта: вызов
+  // идемпотентен, порядок с тиком `_update` не важен. Без `surfaceK` —
+  // ничего не делает
+  project(camera, kHost) {
+    if (!this._surfaceK) {
+      return;
+    }
+
+    for (const pData of this.particlesData) {
+      if (!pData.active) {
+        continue;
+      }
+
+      const point = reproject(
+        this.x + pData.x,
+        this.y + pData.y,
+        camera,
+        kHost,
+        pData.k ?? kHost,
+      );
+
+      pData.sprite.position.set(point.x - this.x, point.y - this.y);
+      pData.sprite.scale.set(
+        (pData.size / this._textureContentSize) * point.scale,
+      );
     }
   }
 
