@@ -620,7 +620,7 @@ impl BotBrain {
             if !covered
                 || !crate::shot_height::tank_reaches(
                     target_z,
-                    target_tank.turret_top(),
+                    target_tank.hit_top(),
                     levels.level_height(),
                     bullet.at(target_distance),
                 )

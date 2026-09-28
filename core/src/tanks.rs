@@ -1496,7 +1496,7 @@ impl TanksSim {
                         tanks.get(&game_id).is_none_or(|tank| {
                             let t = (body.translation() - origin).dot(dir);
 
-                            tank_reaches(tank.level_state.z, tank.turret_top(), level_height, line.at(t))
+                            tank_reaches(tank.level_state.z, tank.hit_top(), level_height, line.at(t))
                         })
                     }
                     (Some(BodyTag::Player { .. }), None) => true,

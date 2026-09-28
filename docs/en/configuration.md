@@ -741,7 +741,8 @@ tallest), and `src/data/maps/index.js` wraps every map with it. The engine
 does not hand `layers`/`volumes` to the host core, so the heights travel in
 `game`. A bullet flying above a lower floor passes over a wall lower than
 itself; a wall tile without a height is infinitely tall (a map with no
-volumes stops every shot at every wall, as before).
+volumes stops every shot at every wall, as before). Keys are level and tile
+numbers (JSON strings `"0"`, `"12"`); a non-numeric key fails the map load.
 
 #### Surfaces (`game.surfaces`)
 

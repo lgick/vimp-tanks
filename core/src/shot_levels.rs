@@ -55,25 +55,44 @@ pub fn floor_under(levels: &MapLevels, fly: u8, x: f32, y: f32) -> u8 {
     }
 }
 
-/// Настил плиты для пули непрозрачен, как земля: если плита уровня `k` есть
-/// и в предыдущей клетке луча, и в текущей, пуля её не пересекает. Летевшая
-/// над плитой не проваливается под неё (остаётся на уровне `k`, как пуля
-/// ниже нуля остаётся на земле), летевшая под плитой не выходит на неё
-/// снизу (остаётся на `k − 1`). Уровень `k` пересекается только там, где
-/// плиты `k` нет хотя бы в одной из двух клеток: у кромки, над рампой, в
-/// провале. `prev` — уровень полёта в предыдущей клетке, `raw` — по высоте
-/// пули на входе в текущую.
-fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2], center: [f32; 2]) -> u8 {
+/// Предыдущая клетка луча (`fly_through_slabs`).
+#[derive(Clone, Copy)]
+struct PrevCell {
+    /// центр клетки
+    center: [f32; 2],
+    /// уровень полёта в ней
+    fly: u8,
+    /// уровень по высоте пули на входе в неё (`fly_at`)
+    raw: u8,
+}
+
+/// Настил плиты для пули непрозрачен, как земля: плоскость уровня `k` между
+/// уровнем полёта в прошлой клетке и `raw` (по высоте пули на входе в
+/// текущую) пуля не пересекает, если плита `k` есть в текущей клетке и
+/// пересечение приходится на плиту: либо внутри прошлой клетки (плита `k`
+/// есть и там), либо на границе клеток — у пули, прижатой плитой в прошлой
+/// клетке (её уровень полёта не равен уровню по высоте): такая пуля лежит
+/// на плите и проходит все плоскости разом при сходе с неё. Летевшая над
+/// плитой не проваливается под неё (остаётся на уровне `k`, как пуля ниже
+/// нуля остаётся на земле) и, сойдя с кромки верхней плиты, ложится на
+/// нижнюю; летевшая под плитой не выходит на неё снизу (остаётся на
+/// `k − 1`). Уровень `k` пересекается только там, где плиты `k` нет хотя
+/// бы в одной из двух клеток (у прижатой пули — в текущей): у кромки, над
+/// рампой, в провале.
+fn fly_through_slabs(levels: &MapLevels, prev: PrevCell, raw: u8, center: [f32; 2]) -> u8 {
+    // прижатая пуля пересекает плоскости на границе клеток
+    let held = prev.fly != prev.raw;
     let slab = |k: u8| {
-        levels.has_floor(k, prev_center[0], prev_center[1]) && levels.has_floor(k, center[0], center[1])
+        levels.has_floor(k, center[0], center[1])
+            && (held || levels.has_floor(k, prev.center[0], prev.center[1]))
     };
 
-    if raw < prev {
-        // спуск: плоскости prev, prev − 1, …, raw + 1 — сверху вниз
-        (raw + 1..=prev).rev().find(|&k| slab(k)).unwrap_or(raw)
-    } else if raw > prev {
-        // подъём: плоскости prev + 1, …, raw — снизу вверх
-        (prev + 1..=raw).find(|&k| slab(k)).map_or(raw, |k| k - 1)
+    if raw < prev.fly {
+        // спуск: плоскости prev.fly, prev.fly − 1, …, raw + 1 — сверху вниз
+        (raw + 1..=prev.fly).rev().find(|&k| slab(k)).unwrap_or(raw)
+    } else if raw > prev.fly {
+        // подъём: плоскости prev.fly + 1, …, raw — снизу вверх
+        (prev.fly + 1..=raw).find(|&k| slab(k)).map_or(raw, |k| k - 1)
     } else {
         raw
     }
@@ -85,8 +104,8 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 /// стрелка `level`.
 ///
 /// В каждой клетке (на входе в неё) уровень полёта — высший уровень карты
-/// не выше пули, пол — `floor_under`. Сегмент кончается там, где меняется
-/// пара (пол, полёт):
+/// не выше пули (если плита не держит пулю, см. ниже), пол — `floor_under`.
+/// Сегмент кончается там, где меняется пара (пол, полёт):
 ///
 /// * пуля с плиты не падает — над клеткой без плиты своего уровня она
 ///   летит воздушным сегментом, над плитой своего уровня (другой мост) —
@@ -94,9 +113,10 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 /// * пуля с земли идёт под плитой: окна у кромки нет, танк на мосту
 ///   снизу недосягаем;
 /// * пуля со склона вверх (ствол задран) поднимается над плитой и летит
-///   по ней; вниз — опускается на нижний уровень;
+///   по ней; вниз — опускается на нижний уровень за кромкой плиты;
 /// * наклонная пуля (стрелок на склоне) не проходит сквозь плиту: над ней
-///   она держится её уровня, под ней остаётся под ней (`fly_through_slabs`).
+///   она держится её уровня, под ней остаётся под ней, а сойдя с кромки
+///   верхней плиты, ложится на нижнюю (`fly_through_slabs`).
 ///
 /// Одноуровневая карта даёт ровно один сегмент `[0, range]` уровня 0 —
 /// путь стрельбы на таких картах обязан остаться прежним бит-в-бит.
@@ -138,29 +158,30 @@ pub fn ray_segments(
     let mut out: Vec<RaySegment> = Vec::new();
     // (пол, полёт) текущего сегмента
     let mut current: Option<(u8, u8)> = None;
-    // центр предыдущей клетки луча (`fly_through_slabs`)
-    let mut prev_center: Option<[f32; 2]> = None;
+    // предыдущая клетка луча (`fly_through_slabs`)
+    let mut prev: Option<PrevCell> = None;
     let mut t0 = 0.0f32;
 
     walk_ray_cells(origin, dir, range, rows, cols, tile, |cx, cy, t| {
         let center = [(cx as f32 + 0.5) * tile, (cy as f32 + 0.5) * tile];
-        let fly = match (current, prev_center) {
-            (Some((_, prev_fly)), Some(prev)) => fly_through_slabs(levels, prev_fly, fly_at(t), prev, center),
-            _ => fly_at(t),
+        let raw = fly_at(t);
+        let fly = match prev {
+            Some(prev) => fly_through_slabs(levels, prev, raw, center),
+            None => raw,
         };
         let state = (floor_under(levels, fly, center[0], center[1]), fly);
 
-        prev_center = Some(center);
+        prev = Some(PrevCell { center, fly, raw });
 
         match current {
             None => current = Some(state),
-            Some(prev) if prev != state => {
+            Some(last) if last != state => {
                 if t > t0 {
                     out.push(RaySegment {
                         t0,
                         t1: t,
-                        level: prev.0,
-                        fly: prev.1,
+                        level: last.0,
+                        fly: last.1,
                     });
                     t0 = t;
                 }
@@ -282,6 +303,52 @@ mod tests {
             MapLevelConfig {
                 map: grid2,
                 floor: vec![2],
+                walls: vec![],
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+
+        MapLevels::build(&grid0, &[], &levels, &[], TILE, None)
+    }
+
+    /// Карта 8×8 на три уровня, плиты НЕ стопкой: плита уровня 1 — колонки
+    /// 1..3 (тайл 2), плита уровня 2 — колонки 4..7 (тайл 3); под плитой 2
+    /// плиты 1 нет.
+    fn offset_decks() -> MapLevels {
+        let grid0 = vec![vec![0; 8]; 8];
+        let mut grid1 = vec![vec![0; 8]; 8];
+        let mut grid2 = vec![vec![0; 8]; 8];
+
+        for row in grid1.iter_mut() {
+            for cell in row.iter_mut().take(4).skip(1) {
+                *cell = 2;
+            }
+        }
+
+        for row in grid2.iter_mut() {
+            for cell in row.iter_mut().skip(4) {
+                *cell = 3;
+            }
+        }
+
+        let mut levels: IndexMap<String, MapLevelConfig> = IndexMap::new();
+
+        levels.insert(
+            "1".to_string(),
+            MapLevelConfig {
+                map: grid1,
+                floor: vec![2],
+                walls: vec![],
+                layers: IndexMap::new(),
+                volumes: IndexMap::new(),
+            },
+        );
+        levels.insert(
+            "2".to_string(),
+            MapLevelConfig {
+                map: grid2,
+                floor: vec![3],
                 walls: vec![],
                 layers: IndexMap::new(),
                 volumes: IndexMap::new(),
@@ -477,6 +544,37 @@ mod tests {
             segments,
             vec![seg(0.0, 25.0, 2, 2), seg(25.0, 35.0, 1, 1), seg(35.0, RANGE, 0, 0)]
         );
+    }
+
+    #[test]
+    fn held_bullet_steps_off_the_upper_deck_onto_the_lower_one() {
+        // x 70..40 — плита 2: пуля держится её, хотя на входе в x = 40 она
+        // уже 0.35; там же (t = 35) сходит с кромки на плиту 1, которой под
+        // плитой 2 нет, и держится её до x = 10
+        let bullet = BulletLine {
+            base: 2.1,
+            rate: -0.05,
+        };
+        let segments = ray_segments(&offset_decks(), [75.0, 5.0], [-1.0, 0.0], RANGE, 2, Some(&bullet));
+
+        assert_eq!(
+            segments,
+            vec![seg(0.0, 35.0, 2, 2), seg(35.0, 65.0, 1, 1), seg(65.0, RANGE, 0, 0)]
+        );
+    }
+
+    #[test]
+    fn held_bullet_does_not_climb_onto_the_upper_deck_from_below() {
+        // в x = 10 пуля 0.43 входит под плиту 1; к x = 40 она уже 2.38, но
+        // прижата снизу плитой 1 и в плиту 2 выходит из-под настила: под
+        // плитой 2 — воздух уровня 1
+        let bullet = BulletLine {
+            base: 0.1,
+            rate: 0.065,
+        };
+        let segments = ray_segments(&offset_decks(), [5.0, 5.0], [1.0, 0.0], RANGE, 0, Some(&bullet));
+
+        assert_eq!(segments, vec![seg(0.0, 35.0, 0, 0), seg(35.0, RANGE, 0, 1)]);
     }
 
     #[test]

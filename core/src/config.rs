@@ -53,7 +53,7 @@ pub struct ModelConfig {
     /// Высота танка над полом (верх башни), мировые единицы (`turretTop`):
     /// пуля поражает танк, только если он дорастает до неё
     /// (`shot_height::tank_reaches`). Нет в конфиге — 0; тогда танк считается
-    /// высотой в свой ствол (`Tank::turret_top`).
+    /// высотой в свой ствол (`ModelConfig::hit_top`).
     #[serde(default)]
     pub turret_top: f32,
     pub acceleration_factor: f32,
@@ -76,10 +76,10 @@ pub struct ModelConfig {
 }
 
 impl ModelConfig {
-    /// Высота танка над полом для пули (`shot_height::tank_reaches`),
-    /// мировые единицы: `turret_top`, но не ниже ствола — танк без
-    /// объявленной высоты достаётся пулей своего уровня.
-    pub fn hull_top(&self) -> f32 {
+    /// Верх танка для пули (`shot_height::tank_reaches`), мировые единицы:
+    /// `turret_top`, но не ниже ствола — танк без объявленной высоты
+    /// достаётся пулей своего уровня.
+    pub fn hit_top(&self) -> f32 {
         self.turret_top.max(self.barrel_height)
     }
 }
@@ -1252,15 +1252,15 @@ mod validate_tests {
     }
 
     #[test]
-    fn hull_top_is_turret_top_but_not_below_the_barrel() {
+    fn hit_top_is_turret_top_but_not_below_the_barrel() {
         let mut model = surface_model();
 
         model.barrel_height = 1.0;
         model.turret_top = 1.5;
-        assert_eq!(model.hull_top(), 1.5);
+        assert_eq!(model.hit_top(), 1.5);
 
         model.turret_top = 0.0;
-        assert_eq!(model.hull_top(), 1.0);
+        assert_eq!(model.hit_top(), 1.0);
     }
 
     fn config_with_surfaces(surfaces: serde_json::Value) -> TanksConfig {

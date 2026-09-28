@@ -118,7 +118,7 @@ pub struct Tank {
     width: f32,
     height: f32,
     barrel_height: f32,
-    turret_top: f32,
+    hit_top: f32,
     mass: f32,
     inertia: f32,
 
@@ -249,7 +249,7 @@ impl Tank {
             width,
             height,
             barrel_height: model.barrel_height,
-            turret_top: model.hull_top(),
+            hit_top: model.hit_top(),
             mass,
             inertia,
             current_keys: 0,
@@ -278,9 +278,9 @@ impl Tank {
         self.barrel_height
     }
 
-    /// Высота танка над полом, мировые единицы (`ModelConfig::hull_top`).
-    pub fn turret_top(&self) -> f32 {
-        self.turret_top
+    /// Верх танка для пули, мировые единицы (`ModelConfig::hit_top`).
+    pub fn hit_top(&self) -> f32 {
+        self.hit_top
     }
 
     /// Обновляет состояние клавиш (BaseModel.updateKeys).

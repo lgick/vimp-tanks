@@ -932,23 +932,27 @@ exactly it.
 
 - The bullet's height along the ray comes from `shot_height::bullet_line`
   (below). In every cell the **flight level** `fly` is the highest map level
-  not above the bullet, and the **floor** under it is
-  `floor_under(fly, cell centre)`: `fly` itself over a slab of that level
-  (the ground is everywhere), otherwise `landing_level`. A segment
-  `RaySegment { t0, t1, level, fly }` ends where that pair changes;
-  `fly > level` is an **air segment** — the bullet above a floor below its
-  own level.
+  not above the bullet (unless a slab holds the bullet, see below), and the
+  **floor** under it is `floor_under(fly, cell centre)`: `fly` itself over
+  a slab of that level (the ground is everywhere), otherwise
+  `landing_level`. A segment `RaySegment { t0, t1, level, fly }` ends where
+  that pair changes; `fly > level` is an **air segment** — the bullet above
+  a floor below its own level.
 - So a shot from a bridge does not drop: past the edge it flies on as an
   air segment and returns to an ordinary one over another slab of its
-  level. A ground shot passes under the slab, even at its very
-  edge. A bullet fired up a slope (the barrel tilted with the hull) climbs
-  over the slab the ramp leads to; one fired down it comes down to the
-  level below. A tilted bullet (a shooter on a slope) never crosses a slab:
-  over a slab of level `k` it keeps flying at `k` even below its surface —
-  the way a bullet below zero stays on the ground — and under it stays
-  under it; level `k` is crossed only where one of the two neighbouring
-  cells has no slab `k` (`fly_through_slabs`). Without a bullet (the renderer's `shot_segments`) the flight
-  level is the shooter's level.
+  level. A ground shot passes under the slab, even at its very edge. A
+  bullet fired up a slope (the barrel tilted with the hull) climbs over
+  the slab the ramp leads to; one fired down it comes down to the level
+  below past the slab's edge. A tilted bullet (a shooter on a slope) never
+  crosses a slab: over a slab of level `k` it keeps flying at `k` even
+  below its surface — the way a bullet below zero stays on the ground —
+  and under it stays under it. Level `k` is crossed only where one of the
+  two neighbouring cells (for a held bullet, the current one) has no slab
+  `k`: at an edge, over a ramp, in a gap. A bullet held by a slab crosses
+  the levels right at the cell border, so stepping off a higher slab it
+  lands on a lower one even if there is none under the higher slab
+  (`fly_through_slabs`). Without a bullet (the renderer's `shot_segments`)
+  the flight level is the shooter's level.
 - `level_at_distance()` returns `fly` — the end of a miss is drawn in the
   flight projection; `covers_level()` asks about the floor. Each segment is
   filtered with `levels_interaction_on_ramp(level_group(segment.level))` —
@@ -993,23 +997,23 @@ and the bots (`bots::controller`):
   ends the ray there if it is nearer than the collider hit, with no damage
   or impulse.
 - What the bullet reaches. A tank is hit in any segment only if it reaches
-  the bullet: `tank_reaches(z, turret_top, level_height, h)` — the hull top
-  `z + turretTop / level_height` is not below the bullet at the tank
-  centre's projection onto the ray (`turretTop` of the model,
-  `src/data/models.js`). In an air segment walls are judged by height —
-  `first_tall_wall()`: the walls of the levels from the floor up to `fly`,
-  whose top `k + wall_height(k, tile)` is not below the bullet
-  (`MapGame::wall_height`, `game.wallHeights` of the map; a tile with no
-  height is infinitely tall) — and props are flown over. In an ordinary
-  segment walls and props stop the bullet as before. The host applies the
-  tank rule as a Rapier `QueryFilter::predicate`; the tracer's `endLevel` is
-  the segment's `fly`.
+  the bullet: `tank_reaches(z, hit_top, level_height, h)` — the tank top
+  `z + hit_top / level_height` is not below the bullet at the tank
+  centre's projection onto the ray (`hit_top` is the model's `turretTop`,
+  but not below the barrel; `src/data/models.js`). In an air segment walls
+  are judged by height — `first_tall_wall()`: the walls of the levels from
+  the floor up to `fly`, whose top `k + wall_height(k, tile)` is not below
+  the bullet (`MapGame::wall_height`, `game.wallHeights` of the map; a tile
+  with no height is infinitely tall) — and props are flown over. In an
+  ordinary segment walls and props stop the bullet as before. The host
+  applies the tank rule as a Rapier `QueryFilter::predicate`; the tracer's
+  `endLevel` is the segment's `fly`.
 - The hit code in the tracer row (`wasHit`, `u8` of `w1`): `HIT_NONE` 0 —
   miss, `HIT_TARGET` 1 — body or wall, `HIT_SLOPE` 2 — the slope's top,
   `HIT_EMBANKMENT_FACE` 3 — an embankment face. The mirror is `W1_HIT_*` in
   `src/client/snapshotFields.js`.
 - `ShotPredictor` applies the same model (the own tank's slope from
-  `RenderState::slope_vec`, `turret_top` of a remote tank = own model's
+  `RenderState::slope_vec`, `hit_top` of a remote tank = own model's
   ratio to `size` times its `size`); a bot does not fire when its bullet
   would miss the target's floor, pass over or under it, or meet the
   embankment first.
