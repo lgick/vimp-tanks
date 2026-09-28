@@ -88,31 +88,31 @@ pub fn first_tall_wall(
     dir: [f32; 2],
     bullet: &BulletLine,
 ) -> Option<f32> {
-    let length = segment.t1 - segment.t0;
     let grid = levels.grid(0)?;
     let rows = grid.len();
     let cols = grid.first().map_or(0, |row| row.len());
     let tile = levels.tile_size();
 
-    if length <= 0.0 || rows == 0 || cols == 0 || tile <= 0.0 {
+    if segment.t1 <= segment.t0 || rows == 0 || cols == 0 || tile <= 0.0 {
         return None;
     }
 
-    let start = [origin[0] + dir[0] * segment.t0, origin[1] + dir[1] * segment.t0];
     let mut hit = None;
 
-    walk_ray_cells(start, dir, length, rows, cols, tile, |cx, cy, t| {
+    // обход — от начала ЛУЧА, как в `ray_segments`: клетки и дистанции входа
+    // совпадают с нарезкой, первая клетка сегмента входит ровно на `t0`
+    walk_ray_cells(origin, dir, segment.t1, rows, cols, tile, |cx, cy, t| {
         // клетка, в которую луч входит на `t1`, — уже следующего сегмента
-        if t >= length {
+        if t >= segment.t1 {
             return false;
         }
 
-        if cx < 0 || cy < 0 {
+        // клетки прошлых сегментов
+        if t < segment.t0 || cx < 0 || cy < 0 {
             return true;
         }
 
-        let distance = segment.t0 + t;
-        let h = bullet.at(distance);
+        let h = bullet.at(t);
         let tall = (segment.level..=segment.fly).any(|k| {
             levels
                 .grid(k)
@@ -124,7 +124,7 @@ pub fn first_tall_wall(
         });
 
         if tall {
-            hit = Some(distance);
+            hit = Some(t);
 
             return false;
         }
@@ -391,6 +391,15 @@ mod tests {
     #[test]
     fn wall_past_the_segment_end_is_ignored() {
         let segment = RaySegment { t0: 0.0, t1: 70.0, level: 0, fly: 1 };
+
+        assert_eq!(tall_wall(&MapGame::default(), &segment, [5.0, 15.0], &BRIDGE), None);
+    }
+
+    #[test]
+    fn wall_entered_before_the_segment_is_ignored() {
+        // луч вошёл в стену колонки 8 на t = 75, раньше `t0`: это клетка
+        // прошлого сегмента
+        let segment = RaySegment { t0: 80.0, t1: 100.0, level: 0, fly: 1 };
 
         assert_eq!(tall_wall(&MapGame::default(), &segment, [5.0, 15.0], &BRIDGE), None);
     }

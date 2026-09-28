@@ -190,7 +190,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 
 ---
 
-## Этап 2. `first_tall_wall` обходит луч от его начала (средний приоритет)
+## Этап 2. `first_tall_wall` обходит луч от его начала (средний приоритет) ✅ выполнен
 
 **Проблема.** `shot_height::first_tall_wall` (`core/src/shot_height.rs` ≈ 83–136) начинает обход с
 `start = origin + dir·t0`. Сегменты режет `ray_segments` обходом от `origin`, и граница сегмента — это ровно вход
