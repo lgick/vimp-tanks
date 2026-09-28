@@ -64,12 +64,13 @@ export function tracerPieces(segments, total, endLevel) {
     return pieces;
   }
 
-  // конец луча — на уровне окна: последний кусок начинается там, где
-  // начался сегмент уровня конца, накрывающий конец
-  const window = list
+  // последний кусок не на уровне конца (рендер режет луч без наклона
+  // ствола): он начинается там, где начался сегмент уровня конца,
+  // накрывающий конец, либо это весь последний кусок
+  const endSegment = list
     .filter(s => s.level === end && s.t0 < total && s.t1 >= total - 1e-3)
     .sort((a, b) => b.t0 - a.t0)[0];
-  const cut = window ? clip(window.t0) : pieces.at(-1).from;
+  const cut = endSegment ? clip(endSegment.t0) : pieces.at(-1).from;
   const head = [];
 
   for (const piece of pieces) {

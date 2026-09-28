@@ -56,8 +56,8 @@ export default class ShotEffectController extends Container {
     // 2.5D: осколки и вспышка — на уровне КОНЦА луча, иначе осколки
     // провалятся под мост. Трассер режется по сегментам уровней ядра и
     // рисуется кусками на своих уровнях (`_layerFor`): луч с моста идёт над
-    // плитой и дальше на её высоте (воздушный сегмент ядра). Уровень начала (`W1_START_LEVEL`) нужен
-    // сегментам и вспышке выстрела на стволе
+    // плитой и дальше на её высоте (воздушный сегмент ядра). Уровень начала
+    // (`W1_START_LEVEL`) нужен сегментам и вспышке выстрела на стволе
     this.endLevel = data[W1_END_LEVEL] || 0;
     this.startLevel = data[W1_START_LEVEL] || 0;
     this.zIndex = levelZ(SHOT_BASE_Z, this.endLevel);
@@ -255,9 +255,9 @@ export default class ShotEffectController extends Container {
 
   // Задетая стена: конец луча на кромке клетки, а клетка за кромкой по
   // ходу луча — объём уровня конца, или грань насыпи рампы
-  // (`W1_HIT_EMBANKMENT_FACE`). `{ face, volume }` или null. Грань стоит на
-  // полу под пулей (`_floorAt`): у пули с моста — на земле. `base` — уровень
-  // этого пола
+  // (`W1_HIT_EMBANKMENT_FACE`). `{ face, volume, base }` или null. Грань
+  // стоит на полу под пулей (`_floorAt`): у пули с моста — на земле. `base` —
+  // уровень этого пола
   _wallAt(nx, ny) {
     if (!this.hit) {
       return null;

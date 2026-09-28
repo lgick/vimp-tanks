@@ -581,6 +581,9 @@ impl BotBrain {
         // либо выше пули: тогда не стреляем, а идём к ней — путь пойдёт через
         // рампу, потому что `find_path_on` знает уровни
         if let Some(levels) = game.levels {
+            let Some(target_tank) = game.tanks.get(&target) else {
+                return;
+            };
             let dir = direction.normalize_or_zero();
             let range = game
                 .weapons
@@ -605,9 +608,6 @@ impl BotBrain {
             );
 
             let target_distance = direction.length();
-            let Some(target_tank) = game.tanks.get(&target) else {
-                return;
-            };
             let target_z = target_tank.level_state.z;
             // пол под пулей на дистанции цели — один из уровней, которых касается
             // цель (у стоящей — её уровень, у танка на рампе — оба соседних), и цель
