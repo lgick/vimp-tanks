@@ -1756,6 +1756,29 @@ mod tests {
         assert_eq!(tracer[9].as_u64(), Some(1), "endLevel");
     }
 
+    #[test]
+    fn tracer_down_the_slope_stays_on_the_slab_it_flies_over() {
+        let mut shot = make_shot();
+
+        apply_map(&mut shot, &layered_shot_map());
+        put_tank(&mut shot, bridge_tank_row(35.0, 5.0));
+
+        // ствол опущен по склону: дуло x = 50.6, пуля 1.18, спад 0.05 на
+        // единицу. На входе в колонку 3 (x = 40) пуля 0.65 — ниже настила,
+        // но плита под ней: пуля держится уровня 1 и достаёт танк на плите
+        let render = RenderState {
+            angle: std::f32::consts::PI,
+            z: 1.3,
+            slope_vec: [0.5, 0.0],
+            ..render_at_level(55.0, 5.0, 1)
+        };
+        let spawn = shot.try_fire(&render, 1, 0.0, ShotWorld::default()).unwrap();
+        let tracer = tracer_of(&spawn);
+
+        assert_eq!(tracer[6].as_u64(), Some(u64::from(HIT_TARGET)), "{tracer:?}");
+        assert_eq!(tracer[9].as_u64(), Some(1), "endLevel");
+    }
+
     // `layered_shot_map` со стеной земли (тайл 1) в колонке 8; `game` —
     // поле карты с высотами стен
     fn walled_shot_map(game: Option<Value>) -> String {

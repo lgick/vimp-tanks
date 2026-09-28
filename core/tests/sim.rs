@@ -2181,6 +2181,51 @@ fn terraces_loads_with_three_levels() {
     assert_eq!(level_of(&core, 3), 2, "точка на верхней площадке — уровень 2");
 }
 
+// Прогон 1 → 2 (`rampStep`, клетки x 31..33 строки 21, подъём на восток)
+// лежит на террасе. Ствол стрелка на склоне опущен вдоль него: за подножием
+// пуля уходит ниже настила, но плита террасы под ней — пуля остаётся на
+// уровне 1 и достаёт танк на террасе, а не проваливается под неё.
+#[test]
+fn shot_down_the_upper_ramp_hits_a_tank_on_the_terrace() {
+    let mut core = make_core();
+
+    core.load_map(terraces_map_json()).unwrap();
+
+    // носом на запад, кормой к подножию прогона
+    let (x, y) = terraces_cell(28.0, 21.0);
+    core.spawn_actor(1, "m1", 1, x, y, 180.0).unwrap();
+
+    let (x, y) = terraces_cell(20.0, 21.0);
+    core.spawn_actor(2, "m1", 2, x, y, 0.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1, "стрелок на террасе");
+    assert_eq!(level_of(&core, 2), 1, "цель на террасе");
+
+    core.apply_input(1, 1, "down", "back");
+
+    for _ in 0..400 {
+        steps(&mut core, 1);
+
+        if tank_z(&core, 1) >= 1.4 {
+            break;
+        }
+    }
+
+    assert!(tank_z(&core, 1) >= 1.4, "стрелок не заехал на прогон: z={}", tank_z(&core, 1));
+    core.apply_input(1, 2, "up", "back");
+
+    core.take_events();
+    fire(&mut core, 3, 1);
+
+    let health = health_of(&events(&mut core), 2);
+
+    assert!(
+        health.is_some_and(|h| h < 100.0),
+        "пуля вниз по рампе осталась на террасе: {health:?}"
+    );
+}
+
 #[test]
 fn tank_climbs_two_levels_in_one_ramp() {
     // задача 6 итерации 2: крутой прогон 0 → 2 проезжается одним заездом

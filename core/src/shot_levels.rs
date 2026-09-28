@@ -55,6 +55,30 @@ pub fn floor_under(levels: &MapLevels, fly: u8, x: f32, y: f32) -> u8 {
     }
 }
 
+/// Настил плиты для пули непрозрачен, как земля: если плита уровня `k` есть
+/// и в предыдущей клетке луча, и в текущей, пуля её не пересекает. Летевшая
+/// над плитой не проваливается под неё (остаётся на уровне `k`, как пуля
+/// ниже нуля остаётся на земле), летевшая под плитой не выходит на неё
+/// снизу (остаётся на `k − 1`). Уровень `k` пересекается только там, где
+/// плиты `k` нет хотя бы в одной из двух клеток: у кромки, над рампой, в
+/// провале. `prev` — уровень полёта в предыдущей клетке, `raw` — по высоте
+/// пули на входе в текущую.
+fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2], center: [f32; 2]) -> u8 {
+    let slab = |k: u8| {
+        levels.has_floor(k, prev_center[0], prev_center[1]) && levels.has_floor(k, center[0], center[1])
+    };
+
+    if raw < prev {
+        // спуск: плоскости prev, prev − 1, …, raw + 1 — сверху вниз
+        (raw + 1..=prev).rev().find(|&k| slab(k)).unwrap_or(raw)
+    } else if raw > prev {
+        // подъём: плоскости prev + 1, …, raw — снизу вверх
+        (prev + 1..=raw).find(|&k| slab(k)).map_or(raw, |k| k - 1)
+    } else {
+        raw
+    }
+}
+
 /// Сегменты луча от `origin` в направлении `dir` (единичном) длиной
 /// `range`. `bullet` — высота пули вдоль луча (`shot_height::bullet_line`);
 /// без неё (рендер трассера, `shot_segments`) пуля летит ровно на уровне
@@ -70,7 +94,9 @@ pub fn floor_under(levels: &MapLevels, fly: u8, x: f32, y: f32) -> u8 {
 /// * пуля с земли идёт под плитой: окна у кромки нет, танк на мосту
 ///   снизу недосягаем;
 /// * пуля со склона вверх (ствол задран) поднимается над плитой и летит
-///   по ней; вниз — опускается на нижний уровень.
+///   по ней; вниз — опускается на нижний уровень;
+/// * наклонная пуля (стрелок на склоне) не проходит сквозь плиту: над ней
+///   она держится её уровня, под ней остаётся под ней (`fly_through_slabs`).
 ///
 /// Одноуровневая карта даёт ровно один сегмент `[0, range]` уровня 0 —
 /// путь стрельбы на таких картах обязан остаться прежним бит-в-бит.
@@ -112,12 +138,19 @@ pub fn ray_segments(
     let mut out: Vec<RaySegment> = Vec::new();
     // (пол, полёт) текущего сегмента
     let mut current: Option<(u8, u8)> = None;
+    // центр предыдущей клетки луча (`fly_through_slabs`)
+    let mut prev_center: Option<[f32; 2]> = None;
     let mut t0 = 0.0f32;
 
     walk_ray_cells(origin, dir, range, rows, cols, tile, |cx, cy, t| {
-        let fly = fly_at(t);
         let center = [(cx as f32 + 0.5) * tile, (cy as f32 + 0.5) * tile];
+        let fly = match (current, prev_center) {
+            (Some((_, prev_fly)), Some(prev)) => fly_through_slabs(levels, prev_fly, fly_at(t), prev, center),
+            _ => fly_at(t),
+        };
         let state = (floor_under(levels, fly, center[0], center[1]), fly);
+
+        prev_center = Some(center);
 
         match current {
             None => current = Some(state),
@@ -389,31 +422,61 @@ mod tests {
     }
 
     #[test]
-    fn rising_bullet_climbs_onto_the_slab() {
-        // на входе в x = 30 (t = 25) пуля ≈ 0.93 — ещё под плитой, на
-        // входе в x = 40 (t = 35) ≈ 1.27 — уже над ней
+    fn rising_bullet_does_not_pierce_the_slab_from_below() {
+        // в x = 30 (t = 25) пуля 0.93 входит под плиту, в x = 40 (t = 35) она
+        // уже 1.27, но плита сверху: остаётся под ней; за плитой (x = 60) —
+        // воздух на уровне 1
         let bullet = BulletLine {
             base: 0.1,
             rate: 1.0 / 30.0,
         };
         let segments = ray_segments(&layered(), [5.0, 5.0], [1.0, 0.0], RANGE, 0, Some(&bullet));
 
+        assert_eq!(segments, vec![seg(0.0, 55.0, 0, 0), seg(55.0, RANGE, 0, 1)]);
+    }
+
+    #[test]
+    fn rising_bullet_climbs_onto_the_slab_from_its_edge() {
+        // на входе в x = 30 (t = 25) пуля 1.1, а прошлая клетка без плиты —
+        // пуля выходит на плиту
+        let bullet = BulletLine {
+            base: 0.1,
+            rate: 0.04,
+        };
+        let segments = ray_segments(&layered(), [5.0, 5.0], [1.0, 0.0], RANGE, 0, Some(&bullet));
+
         assert_eq!(
             segments,
-            vec![seg(0.0, 35.0, 0, 0), seg(35.0, 55.0, 1, 1), seg(55.0, RANGE, 0, 1)]
+            vec![seg(0.0, 25.0, 0, 0), seg(25.0, 55.0, 1, 1), seg(55.0, RANGE, 0, 1)]
         );
     }
 
     #[test]
-    fn falling_bullet_comes_down_to_the_ground() {
-        // на входе в x = 40 (t = 5) пуля на высоте 0.85 — ниже плиты
+    fn falling_bullet_stays_on_the_slab_and_drops_off_its_edge() {
+        // на входе в x = 40 (t = 5) пуля 0.85 — ниже плиты, но плита под ней:
+        // держится уровня 1; за кромкой (x = 60) падает
         let bullet = BulletLine {
             base: 1.1,
             rate: -0.05,
         };
         let segments = ray_segments(&layered(), [35.0, 5.0], [1.0, 0.0], RANGE, 1, Some(&bullet));
 
-        assert_eq!(segments, vec![seg(0.0, 5.0, 1, 1), seg(5.0, RANGE, 0, 0)]);
+        assert_eq!(segments, vec![seg(0.0, 25.0, 1, 1), seg(25.0, RANGE, 0, 0)]);
+    }
+
+    #[test]
+    fn falling_bullet_steps_down_the_terraces() {
+        // пуля держится плиты 2 до x = 60, плиты 1 — до x = 70
+        let bullet = BulletLine {
+            base: 2.1,
+            rate: -0.05,
+        };
+        let segments = ray_segments(&terraced(), [35.0, 5.0], [1.0, 0.0], RANGE, 2, Some(&bullet));
+
+        assert_eq!(
+            segments,
+            vec![seg(0.0, 25.0, 2, 2), seg(25.0, 35.0, 1, 1), seg(35.0, RANGE, 0, 0)]
+        );
     }
 
     #[test]
