@@ -15,11 +15,15 @@ import glintTexture from './glintTexture.js';
 import lightShaftTexture from './lightShaftTexture.js';
 
 export default {
-  // четыре ассета - один и тот же размытый круг, различаются параметрами
+  // пять ассетов - один и тот же размытый круг, различаются параметрами
   explosionTexture: blurredCircleTexture,
   smokeTexture: blurredCircleTexture,
   impactParticleTexture: blurredCircleTexture,
   dustTexture: blurredCircleTexture,
+  wreckSmokeTexture: blurredCircleTexture,
+  // гибель танка: пламя и копоть — те же бейкеры, свои записи ассетов
+  wreckFireTexture: lightRadialTexture,
+  wreckScorchTexture: scorchTexture,
   tankShadowTexture,
   funnelTexture,
   tankTexture,

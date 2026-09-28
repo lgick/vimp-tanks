@@ -112,7 +112,7 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   gameSets: {
     c1: ['Map', 'MapRadar'],
     c2: ['Map'],
-    m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks', 'Dust'],
+    m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks', 'Dust', 'WreckFire'],
     w1: ['ShotEffect'],
     w2: ['Bomb'],
     w2e: ['ExplosionEffect'],
@@ -120,7 +120,7 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   ```
 
   A single key can create several entities (a tank is drawn on the main
-  canvas and the radar, plus smoke, tank tracks and dust).
+  canvas and the radar, plus smoke, tank tracks, dust and the wreck fire).
 
 - **`entitiesOnCanvas`** — which canvas (`vimp` or `radar`) each class
   renders on. Entities can be subclassed and shown on different canvases
@@ -160,13 +160,25 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   splinters (`length`, `width`, `color`) tinted per sprite by the debris
   burst. Both return `{ textures, contentSize }`.
 
+  `wreckFireTexture` (`lightRadialTexture` baker), `wreckSmokeTexture`
+  (`blurredCircleTexture`) and `wreckScorchTexture` (`scorchTexture`) belong
+  to `WreckFire` ([below](#wreck-fire-wreckfx)): the same bakers under
+  entries of its own, since the engine hands a baked asset to one component
+  only. The fire texture — a soft spot with a bright centre, coloured by
+  `tint` — draws the flash, the fireball, the sparks, the flame tongues and
+  the glow (additively); the smoke texture is a white blurred circle; the
+  scorch reuses the dark blobs of a destroyed prop.
+
 - **`componentDependencies`** — which services get injected into which
   components (`renderer` → Map, Tank, Tracks, Smoke, Dust, Bomb, ShotEffect,
-  ExplosionEffect; `assetsBase` → Map;
-  `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust, Map;
+  ExplosionEffect, WreckFire; `assetsBase` → Map;
+  `soundManager` → ExplosionEffect, ShotEffect, Bomb, Tank, Dust, Map,
+  WreckFire;
   `mapDynamics` → ShotEffect; `rampRuns` → Map, ShotEffect; `surfaces` →
   Dust, Tracks, Tank; `levelView` → Tank, Map, MapRadar,
-  Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks, Dust; `localPlayer` →
+  Smoke, Bomb, ShotEffect, ExplosionEffect, Tracks, Dust, WreckFire;
+  `lighting` → Map, Tank, ExplosionEffect, ShotEffect, WreckFire;
+  `blasts` → ExplosionEffect, Tank, WreckFire; `localPlayer` →
   Tank, ShotEffect; `diagnostics` → Tank, Map).
   `diagnostics` is the engine's client error log (vimp-engine ≥ 0.35.0,
   [plugin API](https://github.com/lgick/vimp-engine/blob/main/docs/en/plugin-api.md)):
@@ -314,7 +326,7 @@ and brake have their own strips.
 
 | `blastJolt` | Meaning |
 | --- | --- |
-| `enabled` | Visual reaction of a tank to a bomb or barrel explosion (`src/client/blastJolt.js`): render only, the push itself is the core's. Tanks on the same level inside the blast radius react with strength `1 − d / radius`, like the damage; a wreck reacts too. `false` — explosions do not visibly touch tanks |
+| `enabled` | Visual reaction of a tank to a bomb or barrel explosion (`src/client/blastJolt.js`): render only, the push itself is the core's. Tanks on the same level inside the blast radius react with strength `1 − d / radius`, like the damage; a wreck reacts too. A tank's death wakes the same reaction (`WreckFire`, radius `wreckFx.joltRadius`): the wreck under it is tossed up, the neighbours rock. `false` — explosions do not visibly touch tanks |
 | `rock`, `wobbleHz`, `decay`, `duration` | The side facing the blast rises by `rock` rad (at strength 1), then the hull rocks at `wobbleHz` and settles within ~`decay` ms; `duration` — when the reaction ends. A weaker blast does not cancel the rocking of a stronger one |
 | `hop`, `hopDuration`, `underShare` | A blast under the hull (closer than `underShare` of the hull length to its centre): the hull is tossed up by `hop` levels over `hopDuration` ms — over its shadow, larger by the height projection — with a random tilt, then lands with the `landing` squash |
 | `shake`, `shakeDuration` | A short shake of the hull by up to `shake` world units, fading over `shakeDuration` ms |
@@ -341,11 +353,62 @@ constant: `levelHeight` (see [extending.md](extending.md)). It is a
 layers of different maps would read differently from one another. A map with
 an unusual `levelHeight` therefore climbs differently but looks the same.
 
+### Wreck fire: `wreckFx`
+
+`src/config/render.js → wreckFx` configures the `WreckFire` part
+(`src/client/parts/WreckFire.js`): the explosion, the fire and the smoke over
+a destroyed tank. Render only — the core, the host and the snapshot know
+nothing of it. The part reads the tank's own `m1` row and fires on the
+`condition` transition `>0 → 0`: a tank that is already a wreck on its first
+row (a player who joined later, parts recreated after a WebGL context loss)
+does not explode, and a respawn (`condition > 0` again) puts the fire out at
+once. While the tank is alive the part is idle: no ticker, no `onRender`.
+Distances are world units, times ms, heights levels; sizes are tuned for
+`referenceSize` and scale with the hull's `size`.
+
+The default timeline:
+
+```
+0 s          explosion: flash, fireball, sparks, a burst of black smoke,
+             the tankExplosion sound, the night flash, the jolt, the scorch
+0 … 9 s      the fire at full strength, dense black smoke
+9 … 14 s     the fire dies down (fire.fadeOut): rate, size, glow, light → 0
+14 … 29 s    smoke only (smoke.tail): sparser, lighter, fainter → 0
+≈ 33 s       the last puffs are gone, the ticker is removed
+until round  the scorch on the ground
+```
+
+| `wreckFx` | Meaning |
+| --- | --- |
+| `enabled` | `false` — a death without the effect (the wreck just appears) |
+| `referenceSize` | The `m1` `size` (`src/data/models.js`) the numbers below are tuned for |
+| `maxFire`, `maxSmoke` | Caps on live particles per wreck: the fire channel (fireball, sparks, tongues) and the smoke channel. At the cap a particle is simply not born |
+| `wind` | `{ x, y }`, units/s: the common drift of smoke and flame — every smoke column on the map leans the same way |
+| `joltRadius` | Radius of the visual jolt through the `blasts` bus (see `blastJolt` above): the wreck is tossed up, neighbours rock. `0` — no jolt |
+| `sound` | The explosion sound from `src/config/sounds.js` (`tankExplosion`); `null` — silent |
+| `flash` | One additive sprite that grows and fades: `duration`, `startSize`, `endSize`, `alpha`, `color` |
+| `fireball` | Burning puffs flying out of the hull and slowing down: `count`, `speed` (`{ min, max }`), `drag` (1/s), `size` (start diameter), `grow` (growth by the end of life), `lifetime`, `rise` (height gained over the life), `alpha` |
+| `sparks` | Fast short streaks stretched along their velocity: `count`, `speed`, `drag`, `length`, `width`, `lifetime`, `colors` (at the start and at the end of life) |
+| `fire` | Continuous flame tongues: `duration` (full strength), `fadeOut` (down to zero), `rate` (particles/s at full strength), `points` (fire points as `[along the heading, across]` shares of the hull — the engine bay and the turret ring), `spread` (scatter in the same shares), `size`, `grow`, `lifetime`, `jitter` (random side drift), `rise`, `alpha`, `ramp` (`[share of life, colour]` pairs from a near-white core through orange to dark red, shared with the fireball) |
+| `glow` | The fire's glow, one additive sprite over the wreck breathing with the flame: `size`, `alpha`, `color`, `flicker` |
+| `smoke` | Black and dense while burning, lighter and sparser after: `rate` (particles/s at full fire), `tailRate` (right after the fire, then down to 0), `tail` (how long it keeps smoking after the fire), `burst` (the explosion's cloud: `count`, `speed`, `alpha`), `size`, `grow`, `lifetime`, `speed` (initial scatter), `drag` (the velocity converges to the wind), `rise`, `alpha` / `tailAlpha` (peak opacity while burning / after), `burning` / `cooling` (colour ranges while burning / after) |
+| `scorch` | The mark on the ground at the point of death, lasting until the respawn: `enabled`, `size`, `alpha`, `fadeIn` |
+
+Particle budget per burning wreck: fire ≈ `36/s × ≤0.65 s ≈ 23` tongues plus
+14 fireball puffs and 12 sparks at once, within `maxFire = 64`; smoke
+≈ `12/s × ≤4.2 s ≈ 50` puffs plus the 12 of the burst, within
+`maxSmoke = 80` (kept by `tests/config/wreckFx.test.js`). About four draw
+calls per wreck (glow, smoke, fire, flash), no filters, the textures are
+baked once. Every particle has a height `h` of its own and is drawn through
+the 2.5D projection, so a smoke column leans away from the camera centre.
+The flame stays under the light map; at night it shines through
+`lighting.wreckFire` and `lighting.flash.wreck` ([below](#night-and-lighting-lighting)).
+
 ### Night and lighting: `lighting`
 
 `src/config/render.js → lighting` (also exported from `src/config/client.js`)
 configures the `lighting` service (`src/client/lighting/`), the headlights
-of `Tank` and the flashes of `ExplosionEffect` and `ShotEffect`. A map turns
+of `Tank` and the flashes of `ExplosionEffect`, `ShotEffect` and `WreckFire`. A map turns
 night on with `game.lighting` ([below](#night-lighting-gamelighting)); how it
 is drawn — [architecture.md](architecture.md#lighting-night).
 
@@ -357,7 +420,8 @@ is drawn — [architecture.md](architecture.md#lighting-night).
 | `headlights` | Two cones per live tank: `length` (world units), `spread` (half-width at the far end as a share of the length), `intensity`, `color`, `offset` (headlight offset from the hull axis as a share of the hull half-width). The headlights have no glare sprite of their own. `occlusion` — walls stop the light: `enabled` (`false` — the old cone through walls), `rays` (rays of the visibility fan). `bounce` — the light bouncing off a wall: a spot on the floor in front of the point where the headlight axis hits a wall no farther than `maxDistance`; `intensity` (share of the headlight, fading towards `length`; `0` — no bounce), `radius` (world units). Each spot is one more source against `maxLights`, placed after the lamps so it never pushes them out. `wash` — the part of the beam a wall stops is folded onto the wall's visible face, from its foot up by `height` levels (never above the wall itself), fading upwards; `intensity` — multiplier, `0` — no wash. Only faces looking at the projection centre are lit, and the wash does not count against `maxLights` |
 | `rampSpill` | Light of an upper level on the ramps leading up to it (`0..1`, `1` by default): the headlights of a tank on the slab and lamps near the top of a ramp light its wedge, clipped to the wedge so the ground under the bridge stays dark. `0` — ramps catch no light from above |
 | `tankGlow` | A faint light under every live tank so enemies stay readable: `radius`, `intensity`, `color` |
-| `flash.explosion`, `flash.shot` | Short flashes: `radius`, `intensity`, `duration` (ms), `color` |
+| `flash.explosion`, `flash.shot`, `flash.wreck` | Short flashes — a bomb or barrel explosion, a shot, a tank's death (`WreckFire`): `radius`, `intensity`, `duration` (ms), `color` |
+| `wreckFire` | The flickering warm light of a burning wreck (`WreckFire`): `radius`, `intensity` (at full fire; it follows the fire's strength and dies with it), `color`, `flicker` (flicker depth, `0..1`) |
 | `glints` | Glint: an additive highlight on the side of a tank or prop facing the strongest source at it — a lamp, another tank's headlight or a flash (a tank's own headlights and every tank glow do not count). `enabled`, `intensity` (multiplier of the source's strength at the point), `size` (highlight size as a share of the object's size). The gradient is clipped by the object's silhouette; at most `maxLights` glints per tick, off-screen objects get none |
 | `shafts` | Light shafts in the air around every lamp with `head: true`, drawn additively into the lamp level's light map: `enabled`, `rays` (rays baked into the texture), `length` (shaft radius as a share of the lamp radius), `intensity`, `shadows` (tanks and props in the shafts cut dark wedges out of them), `maxShadowCasters` (nearest shadows per lamp). At most `maxLights` lamps with shafts per frame |
 
@@ -387,7 +451,7 @@ Headlights of a tank on the ground still light the side walls, but not the
 top of a building.
 
 The service (`componentDependencies.lighting`: `Map`, `Tank`,
-`ExplosionEffect`, `ShotEffect`) exposes `enabled`, `attachStage`,
+`ExplosionEffect`, `ShotEffect`, `WreckFire`) exposes `enabled`, `attachStage`,
 `acquireMap`/`releaseMap` (per-key counter, owner-bound mask),
 `setLevelMask` (with `{ roof }`), `setRampWedges`, `registerTextures`, `texture`,
 `addLight`/`updateLight`/`removeLight`, `flash`,
@@ -581,6 +645,13 @@ crack. It is fired by the `Map` part itself (`MapObject`) on the transition
 to `state = 2` — not on the first frame of a prop that is already destroyed.
 A barrel's explosion sounds as `explosion` through `ExplosionEffect` (its
 `w2e` row).
+
+`tankExplosion` is a tank's death: the same `explosion` file, quieter than
+the bomb (`0.6` against `0.74`), since a bomb often goes off right by the
+wreck — a kill by a bomb is heard as two explosions on purpose. It is
+registered by the `WreckFire` part itself (`registerSound` at the wreck's
+point) on the `condition` transition to `0`, not by the event mapping; a tank
+that is already a wreck on its first frame stays silent.
 
 ## src/config/snapshot.js — the snapshot key schema
 

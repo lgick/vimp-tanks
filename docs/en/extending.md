@@ -452,10 +452,13 @@ a simplified radar class is created for the radar (like `MapRadar` from
 `Map`).
 
 If the entity spawns many short-lived sprites (dozens or more), follow the
-`Smoke`/`SmokeEffect` pattern: a `ParticleContainer` + `Particle` wrapped in
-a plain `Container`, per-particle simulation state in a parallel array (not
-`customData`, which `Particle` doesn't have), and `ParticlePool.js` for
-reuse — see [architecture.md](architecture.md#texture-and-particle-lifecycle).
+`Smoke`/`SmokeEffect`/`WreckFire` pattern: a `ParticleContainer` +
+`Particle` wrapped in a plain `Container`, per-particle simulation state in a
+parallel array (not `customData`, which `Particle` doesn't have), and
+`ParticlePool.js` for reuse — see
+[architecture.md](architecture.md#texture-and-particle-lifecycle). Several
+channels (e.g. additive fire and normal smoke — a `ParticleContainer` has one
+blend mode) are simplest as one `ParticleChannel.js` each, as in `WreckFire`.
 For a handful of sprites per effect (like `ImpactEffect`'s 2-4 shrapnel
 particles), a plain `Container` + `Sprite` is simpler and cheap enough.
 

@@ -41,9 +41,8 @@ const SMOKE_CONFIG = {
   // конфигурация размеров:
   // 1 (сильный урон) - самый крупный дым
   // 2 (средний урон) - средний дым
-  // 0 (уничтожен) - маленький дым (тление)
-  particleStartSizeFactor: { 1: 2.0, 2: 1.0, 0: 0.25 },
-  particleEndSizeFactor: { 1: 3.0, 2: 2.0, 0: 1.0 },
+  particleStartSizeFactor: { 1: 2.0, 2: 1.0 },
+  particleEndSizeFactor: { 1: 3.0, 2: 2.0 },
 
   // прозрачность
   particleStartAlpha: 0.08,
@@ -54,8 +53,7 @@ const SMOKE_CONFIG = {
   // конфигурация спавна (частиц в секунду):
   // 1 - густой поток
   // 2 - умеренный поток
-  // 0 - редкий дым
-  particleSpawnRate: { 1: 60, 2: 50, 0: 30 },
+  particleSpawnRate: { 1: 60, 2: 50 },
 
   // направление дыма
   particleInitialVelocity: {
@@ -204,9 +202,11 @@ export default class Smoke extends Container {
     this._particleContainer.boundsArea.x = this._emitterX - BOUNDS_PADDING;
     this._particleContainer.boundsArea.y = this._emitterY - BOUNDS_PADDING;
 
-    // если состояние изменилось и
-    // новое состояние подразумевает наличие дыма (не 3)
-    if (this._condition !== prevCondition && this._condition !== 3) {
+    // облако только на переходе в повреждённое состояние (1 или 2)
+    if (
+      this._condition !== prevCondition &&
+      (this._condition === 1 || this._condition === 2)
+    ) {
       this._triggerSmokeBurst();
     }
   }
@@ -218,8 +218,6 @@ export default class Smoke extends Container {
     if (this._condition === 1) {
       numStreams = 2;
     } else if (this._condition === 2) {
-      numStreams = 1;
-    } else if (this._condition === 0) {
       numStreams = 1;
     }
 
@@ -257,11 +255,9 @@ export default class Smoke extends Container {
       // незначительные повреждения: средний дым (один поток)
     } else if (this._condition === 2) {
       numStreams = 1;
-
-      // уничтожен: небольшой остаточный дым
-    } else if (this._condition === 0) {
-      numStreams = 1;
     }
+
+    // уничтожен: дым остова ведёт WreckFire (src/client/parts/WreckFire.js)
 
     // частота спавна или 0, если состояние не определено
     const spawnRate = SMOKE_CONFIG.particleSpawnRate[this._condition] || 0;

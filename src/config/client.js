@@ -21,7 +21,7 @@ export default {
     gameSets: {
       c1: ['Map', 'MapRadar'],
       c2: ['Map'],
-      m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks', 'Dust'],
+      m1: ['Tank', 'TankRadar', 'Smoke', 'Tracks', 'Dust', 'WreckFire'],
       w1: ['ShotEffect'],
       w2: ['Bomb'],
       w2e: ['ExplosionEffect'],
@@ -38,6 +38,7 @@ export default {
       Smoke: 'vimp',
       Tracks: 'vimp',
       Dust: 'vimp',
+      WreckFire: 'vimp',
     },
 
     // ассеты, которые должны быть "запечены" (созданы один раз) при старте игры
@@ -241,6 +242,34 @@ export default {
             blur: 4, // мягкость краёв
           },
         },
+        {
+          // гибель танка: мягкое пятно с ярким центром — вспышка, огненный шар,
+          // языки пламени, искры и отсвет (аддитивно, цвет даёт tint)
+          name: 'wreckFireTexture',
+          component: 'WreckFire',
+          params: { radius: 32, rings: 24, blur: 2 },
+        },
+        {
+          // клубы дыма над остовом: размытый круг, белый — цвет даёт tint
+          name: 'wreckSmokeTexture',
+          component: 'WreckFire',
+          params: { radius: 8, blur: 3, quality: 20, color: 0xffffff },
+        },
+        {
+          // копоть под остовом: те же пятна, что у разрушенного пропа
+          name: 'wreckScorchTexture',
+          component: 'WreckFire',
+          params: {
+            baseRadius: 20,
+            irregularity: 5,
+            blur: 4,
+            numPoints: 16,
+            color: 0x15120f,
+            coreColor: 0x060505,
+            coreRatio: 0.5,
+            variants: 3,
+          },
+        },
       ],
       radar: [
         {
@@ -264,8 +293,8 @@ export default {
     componentDependencies: {
       // Map печёт свои слои в текстуру; по рендереру восстанавливают центр
       // камеры все, кто рисуется на высоте (проекция 2.5D,
-      // src/client/parallax.js): слои и тела карты, танк, следы, дым, бомбы
-      // и эффекты
+      // src/client/parallax.js): слои и тела карты, танк, следы, дым, бомбы,
+      // эффекты и пожар остова
       renderer: [
         'Map',
         'Tank',
@@ -275,12 +304,14 @@ export default {
         'Bomb',
         'ShotEffect',
         'ExplosionEffect',
+        'WreckFire',
       ],
       // база ассетов игры: Map строит из неё URL тайл-листов и спрайтов
       // динамических тел (`${assetsBase}img/<file>`), см. assets/img/
       assetsBase: ['Map'],
       // компоненты использующие звук
-      // Map — треск разрушения пропа (`propBreak`)
+      // Map — треск разрушения пропа (`propBreak`), WreckFire — взрыв
+      // гибели танка (`tankExplosion`)
       soundManager: [
         'ExplosionEffect',
         'ShotEffect',
@@ -288,6 +319,7 @@ export default {
         'Tank',
         'Dust',
         'Map',
+        'WreckFire',
       ],
       // геометрия динамики карты (рендерные боксы ящиков): эффект попадания
       // держит якорь на теле и спрашивает, где тело нарисовано, в момент
@@ -311,12 +343,13 @@ export default {
       // «танк выстрелил»: эффект выстрела сообщает id стрелка, танк играет
       // визуальную отдачу (src/client/recoil.js)
       shots: ['ShotEffect', 'Tank'],
-      // «взрыв»: эффект взрыва сообщает точку, радиус и уровень, танки в
-      // радиусе играют визуальную реакцию (src/client/blastJolt.js)
-      blasts: ['ExplosionEffect', 'Tank'],
+      // «взрыв»: эффект взрыва и гибель танка сообщают точку, радиус и
+      // уровень, танки в радиусе играют визуальную реакцию
+      // (src/client/blastJolt.js)
+      blasts: ['ExplosionEffect', 'Tank', 'WreckFire'],
       // 2.5D: где локальный игрок и на каком он уровне. Пишет Tank, читают
       // все, кто уступает ему видимость: плита моста и ящики на ней, чужие
-      // танки, дым, бомбы, эффекты и следы — по одной формуле
+      // танки, дым, бомбы, эффекты, следы и пожар остова — по одной формуле
       // (levelView.alphaFor)
       levelView: [
         'Tank',
@@ -328,6 +361,7 @@ export default {
         'ExplosionEffect',
         'Tracks',
         'Dust',
+        'WreckFire',
       ],
       // «своя ли это сущность» — движковый сервис; локальный танк
       // единственный, кто вправе писать в levelView, а свой танк и свой
@@ -335,8 +369,8 @@ export default {
       localPlayer: ['Tank', 'ShotEffect'],
       // ночь и освещение (src/client/lighting/): слои карты заводят карты
       // освещённости уровней и фонари, танк — фары, эффекты —
-      // вспышки
-      lighting: ['Map', 'Tank', 'ExplosionEffect', 'ShotEffect'],
+      // вспышки, пожар остова — мерцающий свет и вспышку гибели
+      lighting: ['Map', 'Tank', 'ExplosionEffect', 'ShotEffect', 'WreckFire'],
       // журнал клиентских ошибок движка (сервис `diagnostics`, vimp-engine
       // ≥ 0.35.0): необязательный — на старом движке парт получает undefined, и
       // в requires манифеста его нет намеренно

@@ -158,14 +158,21 @@ describe('Smoke: выхлоп по газу', () => {
     expect(idleKinds.length).toBeLessThan(fullKinds.length);
   });
 
-  it('уничтоженный танк выхлопа не даёт: газа нет', () => {
+  it('уничтоженный танк не дымит вовсе: дым остова ведёт WreckFire', () => {
     const smoke = onStage(gasRow(1, 0));
     const kinds = countSpawns(smoke);
 
     runSecond(smoke);
 
-    expect(kinds.length).toBeGreaterThan(0);
-    expect(kinds.every(kind => kind === 'damage')).toBe(true);
+    expect(kinds.length).toBe(0);
+  });
+
+  it('переход 3 → 0 не рождает облака', () => {
+    const smoke = onStage(gasRow(0, 3));
+
+    smoke.update(gasRow(0, 0));
+
+    expect(smoke._particles.length).toBe(0);
   });
 
   it('выхлоп пропорционален размеру танка', () => {

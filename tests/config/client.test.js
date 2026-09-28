@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import clientConfig from '../../src/config/client.js';
 import clientPlugin from '../../src/client/index.js';
+import bakers from '../../src/client/bakers/index.js';
 
 // componentDependencies: движок раздаёт сервис только тем партам, которые
 // названы здесь. Пропуск имени не ломает сборку — парт молча получает
@@ -21,6 +22,7 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
       'ExplosionEffect',
       'Tracks',
       'Dust',
+      'WreckFire',
     ]);
   });
 
@@ -69,6 +71,7 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
       'Bomb',
       'ShotEffect',
       'ExplosionEffect',
+      'WreckFire',
     ]);
   });
 
@@ -117,6 +120,24 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
   it('в parts не осталось настроек уклона и пыли', () => {
     expect(clientConfig.parts.grade).toBeUndefined();
     expect(clientConfig.parts.dust).toBeUndefined();
+  });
+
+  // пожар остова: без регистрации парт не создастся, а без сервисов молча
+  // останется без звука, толчка и света — ошибок при этом не будет
+  it('WreckFire зарегистрирован и получает свои сервисы и ассеты', () => {
+    const { gameSets, entitiesOnCanvas, bakedAssets } = clientConfig.parts;
+    const names = bakedAssets.vimp
+      .filter(asset => asset.component === 'WreckFire')
+      .map(asset => asset.name);
+
+    expect(gameSets.m1).toContain('WreckFire');
+    expect(entitiesOnCanvas.WreckFire).toBe('vimp');
+    expect(deps.blasts).toContain('WreckFire');
+    expect(deps.lighting).toContain('WreckFire');
+    expect(deps.soundManager).toContain('WreckFire');
+    expect(clientPlugin.parts.WreckFire).toBeDefined();
+    expect(names).toHaveLength(3);
+    names.forEach(name => expect(bakers[name]).toBeTypeOf('function'));
   });
 
   // только свой танк пишет в levelView; свой танк и свой выстрел вдобавок

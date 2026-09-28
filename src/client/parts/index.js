@@ -8,6 +8,7 @@ import Smoke from './Smoke.js';
 import Tracks from './tracks/index.js';
 import Dust from './Dust.js';
 import ShotEffect from './effects/shot/ShotEffectController.js';
+import WreckFire from './WreckFire.js';
 
 export default {
   Map,
@@ -20,4 +21,5 @@ export default {
   Tracks,
   Dust,
   ShotEffect,
+  WreckFire,
 };

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A destroyed tank now explodes: a flash, a fireball, sparks and a burst of
+  black smoke, with its own explosion sound; the wreck is tossed up and nearby
+  tanks rock. The wreck then burns, the fire dies down after about 14 seconds,
+  and the thinning smoke clears about 15 seconds later. At night the fire lights
+  its surroundings with a flickering glow. A scorch mark stays on the ground
+  until the next round.
+
+### Changed
+
+- A wreck no longer smokes endlessly: its smoke comes from the fire and clears
+  on its own.
+
 ## [0.22.10] - 2026-09-28
 
 ### Changed

@@ -219,7 +219,10 @@ caught (`src/client/blastJolt.js`: same level, inside the physical radius,
 strength `1 − d / radius` like the core's damage) and plays a visual jolt —
 the side facing the blast rises and the hull rocks, a blast right under the
 hull tosses it up over its shadow and lands it with the landing squash.
-Render only: the push itself stays the core's.
+Render only: the push itself stays the core's. `WreckFire` wakes the bus
+too when a tank dies: `{ x, y, radius: wreckFx.joltRadius, level }` at the
+wreck, so the wreck — right under the "blast" — is tossed up and the
+neighbours rock, with no change to `Tank.js`.
 
 The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`,
 `volumes`, `lighting`, `shots`, `blasts`)
@@ -240,8 +243,8 @@ zIndex = base zIndex + LEVEL_Z_STRIDE * level     // LEVEL_Z_STRIDE = 100
 ```
 
 Base values are the single-level ones (`Tracks` 1, `Bomb`/`TankRadar`/
-`MapRadar`/`ShotEffect`/funnel 2, `Tank` 3, `Smoke`/explosion 4, map layers
-from `data.layer`), so a map without upper levels draws exactly as before.
+`MapRadar`/`ShotEffect`/funnel 2, `Tank` 3, `Smoke`/explosion 4, `WreckFire`
+4 (its scorch 2), map layers from `data.layer`), so a map without upper levels draws exactly as before.
 The stride is larger than any base value, hence every level-1 layer covers
 every level-0 one — the bridge slab hides what drives under it.
 
@@ -504,8 +507,10 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   see the night.
 - **Sources.** Lamps (`game.lighting.lamps`, cell centres, owned by the
   service), two headlight cones and a glow per live tank (updated in
-  `Tank.update`, in world coordinates, before the frame is drawn), and short
-  flashes from `ExplosionEffect` and `ShotEffect`. They share three baked
+  `Tank.update`, in world coordinates, before the frame is drawn), short
+  flashes from `ExplosionEffect`, `ShotEffect` and `WreckFire` (a tank's
+  death), and the flickering light of a burning wreck (`WreckFire`, following
+  the fire's strength). They share three baked
   textures (`lightRadialTexture`, `headlightConeTexture`, `lampHeadTexture`)
   and therefore batch, are culled against the screen and capped by
   `lighting.maxLights`. The layout runs once per stage transform per tick.
@@ -713,6 +718,12 @@ knows nothing about them.
   `container.removeParticle(...)` before returning a particle to the pool.
   `ImpactEffect.js` stays on a plain `Container` + `Sprite` — at 2-4
   particles per shot, `ParticleContainer` overhead isn't worth it.
+  `WreckFire.js` runs two such channels through `parts/ParticleChannel.js`
+  (container + simulation array + pool + a hard cap): additive fire
+  (fireball, sparks, flame tongues) and normal smoke — a `ParticleContainer`
+  has a single blend mode. Every particle carries a height `h` of its own (in
+  levels) and is drawn through `reproject`, so a smoke column leans away from
+  the camera centre and grows like everything tall in this projection.
 
 ## Key invariants
 

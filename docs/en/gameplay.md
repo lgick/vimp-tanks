@@ -111,6 +111,14 @@ The tank carries two weapons (switch with `n`/`p`, the active one is highlighted
 
 Health is 100. The tank's `condition` visually degrades with damage (smoke), and it's destroyed at 0. Stats — [configuration.md](configuration.md#weaponsjs).
 
+A destroyed tank explodes: a flash, a fireball, sparks, a burst of black
+smoke and an explosion sound of its own; the wreck is tossed up and nearby
+tanks rock (render only: no extra damage and no push). The wreck then burns
+for about 9 s, the fire dies down by about 14 s, and the lightening smoke
+clears by about 30 s. At night the fire lights its surroundings with a
+flickering glow. A scorch mark stays on the ground until the end of the round.
+Timings and sizes — [configuration.md](configuration.md#wreck-fire-wreckfx).
+
 The throttle is visible and audible: the exhaust over the pipe thickens with
 the engine load (`engineLoad`) — from a shiver at idle to a dense plume at
 full throttle — and pushing into a wall under throttle (`engineLoad > 1`)

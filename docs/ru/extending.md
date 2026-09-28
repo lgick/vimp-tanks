@@ -445,11 +445,14 @@ npm run dev                   # глазами: room.map в src/standalone.js
 для радара создаётся упрощённый класс (как `MapRadar` от `Map`).
 
 Если сущность порождает много недолгоживущих спрайтов (десятки и больше),
-следуйте паттерну `Smoke`/`SmokeEffect`: `ParticleContainer` + `Particle`,
-обёрнутые в обычный `Container`, данные симуляции на частицу — в
+следуйте паттерну `Smoke`/`SmokeEffect`/`WreckFire`: `ParticleContainer` +
+`Particle`, обёрнутые в обычный `Container`, данные симуляции на частицу — в
 параллельном массиве (не в `customData`, которого у `Particle` нет), и
 `ParticlePool.js` для переиспользования — см.
-[architecture.md](architecture.md#жизненный-цикл-текстур-и-частиц). Для
+[architecture.md](architecture.md#жизненный-цикл-текстур-и-частиц). Несколько
+каналов (например, аддитивное пламя и обычный дым — у `ParticleContainer`
+один режим смешивания) проще всего вести по одному `ParticleChannel.js` на
+канал, как в `WreckFire`. Для
 считаных спрайтов на эффект (как 2–4 осколка в `ImpactEffect`) обычный
 `Container` + `Sprite` проще и достаточно дёшев.
 

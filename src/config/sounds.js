@@ -30,6 +30,9 @@ const sounds = {
   shot: { file: 'shot', priority: 100, volume: 0.51 },
   // https://freesound.org/people/studiomandragore/sounds/401628/
   explosion: { file: 'explosion', priority: 100, volume: 0.74 },
+  // гибель танка (`WreckFire`): тот же файл, что у взрыва бомбы, тише —
+  // рядом с остовом часто рвётся и сама бомба
+  tankExplosion: { file: 'explosion', priority: 100, volume: 0.6 },
   // https://pixabay.com/sound-effects/start-stop-stopwatch-364924/
   // https://freesound.org/people/vibe_crc/sounds/47988/
   bombHasBeenPlanted: {
