@@ -9,20 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Bullets fly at the shooter's gun height: a ramp's slope, sides and upper
-  end stop them where the embankment is higher, so a tank high up a ramp
+- Bullets fly at the shooter's gun height: a ramp's slope and sides stop
+  them where the embankment is higher, so a tank high up a ramp
   can no longer be hit from the ground.
+- A shot fired from a bridge no longer drops to the level below: it flies
+  on at gun height, passes over tanks, crates and walls beneath it and
+  hits only what reaches it, such as a tank at the very top of a ramp.
+- A tank on a bridge can no longer be hit from the ground, not even on the
+  very edge of the slab.
+- A tank high on a ramp shooting sideways passes over tanks on the ground
+  below; a shot fired up a ramp flies on over the bridge instead of
+  stopping at the ramp's top edge.
 
 ### Fixed
 
 - A shot into a ramp ends on the slope or on the embankment face at gun
-  height, with its debris or sparks there, instead of at the ramp's top
+  height, with its debris there, instead of at the ramp's top
   edge or on the ground by its side; debris on a slope no longer slides
   across it as the camera moves.
 - Your own shots no longer fly through a ramp in prediction: they stop
   where the host stops them.
-- A tank on a bridge can shoot down the ramp that leads onto it; the shot
-  used to stop at the bridge edge.
+- Debris of a wall or embankment hit falls to the ground instead of
+  hanging at gun height, where a tank could drive under it.
 
 ## [0.22.9] - 2026-09-28
 

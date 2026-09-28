@@ -146,6 +146,7 @@ describe('ClientPlugin: сервис rampRuns', () => {
   const makeRampCore = () => ({
     'map_generation': vi.fn(() => 1),
     'ramp_runs': vi.fn(() => JSON.stringify(runs)),
+    'floor_level': vi.fn(() => 0),
   });
 
   it('heightAt даёт высоту склона под мировой точкой, вне рампы — null', () => {
@@ -170,6 +171,14 @@ describe('ClientPlugin: сервис rampRuns', () => {
     expect(hit.face).toEqual({ axis: 'y', coord: 64, nx: 0, ny: 1 });
     expect(hit.volume).toBeCloseTo(0.5);
     expect(rampRuns.faceAt(0, 96, 32, 0, -1, 0.15)).toBe(null);
+  });
+
+  it('floorAt спрашивает пол у ядра', () => {
+    const core = makeRampCore();
+    const { rampRuns } = clientPlugin.hooks.services(core);
+
+    expect(rampRuns.floorAt(1, 96, 32)).toBe(0);
+    expect(core.floor_level).toHaveBeenCalledWith(1, 96, 32);
   });
 
   it('forLevel, heightAt, slopeAt и faceAt делят один разбор до смены карты', () => {

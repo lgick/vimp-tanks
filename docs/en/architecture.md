@@ -148,12 +148,12 @@ filtered by the core — so every shot kicks exactly once. Ids are compared as
 strings: the part context and the tracer row may carry different types.
 The bus also cuts a shot into level segments (`path(...)` over
 `ClientCore.shot_segments` — the same `shot_levels::ray_segments` the host
-judges hits by). `tracerPieces` turns them into non-overlapping pieces: in
-the edge window the earlier segment wins, and the last piece takes the
-row's end level. `TracerEffect` draws every piece in its level's container,
+judges hits by). `tracerPieces` turns them into non-overlapping pieces
+(a segment's level is its flight level; where segments overlap the earlier
+one wins), and the last piece takes the row's end level. `TracerEffect` draws every piece in its level's container,
 with that level's projection and zIndex. A shot from a bridge runs above
-the slab and drops beyond the edge; before, the whole line was drawn at the
-end level, under the slab. By day the end-level piece stays in the
+the slab and on at its height beyond the edge (an air segment); before, the
+whole line was drawn at the end level, under the slab. By day the end-level piece stays in the
 controller.
 
 A shot into a wall ends on the wall's visible FACE, not on its foot. The
@@ -163,20 +163,24 @@ footprint, while the drawn wall is the volume face from the foot up. The
 every level cell, filled by the `Map` layers that have `data.volume`.
 `ShotEffect` recognises a wall hit by geometry (`src/client/wallFace.js`):
 the ray's end lies on a cell edge (`edgeFace`, tolerance 0.15 — the host
-rounds the hit point to 0.1) and the cell beyond it is a volume of the end
-level. When the face looks at the projection centre (`faceIsFront`), the
+rounds the hit point to 0.1) and the cell beyond it is a volume of the floor
+under the bullet (`rampRuns.floorAt` over `ClientCore.floor_level`: a bridge
+shot's wall stands on the ground below). When the face looks at the projection centre (`faceIsFront`), the
 tracer's end is moved onto it at the bullet height `tracer.height` (the
 barrel height of the model; `reproject`, `src/client/parallax.js`), and the controller rises over
 the occluder (`levelZ(OCCLUDER_BASE_Z + 0.5, L)`, under the light map).
 When the face is turned away (camera past the wall), the tracer stops at
 the roof's silhouette (`crossingDistance`, the face's top edge in
-projection) instead of being drawn over the roof down to the hidden foot.
+projection, counted from that floor: `base + volume`) instead of being drawn over the roof down to the hidden foot.
 The side is picked once per shot: the camera barely moves in 45–80 ms of
 flight. The tracer gets the face line as `stopLine`, so `shiftTo` never
 carries its end past the face while the shooter drives — it slides along
-it. The impact sparks of a wall hit live in their own `shot-impact` layer
-on the stage, projected at the bullet height; its side (over or under the
-occluder) is re-picked every frame.
+it. The debris of a wall hit is born at the bullet's height on the face
+(`ImpactEffect`'s `startK`) and falls to the surface under it within
+`fallDuration` (250 ms). While it falls in front of a visible face the
+controller stays over the occluder; lying on the floor or behind a face
+turned away it goes back under it — the side is re-picked every frame
+(`_placeImpactZ`).
 
 Debris of a hit lies on the surface under it. A tank on a ramp is hit on
 the level of the ray's segment but is drawn at its own `z`. So
@@ -187,7 +191,10 @@ is `lerp(from, to, progress)`, the height of the wedge's vertices and of the
 core's tank `z`, or `null` off a ramp. Every frame the controller's
 `onRender` calls `ImpactEffect.project`, which moves each piece into the
 projection of its own point (`reproject`). The height is re-read only while
-a piece flies.
+a piece flies. The floor under a piece is `rampRuns.floorAt(endLevel, x, y)`:
+the debris of a bridge shot that hit above a lower level (a tank at the top
+of a ramp) is born at the flight level and falls onto the slope or the
+ground below.
 
 A shot into a ramp's embankment ends where the core stopped the bullet
 (`core/src/shot_height.rs`, see [core.md](core.md)); the row's `wasHit`
@@ -196,10 +203,11 @@ height there IS the bullet's height. `_slopeEnd` lifts the tracer's end
 onto the slope (`rampRuns.slopeAt`, `reproject`) with the slope's contour
 line as its `stopLine`, and the debris lies there. Code 3
 (`W1_HIT_EMBANKMENT_FACE`) means a side or the end face entered from
-outside below its top. `_wallAt` takes that face from `rampRuns.faceAt`,
+outside below its top. `_wallAt` takes that face from `rampRuns.faceAt` on the floor under
+the bullet,
 and from there the shot is drawn exactly like a wall hit: on the face at
-gun height, cut at the face's silhouette when the face turns away, sparks
-in `shot-impact`.
+gun height, cut at the face's silhouette when the face turns away, debris
+falling from gun height.
 
 `blasts` (`src/client/blastEvents.js`) is the same kind of bus for
 explosions: `ExplosionEffect` (bomb or barrel) reports `{ x, y, radius,
@@ -722,7 +730,8 @@ knows nothing about them.
   `MapLevels`, with the same `coreParams.levels` (they reach the client core
   through `prediction.coreParams` in CONFIG_DATA). A second copy of the
   rules would drift from the authoritative level silently; the same holds
-  for `ray_segments()` (`core/src/shot_levels.rs`) and shooting.
+  for `ray_segments()` (`core/src/shot_levels.rs`) and shooting — and
+  `floor_under()`, shared with `ClientCore.floor_level`.
 - The snapshot key schema (`src/config/snapshot.js`) is this plugin's data —
   an unregistered key breaks frame packing on both the host and the client.
 - `ENGINE_API_VERSION` compatibility is checked by the engine at plugin load

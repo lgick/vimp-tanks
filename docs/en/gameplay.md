@@ -242,24 +242,25 @@ A map may carry up to eight levels: the ground (0) and overhead floors
 
 ### Shooting across levels
 
-A ray always travels at the shooter's level and changes it only by these
-rules:
+A bullet flies at the shooter's gun height, as in GTA 2, and hits only what
+reaches that height:
 
 | Situation | Rule |
 | --- | --- |
-| **Slab to slab** | While the ray is over a floor of its level it only hits targets of that level; railings block it. |
-| **Downwards** | At the first cell without a floor of its level the ray drops to the nearest level below that still has one — over a hole in the level 2 slab it lands on level 1, not on the ground — and from there only hits targets of that level. The drop repeats level by level; the ray never climbs back. |
+| **Slab to slab** | While the ray is over a floor of its level it only hits targets of that level; railings block it. A shot over another slab of the same level (a second bridge) travels on it just the same. |
+| **Off a slab** | The bullet does not drop to the level below. Over a cell without a floor of its level it flies on at gun height: it passes over tanks, crates and walls lower than itself and hits only what reaches it — a wall taller than the bullet or a tank at the very top of a ramp. The tracer stays at the height of the level it was fired from. |
 | **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it. |
-| **Upwards** | In the very first cell that carries a floor of the nearest level above the shooter, the ray can hit a tank standing there — unless that cell is a railing of that level. Only the nearest level above is reachable: from the ground a tank on level 2 is never hit through the level 1 slab. The window is exactly that one cell wide and closes where the ray leaves it, so a tank standing on the second slab cell is already out of reach. Past it the slab shields everything and the ray continues at its own level. |
-| **Tank on a ramp** | Visible to rays of every level the run connects, if the bullet reaches it over the embankment. |
-| **Ramp embankment** | A bullet flies at the shooter's gun height; on a slope the barrel follows the slope. A ramp's slope, sides and upper end stop it wherever the embankment is higher than the bullet. So a tank high up a ramp cannot be hit from the ground, a tank at its foot can, and a side shot hits the embankment face at gun height. A shot from the slab goes on down the ramp. |
+| **Upwards** | A bullet from below never reaches a tank on a slab above, not even on its very edge: it flies under the slab. Only a ramp leads up. |
+| **Tank on a ramp** | Visible to bullets of every level the run connects, if the bullet reaches it over the embankment and does not pass above it. |
+| **Ramp embankment** | A bullet flies at the shooter's gun height; on a slope the barrel follows the slope. A ramp's slope and sides stop it wherever the embankment is higher than the bullet. So a tank high up a ramp cannot be hit from the ground, a tank at its foot can, and a side shot hits the embankment face at gun height. A shot fired up the slope flies on over the slab the ramp leads to. |
+| **Tank on a slope** | Its bullet flies at its own gun height above the slope, so shooting sideways it passes over tanks standing on the ground below — the mirror of the embankment rule. |
 | **Tank in the air** | Invulnerable: while airborne neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. It does SHOOT, though: only driving is locked in flight. |
 | **Explosion** | Only hits targets on its own level — the slab shields it both upwards and downwards. |
 | **Bomb** | Lands on its owner's level; if there is no floor of that level under the drop point (on a ramp, for instance), the bomb comes to rest on the nearest floor below it — on a three-level map that is the level 1 slab, not the ground. |
 
-On a miss the tracer is drawn at the level in force at the **end** of the
-ray, not at the last level it visited: a ground shot that grazes the bridge
-ledge ends on the ground, not on the slab layer.
+On a miss the tracer's end is drawn at the height the bullet flies at the
+**end** of the ray: a shot from a bridge over the ground ends at bridge
+height, not on the ground.
 
 Which maps have levels and how they are authored — see
 [extending.md](extending.md#new-map).
@@ -339,8 +340,9 @@ On a 2.5D map (levels, ramps, bridges) a bot knows its own level:
   being stuck;
 - it prefers a target on its own level, and holds fire when the bridge slab
   shields the target — instead it drives towards it, over a ramp. A target
-  its ray does reach is shot at even where the levels overlap, such as a
-  ground enemy standing in the ledge window;
+  its bullet does reach is shot at; one the bullet would pass over or
+  under — a ground tank for a bot on a bridge or high on a ramp, a tank on
+  a bridge for a bot on the ground — is not;
 - it strafes after a shot only to a point walkable on its own level, and it
   steers around obstacles of its own level (railings above a bot on the
   ground are not obstacles).

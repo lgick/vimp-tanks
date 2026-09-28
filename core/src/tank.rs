@@ -118,6 +118,7 @@ pub struct Tank {
     width: f32,
     height: f32,
     barrel_height: f32,
+    turret_top: f32,
     mass: f32,
     inertia: f32,
 
@@ -248,6 +249,7 @@ impl Tank {
             width,
             height,
             barrel_height: model.barrel_height,
+            turret_top: model.turret_top,
             mass,
             inertia,
             current_keys: 0,
@@ -274,6 +276,13 @@ impl Tank {
     /// Высота ствола над полом, мировые единицы (`ModelConfig::barrel_height`).
     pub fn barrel_height(&self) -> f32 {
         self.barrel_height
+    }
+
+    /// Высота танка над полом, мировые единицы (`ModelConfig::turret_top`),
+    /// но не ниже ствола: танк без объявленной высоты достаётся пулей своего
+    /// уровня, как прежде.
+    pub fn turret_top(&self) -> f32 {
+        self.turret_top.max(self.barrel_height)
     }
 
     /// Обновляет состояние клавиш (BaseModel.updateKeys).

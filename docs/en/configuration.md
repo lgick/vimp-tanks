@@ -192,6 +192,8 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   `faceAt(level, x, y, dx, dy, tolerance)` gives `{ face, volume }` — the
   embankment face under the ray's end in the `edgeFace` format and the
   face's height above the level: a side shot is drawn like a wall hit.
+  `floorAt(level, x, y)` — the floor under a world point for a bullet
+  flying at `level` (`ClientCore.floor_level`).
   `surfaces` is the game's service over `ClientCore.surface_at`/
   `surface_dir_at`: `kindAt(x, y, level)` and `dirAt(x, y, level)` tell the
   dust, the track marks and the tank what cell the tank is on (see
@@ -608,8 +610,9 @@ positional contract with three places at once: `TankRow::fields` and
 `players_json` in the host core, and `render_overlay` in the client core.
 
 The 2.5D level travels with the shot blocks as well: the tracer (`w1`)
-ends with `startLevel`/`endLevel` — the level the ray started at and the one
-it ended at (they differ where the ray drops off a ledge) — while the bomb
+ends with `startLevel`/`endLevel` — the shooter's level and the level the
+bullet flies at the end of the ray (they differ, for example, for a shot
+fired up a slope onto a slab) — while the bomb
 (`w2`) and its explosion (`w2e`) each carry a `level`. The client could
 derive all four from its own copy of the layers, but then the picture would
 depend on one more repeated algorithm; four bytes are cheaper. The
@@ -649,6 +652,13 @@ the turret (`maxGunAngle: 1.4` rad, rotation/centering rates).
 hitscan bullet flies at it and stops on a ramp embankment that is higher
 (`core/src/shot_height.rs`). It is kept in a pair with the renderer's
 `tankModel.barrelHeight`/`tracer.height` (a guard test checks it).
+
+`turretTop: 3.0` is the tank's height above the floor (the turret top) in
+world units: a bullet hits the tank only if the tank reaches it
+(`core/src/shot_height.rs`, `tank_reaches`) — so a bullet from a bridge
+passes over a tank on the ground. It is kept in a pair with the renderer's
+`tankModel.turretTop` and must stay above `barrelHeight` (a guard test
+checks both).
 
 `brakingFactor: 0.3` is the braking coefficient: the higher it is, the
 sharper the tank stops. The value is deliberately low — the tank body is
@@ -706,7 +716,7 @@ passage under the slab, crates at the gaps in the railings of both levels and
 | `physicsDynamic[].level` | The level a box stands on (`0` by default). Bodies of different levels never touch |
 | `game` | Optional, the game's own map data (capability `map.gameData`): the engine stores it as raw JSON and the core parses it on both sides (`core/src/map_game.rs`). Unknown keys are ignored. The core reads `game.surfaces` (see [Surfaces](#surfaces-gamesurfaces)); the client reads `game.lighting` (see [Night lighting](#night-lighting-gamelighting)). `downtown.js` is the reference |
 | `physicsDynamic[].game` | Optional, the game's data of a map body (`{ prop, imgDamaged, imgDestroyed }`, see [Destructible props](#destructible-props-physicsdynamicgameprop)); `downtown.js` is the reference |
-| `volumes` / `levels[n].volumes` | Optional, **visual only**: `zIndex of the render layer` → its height in levels. A layer with a height is extruded by `Map` itself and shifts as the camera moves; the engine validates the value and passes it to the part in `data.volume` |
+| `volumes` / `levels[n].volumes` | Optional: `zIndex of the render layer` → its height in levels. A layer with a height is extruded by `Map` itself and shifts as the camera moves; the engine validates the value and passes it to the part in `data.volume`. The same heights are the walls' heights for bullets: `src/data/maps/index.js` derives `game.wallHeights` from them (below) |
 | `levelHeight` | Optional: **world units per level** (before `scale`), the tile size by default. One number that makes the ramp grade dimensionless in the core (physics only — the client no longer computes a grade); the part receives it as `data.levelHeight`, and the engine validates it (`vimp-engine >= 0.32.0`) |
 | `respawns[team][i][3]` | Optional 4th element of a respawn point — the level. Without it the level is derived from the geometry (`GameMap::level_at`), i.e. a ground point that happens to sit under the slab would spawn the tank **on** the bridge |
 
@@ -721,6 +731,17 @@ and refuses a map with mismatched grid dimensions, a gap in the level
 numbering, a railing outside `floor`, a ramp tile missing from its grid or a
 level number out of range in `respawns`/`physicsDynamic`. Structural checks
 of the same kind run offline as contract rule `E4` (`vimp-contract`).
+
+#### Wall heights for bullets (`game.wallHeights`)
+
+`{ "<level>": { "<tile>": <height in levels> } }` — derived, never written
+by hand: `src/data/maps/wallHeights.js` builds it from `layers`/`volumes` of
+level 0 and of every `levels[N]` (a tile in several layers takes the
+tallest), and `src/data/maps/index.js` wraps every map with it. The engine
+does not hand `layers`/`volumes` to the host core, so the heights travel in
+`game`. A bullet flying above a lower floor passes over a wall lower than
+itself; a wall tile without a height is infinitely tall (a map with no
+volumes stops every shot at every wall, as before).
 
 #### Surfaces (`game.surfaces`)
 

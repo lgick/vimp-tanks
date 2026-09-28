@@ -184,8 +184,8 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
 
     it('трассер w1 несёт уровни луча, бомба w2 и взрыв w2e — свой уровень', () => {
       core.load_map(layeredMap);
-      // стрелок на плите, цель за её восточной кромкой на земле:
-      // луч уходит с уровня 1 и падает на уровень 0
+      // стрелок на плите, цель за её восточной кромкой на земле: пуля летит
+      // над ней на высоте моста до восточной стены рамки
       core.spawn_actor(1, 'm1', 1, 336, 272, 0);
       core.spawn_actor(2, 'm1', 2, 460, 272, 0);
 
@@ -203,7 +203,8 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       expect(tracer).toHaveLength(10);
       expect(tracer[6]).toBe(1);
       expect(tracer[8]).toBe(1);
-      expect(tracer[9]).toBe(0);
+      expect(tracer[9]).toBe(1);
+      expect(tracer[2]).toBeCloseTo(608, 0);
 
       // бомба, сброшенная на плите: уровень 1 и в w2, и во взрыве w2e
       core.apply_input(1, 2, 'down', 'nextWeapon');
@@ -261,7 +262,7 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       expect(tracer[9]).toBe(0);
     });
 
-    it('с моста вниз по рампе — пуля идёт дальше, до западной стены', () => {
+    it('с моста над рампой — пуля летит на высоте моста до западной стены', () => {
       core.load_map(layeredMap);
       core.spawn_actor(1, 'm1', 1, 352, 304, 180);
       stepTicks(core, 2);
@@ -270,7 +271,7 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
 
       expect(tracer[2]).toBeCloseTo(32, 0);
       expect(tracer[6]).toBe(1);
-      expect(tracer[9]).toBe(0);
+      expect(tracer[9]).toBe(1);
     });
 
     it('с земли в борт — грань насыпи', () => {
@@ -285,7 +286,7 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       expect(tracer[9]).toBe(0);
     });
 
-    it('со склона вверх — склон на верхнем торце', () => {
+    it('со склона вверх — пуля уходит над плитой моста', () => {
       core.load_map(layeredMap);
       core.spawn_actor(1, 'm1', 1, 208, 304, 0);
       core.apply_input(1, 1, 'down', 'forward');
@@ -304,8 +305,9 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
 
       const tracer = shoot();
 
-      expect(tracer[2]).toBeCloseTo(320, 0);
-      expect(tracer[6]).toBe(2);
+      expect(tracer[6]).toBe(1);
+      expect(tracer[2]).toBeCloseTo(608, 0);
+      expect(tracer[9]).toBe(1);
     });
   });
 

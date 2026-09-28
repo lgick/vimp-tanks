@@ -53,9 +53,11 @@ holds the transitions). Each level brings its own `layers`, over its own
   layer itself — side walls along the outer edges of its tiles plus one copy
   of the same baked picture at the top height, pushed away from the camera
   centre (`parts.volume.faces`) — while the flat layer stays
-  underneath as the block's base. Visual only: the core knows nothing about
-  the height, and `parts.volume.enabled = false` switches the effect off
-  entirely.
+  underneath as the block's base. The height also counts for bullets: a shot
+  flying above a lower floor passes over a wall lower than itself
+  (`game.wallHeights` is derived automatically, see
+  [configuration.md](configuration.md)). `parts.volume.enabled = false`
+  switches off only the picture.
 - **A ramp needs nothing extra to get a volume.** `Map` takes the runs from
   the core (the `rampRuns` service — the same `MapLevels::runs` the physics
   puts its guards on) and draws each of them as a slope whose every vertex
@@ -91,8 +93,7 @@ holds the transitions). Each level brings its own `layers`, over its own
   over it and can clear its far edge. Check steep runs in `npm run dev` at
   full throttle.
 - **Railings must be part of the slab** — a `walls` tile also belongs in
-  `floor`, otherwise the railing hangs in the air and a shot from below
-  does not see it.
+  `floor`, otherwise the railing hangs in the air.
 - **Do not put a railing right where a ramp meets the slab**: a tank that
   has just climbed up would drive straight into it. Leave the ramp exit and
   the tile in front of it free.
@@ -137,7 +138,7 @@ Step by step, the way `overpass.js` and `terraces.js` were built:
    `from`/`to` levels. Open a gap in the railing where the ramp meets the
    slab.
 3. Leave a gap or two in the railing away from the ramps — those are the
-   ledges people fall from and shoot through from below.
+   ledges people fall from.
 4. Give the level its `floor`/`walls`/`layers` and give each `physicsDynamic`
    body its `level`.
 5. Register the map in `src/data/maps/index.js` and check it:

@@ -36,10 +36,11 @@ src/
 ├── config.rs                  # ModelConfig/WeaponConfig/TanksConfig/TanksClientConfig
 ├── level.rs                   # 2.5D level rules: ramps, ledges, falling, collision
 │                              #   masks — pure functions over the engine's MapLevels
-├── shot_levels.rs             # 2.5D shot ray split into single-level segments
+├── shot_levels.rs             # 2.5D shot ray split into segments by the bullet's
+│                              #   height (floor + flight level)
 │                              #   (shared by the authoritative hitscan and the client)
-├── shot_height.rs             # bullet height and ramp embankments for hitscan
-│                              #   (host, shot predictor and bots)
+├── shot_height.rs             # bullet height, ramp embankments, what the bullet
+│                              #   reaches (host, shot predictor and bots)
 ├── bots/
 │   └── controller.rs         # BotBrain — bot AI (input is generated inside the core)
 └── client/                    # the core's client mode: TanksClient (impl GameClientDef)
@@ -220,7 +221,8 @@ exists. Its config is assembled by the engine's
 | `decode_frame(bytes)` | a plain v5 decode → the frame's JSON shape (tests/harness); `'null'` on a version mismatch |
 | `map_dynamics_to_world(key, localX, localY)` | a body-local point → world in the render frame: `[x, y]`, or an empty array |
 | `ramp_runs()` | the current map's ramp runs as a JSON array `{axis, sign, from, to, min, max, crossMin, crossMax, block, railMin, railMax}` in WORLD units (`railMin`/`railMax` — the side rails' bounds from `map::ramp_rail_span`, `null` when the run gets none) — the very `MapLevels::runs` the physics puts its ramp guards on; `[]` when there is no map or it is single-level. The renderer draws the wedge by it (the `rampRuns` service), so the picture and the physics cannot drift apart |
-| `shot_segments(x, y, dx, dy, range, level)` | the level segments of a shot ray from `(x, y)` along the unit `(dx, dy)` for `range`, fired from `level` — the very `shot_levels::ray_segments` the host judges hits by, flat `[t0, t1, level, …]` (`t` — world units along the ray). No map — one segment `[0, range, level]`; a single-level map — one level-0 segment, as on the host. The tracer is cut by it into per-level pieces (the `shots` service) |
+| `shot_segments(x, y, dx, dy, range, level)` | the level segments of a shot ray from `(x, y)` along the unit `(dx, dy)` for `range`, fired from `level` (the bullet flat at the shooter's level: the renderer does not know the barrel's tilt) — the very `shot_levels::ray_segments` the host judges hits by, flat `[t0, t1, fly, …]` (`t` — world units along the ray) — the third number is the segment's **flight** level, the projection the tracer piece is drawn in. No map — one segment `[0, range, level]`; a single-level map — one level-0 segment, as on the host. The tracer is cut by it into per-level pieces (the `shots` service) |
+| `floor_level(level, x, y)` | the floor under a world point for a bullet flying at `level`: `level` itself over its own slab, otherwise the landing level (`shot_levels::floor_under`, the rule of the ray segments). The shot effect finds a wall or embankment face below a bridge shot by it and drops that shot's debris onto it. No map — `level` |
 | `surface_at(x, y, level)` / `surface_types()` / `surface_dir_at(x, y, level)` | the surface under a world point of a level, from the same `SurfaceMap` the predictor moves by: the type index (`-1` — no map, no `game.surfaces` or a neutral cell) / the type names as a JSON array in index order (the `coreParams.surfaces.types` keys, sorted) / the cell's arrow `0..3` — north/south/west/east as for ramps (`-1` — a neutral cell or an undirected type). Behind the `surfaces` service |
 
 **Own-shot dedup (bombs).** A bomb planted locally appears on the canvas
@@ -899,14 +901,16 @@ does not push a box below it. A falling tank keeps only `STATIC_LEVEL_GROUP`, so
 collects the walls and no bodies at all while the subsystems keep stepping.
 
 `ShotPredictor` cuts its ray with the same `ray_segments()` the host uses,
-and each segment sees only the walls, the boxes and the hulls of its own
-level. A hull in transit is the exception: the host holds both level masks
+and each segment sees only the walls, the boxes and the hulls of its floor;
+a tank only if it reaches the bullet, and in an air segment walls by height
+(`first_tall_wall`, the map's `game.wallHeights` via `ShotPredictor::set_map`)
+and no boxes. A hull in transit is the exception: the host holds both level masks
 for a tank on a ramp, so a row whose `z` differs from its `level` is offered
 to the segments of both levels. The level of a remote hull is taken from the
 predicted world (`RemoteTanks::sim_boxes()`) whenever the tank is predicted
 there, and from the frame row only as a fallback — the same rule the OBB
 already followed. The resulting `startLevel`/`endLevel` go into the local
-tracer row. The ramp embankment is checked by the same
+tracer row (`endLevel` is the flight level at the end). The ramp embankment is checked by the same
 `first_embankment_hit()` the host uses (the own tank's slope comes as
 `RenderState::slope_vec`), and the row's hit field carries the numeric
 `HIT_*` code, not a `bool`. The level of a locally planted bomb is decided by
@@ -926,27 +930,27 @@ Like `step_level`, this function must be the single one for both sides: the
 authoritative `TanksSim::process_hitscan` and the client shot predictor call
 exactly it.
 
-- A ray keeps its level while the cell under it carries a floor of that
-  level. In the first cell without one it drops to
-  `landing_level(level, cell centre)` — the nearest level below that still
-  has a floor — and carries on there. The drop repeats, so a shot from
-  level 2 over a hole in its slab runs 2 → 1 → 0 in three segments; level 0
-  is terminal (the ground is everywhere inside the map).
-- In the first cell that carries a floor of the **nearest level above** the
-  ray (unless that cell is a railing of that level) the ray gets a short
-  **probe** of that level, spanning exactly that one cell — from where the
-  ray enters it to where it leaves it, not a whole cell diagonal: a tank on
-  an open ledge is reachable from below, a tank on the second slab cell is
-  not. Only the nearest level above is probed, and only before the first
-  drop. A shooter deep under the slab gets no probe — it is added only when
-  the cell behind the ray has no floor of that level.
-- The level segments overlap on purpose: `process_hitscan` casts a ray per
-  segment and takes the **nearest** hit, so a ground wall in front of the
-  ledge still beats the probe. Each segment is filtered with
-  `levels_interaction_on_ramp(level_group(segment.level))` — the level as a
-  body on a ramp run sees it, without the ramp guards: the embankment is
-  judged by the bullet's height (`shot_height.rs`, below). On a flat map no
-  group filter is set at all and the shooting path stays exactly as it was.
+- The bullet's height along the ray comes from `shot_height::bullet_line`
+  (below). In every cell the **flight level** `fly` is the highest map level
+  not above the bullet, and the **floor** under it is
+  `floor_under(fly, cell centre)`: `fly` itself over a slab of that level
+  (the ground is everywhere), otherwise `landing_level`. A segment
+  `RaySegment { t0, t1, level, fly }` ends where that pair changes;
+  `fly > level` is an **air segment** — the bullet above a floor below its
+  own level.
+- So a shot from a bridge does not drop: past the edge it flies on as an
+  air segment and returns to an ordinary one over another slab of its
+  level. A ground shot passes under the slab, even at its very
+  edge. A bullet fired up a slope (the barrel tilted with the hull) climbs
+  over the slab the ramp leads to; one fired down it comes down to the
+  level below. Without a bullet (the renderer's `shot_segments`) the flight
+  level is the shooter's level.
+- `level_at_distance()` returns `fly` — the end of a miss is drawn in the
+  flight projection; `covers_level()` asks about the floor. Each segment is
+  filtered with `levels_interaction_on_ramp(level_group(segment.level))` —
+  the floor as a body on a ramp run, without the ramp guards. On a flat map
+  no group filter is set at all and the shooting path stays exactly as it
+  was.
 - An explosion reads its target's level **from the target's collider masks**
   (`collision_groups().memberships`) rather than from the game tag: that way
   a tank and dynamic map geometry (which carries no tag) read the same.
@@ -975,21 +979,36 @@ and the bots (`bots::controller`):
   with its hull, so the barrel follows the slope: `rate = (slope_vec · dir)
   / level_height`.
 - `embankment_hit()` — the first meeting with the embankment of the runs
-  whose LOWER level is the segment's level, by three rules: the ray enters
-  the run from outside while the embankment there is higher than the bullet
-  — a face (side or end face); inside the run the slope rises above the
-  bullet — the slope; the ray reaches the upper end going up the slope — the
-  slope at the end face (the bullet does not carry on over the slab above).
+  whose LOWER level is the segment's level, by two rules: the ray enters
+  the run from outside within the segment while the embankment there is
+  higher than the bullet — a face (side or end face); inside the run the
+  slope rises above the bullet — the slope. The upper end does not stop the
+  bullet: above it is the slab, and `ray_segments` lifts the ray onto it.
+  `EmbankmentHit::level` is the segment's `fly`.
   `first_embankment_hit()` takes the nearest one over all segments; the host
   ends the ray there if it is nearer than the collider hit, with no damage
   or impulse.
+- What the bullet reaches. A tank is hit in any segment only if it reaches
+  the bullet: `tank_reaches(z, turret_top, level_height, h)` — the hull top
+  `z + turretTop / level_height` is not below the bullet at the tank
+  centre's projection onto the ray (`turretTop` of the model,
+  `src/data/models.js`). In an air segment walls are judged by height —
+  `first_tall_wall()`: the walls of the levels from the floor up to `fly`,
+  whose top `k + wall_height(k, tile)` is not below the bullet
+  (`MapGame::wall_height`, `game.wallHeights` of the map; a tile with no
+  height is infinitely tall) — and props are flown over. In an ordinary
+  segment walls and props stop the bullet as before. The host applies the
+  tank rule as a Rapier `QueryFilter::predicate`; the tracer's `endLevel` is
+  the segment's `fly`.
 - The hit code in the tracer row (`wasHit`, `u8` of `w1`): `HIT_NONE` 0 —
   miss, `HIT_TARGET` 1 — body or wall, `HIT_SLOPE` 2 — the slope's top,
   `HIT_EMBANKMENT_FACE` 3 — an embankment face. The mirror is `W1_HIT_*` in
   `src/client/snapshotFields.js`.
 - `ShotPredictor` applies the same model (the own tank's slope from
-  `RenderState::slope_vec`); a bot does not fire when the embankment is
-  nearer than its target.
+  `RenderState::slope_vec`, `turret_top` of a remote tank = own model's
+  ratio to `size` times its `size`); a bot does not fire when its bullet
+  would miss the target's floor, pass over or under it, or meet the
+  embankment first.
 
 ### Destructible props (`core/src/props.rs`)
 
@@ -1062,10 +1081,11 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
 - A falling bot is skipped at the top of `update()`: keys released, the
   stuck timer zeroed — otherwise the 0.35 s of locked input would throw it
   into `ClearingObstacle` on flat ground.
-- `level_at_distance()` (`shot_levels.rs`) answers "which level is my ray
-  on at that distance": the upper segment wins where the ground segment and
-  the ledge probe overlap. A bot holds fire unless that level equals its
-  target's level, and keeps driving to it instead.
+- The shot check runs `ray_segments()` with the bot's own bullet: a bot
+  holds fire unless the floor under the bullet at the target's distance is
+  one of the levels the target touches (both neighbours for a tank on a
+  ramp) and the target reaches the bullet (`tank_reaches`), and keeps
+  driving to it instead.
 - The line of sight, the strafe point after a shot and the obstacle
   avoidance rays all run on the bot's own level
   (`has_obstacle_between_on`, `is_walkable_on`,
@@ -1278,7 +1298,7 @@ Covered by `crate_on_conveyor`, `crate_hits_boost_once`,
 | --- | --- | --- |
 | Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence), surface formulas (`motion.rs`: the neutral mix bit for bit, sand, oil, the track yaw sign, a belt) and the surface table (`surface.rs`: validation, sampling points inside the hull, the boost entry rule, the oil residue's linear fade, no residue without `slickTime`, decay without effect in flight, the boost hold: none without `boostTime`, the raised ceiling and its expiry, the compensation cancelling one damping step), props (`props.rs`: transitions and `damagedAt`, the multiplier by cause, priming only a blast type and only by a blast, detonation order) and the `coreParams.props` validation; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios, 2 on a map; surfaces: 10 scenarios from `sand_straight_run` to `boost_against_arrow_does_nothing`, boost reconciliation, the boost hold at full speed and its reconciliation, equal cell size; map bodies: `crate_on_conveyor`, `crate_hits_boost_once`, `crate_in_sand_slows`, the crate's boost reconciliation) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, the oil residue still skidding after leaving the patch and expiring after `slickTime`, the boost hold keeping the speed above `maxForwardSpeed` and expiring after `boostTime`, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre) |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots (a bridge shot over the ground, a ground shot under the slab's edge) and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, the oil residue still skidding after leaving the patch and expiring after `slickTime`, the boost hold keeping the speed above `maxForwardSpeed` and expiring after `boostTime`, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre) |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
 
 `tests/core/` tests are part of `npm test` and **are skipped** if

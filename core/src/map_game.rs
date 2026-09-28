@@ -19,6 +19,10 @@ use crate::config::SurfaceRules;
 pub struct MapGame {
     /// уровень ("0", "1", …) → id тайла ("41") → описание поверхности
     pub surfaces: BTreeMap<String, BTreeMap<String, SurfaceTileDef>>,
+    /// Высоты стен для пули: уровень ("0", "1", …) → тайл ("12") → высота
+    /// объёма в уровнях. Выводит JS из `layers`/`volumes` карты
+    /// (src/data/maps/wallHeights.js): движок их хосту не передаёт.
+    pub wall_heights: BTreeMap<String, BTreeMap<String, f32>>,
 }
 
 /// Поле `game` элемента `physicsDynamic`.
@@ -102,6 +106,19 @@ impl MapGame {
 
         Ok(())
     }
+
+    /// Высота стены тайла `tile` уровня `level`, в уровнях. Тайл без
+    /// объявленной высоты — бесконечно высокий: на карте без объёмов (и в
+    /// тестовых фикстурах) пулю останавливает любая стена, как прежде.
+    /// Зовётся только в воздушном сегменте луча (`shot_height::first_tall_wall`),
+    /// по клеткам одного луча — разбор ключей на лету дешёвый.
+    pub fn wall_height(&self, level: u8, tile: i32) -> f32 {
+        self.wall_heights
+            .get(&level.to_string())
+            .and_then(|tiles| tiles.get(&tile.to_string()))
+            .copied()
+            .unwrap_or(f32::INFINITY)
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +178,31 @@ mod tests {
         // отклоняет движок (`MapConfig::validate`) ещё до игры
         assert!(MapGame::from_value(&json!("sand")).is_err());
         assert!(MapGame::from_value(&json!({ "surfaces": { "0": { "41": 5 } } })).is_err());
+        assert!(MapGame::from_value(&json!({ "wallHeights": { "0": { "1": "high" } } })).is_err());
+    }
+
+    #[test]
+    fn wall_heights_parse_and_answer() {
+        let game = MapGame::from_value(&json!({
+            "wallHeights": { "0": { "1": 1.0, "4": 0.25 }, "1": { "9": 0.35 } }
+        }))
+        .unwrap();
+
+        assert_eq!(game.wall_height(0, 1), 1.0);
+        assert_eq!(game.wall_height(0, 4), 0.25);
+        assert_eq!(game.wall_height(1, 9), 0.35);
+    }
+
+    #[test]
+    fn unknown_wall_is_infinitely_tall() {
+        let game = MapGame::from_value(&json!({
+            "wallHeights": { "0": { "1": 1.0, "4": 0.25 }, "1": { "9": 0.35 } }
+        }))
+        .unwrap();
+
+        assert_eq!(game.wall_height(0, 7), f32::INFINITY);
+        assert_eq!(game.wall_height(2, 1), f32::INFINITY);
+        assert_eq!(MapGame::default().wall_height(0, 1), f32::INFINITY);
     }
 
     #[test]

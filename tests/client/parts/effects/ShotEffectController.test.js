@@ -485,7 +485,9 @@ describe('ShotEffectController: попадание в грань стены', ()
   const WALL_HIT_Z = levelZ(OCCLUDER_BASE_Z + 0.5, 0);
   const SHOT_Z = levelZ(2, 0);
   const renderer = { screen: { width: 800, height: 600 } };
-  const wallVolumes = (heightAt = (level, x) => (x >= 96 && x < 128 ? 1 : 0)) => ({
+  const wallVolumes = (
+    heightAt = (level, x) => (x >= 96 && x < 128 ? 1 : 0),
+  ) => ({
     cellSize: () => ({ cellW: 32, cellH: 32 }),
     heightAt: vi.fn(heightAt),
   });
@@ -545,7 +547,9 @@ describe('ShotEffectController: попадание в грань стены', ()
     expect(open.zIndex).toBe(SHOT_Z);
     expect(open.tracer.endPositionX).toBe(96);
 
-    const missed = wallShot(0, { data: [10, 40, 96, 40, 0, 0, false, 1, 0, 0] });
+    const missed = wallShot(0, {
+      data: [10, 40, 96, 40, 0, 0, false, 1, 0, 0],
+    });
 
     missed.run();
     expect(missed.zIndex).toBe(SHOT_Z);
@@ -572,50 +576,61 @@ describe('ShotEffectController: попадание в грань стены', ()
     expect(controller.tracer.endPositionX).toBeCloseTo(stop, 6);
   });
 
-  it('искры — в своём слое на высоте ствола, сторона грани — каждый кадр', () => {
+  it('осколки в контроллере падают с высоты ствола, сторона грани — каждый кадр', () => {
     const controller = wallShot(0);
     const stage = controller.parent;
 
     controller.run();
     finishTracer(controller);
 
-    const layer = controller.impact.parent;
+    expect(controller.impact.parent).toBe(controller);
+    expect(controller.impact._startK).toBeCloseTo(
+      tracer.height * parallax.shear,
+      9,
+    );
+    // падают, грань к камере: над перекрывателем
+    expect(controller.zIndex).toBe(WALL_HIT_Z);
 
-    expect(layer).not.toBe(controller);
-    expect(layer.label).toBe('shot-impact');
-    expect(layer.parent).toBe(stage);
-    expect(layer.zIndex).toBe(WALL_HIT_Z);
-
-    controller.onRender();
-
-    expect(layer.scale.x).toBeCloseTo(1 + tracer.height * parallax.shear, 6);
-    expect(layer.alpha).toBe(0.7);
-    expect(layer.tint).toBe(0xb0b0c0);
-
-    // камера ушла за стену: искры под перекрывателем
+    // камера ушла за стену: осколки под перекрывателем
     stage.position.x = 400 - 300;
     controller.onRender();
-    expect(layer.zIndex).toBe(SHOT_Z);
+    expect(controller.zIndex).toBe(SHOT_Z);
+
+    // камера вернулась, но осколки уже на полу
+    stage.position.x = 400 - 0;
+    controller.impact._update(300);
+    controller.onRender();
+    expect(controller.zIndex).toBe(SHOT_Z);
 
     controller.destroy();
 
-    expect(layer.destroyed).toBe(true);
-    expect(stage.children).not.toContain(layer);
+    // отдельного слоя осколков нет: после уборки сцена пуста
+    expect(stage.children).toEqual([]);
   });
 
-  it('попадание не в стену — искры в самом контроллере', () => {
+  it('попадание не в стену — осколки в самом контроллере, без высоты рождения', () => {
     const controller = wallShot(0, { volumes: wallVolumes(() => 0) });
 
     controller.run();
     finishTracer(controller);
 
     expect(controller.impact.parent).toBe(controller);
+    expect(controller.impact._startK).toBeNull();
   });
 });
 
 // подъём 0 → 1 вдоль +x на [64, 128], полоса по y 16..80
 const runs = [
-  { axis: 0, sign: 1, from: 0, to: 1, min: 64, max: 128, crossMin: 16, crossMax: 80 },
+  {
+    axis: 0,
+    sign: 1,
+    from: 0,
+    to: 1,
+    min: 64,
+    max: 128,
+    crossMin: 16,
+    crossMax: 80,
+  },
 ];
 // сервис rampRuns на настоящих функциях src/client/rampSurface.js
 const makeRampRuns = () => ({
@@ -724,7 +739,7 @@ describe('ShotEffectController: осколки на склоне рампы', ()
     expect(barePiece.sprite.x).toBe(barePiece.x);
   });
 
-  it('попадание в стену: осколки в слое shot-impact, склон не спрашивается', () => {
+  it('попадание в стену: осколки в контроллере падают на склон', () => {
     const rampRuns = makeRampRuns();
     const volumes = {
       cellSize: () => ({ cellW: 32, cellH: 32 }),
@@ -738,9 +753,9 @@ describe('ShotEffectController: осколки на склоне рампы', ()
 
     controller.onRender();
 
-    expect(controller.impact.parent).not.toBe(controller);
-    expect(controller.impact.parent.label).toBe('shot-impact');
-    expect(rampRuns.heightAt).not.toHaveBeenCalled();
+    expect(controller.impact.parent).toBe(controller);
+    expect(controller.impact._startK).not.toBeNull();
+    expect(rampRuns.heightAt).toHaveBeenCalled();
   });
 });
 
@@ -792,7 +807,7 @@ describe('ShotEffectController: выстрел в насыпь рампы', () =
     expect(controller.impact.x).toBe(76);
   });
 
-  it('грань насыпи к камере: конец на высоте ствола, искры в слое shot-impact', () => {
+  it('грань насыпи к камере: конец на высоте ствола, осколки падают с высоты ствола', () => {
     const camera = { x: 96, y: 200 };
     const controller = embankmentShot(camera, faceRow, {
       rampRuns: makeRampRuns(),
@@ -804,7 +819,11 @@ describe('ShotEffectController: выстрел в насыпь рампы', () =
 
     finishTracer(controller);
 
-    expect(controller.impact.parent.label).toBe('shot-impact');
+    expect(controller.impact.parent).toBe(controller);
+    expect(controller.impact._startK).toBeCloseTo(
+      (0 + tracer.height) * parallax.shear,
+      9,
+    );
   });
 
   it('грань насыпи от камеры: обрыв на силуэте', () => {
@@ -850,5 +869,151 @@ describe('ShotEffectController: выстрел в насыпь рампы', () =
 
     expect(controller.tracer.endPositionX).toBe(76);
     expect(controller.tracer._stopLine).toBeNull();
+  });
+});
+
+describe('ShotEffectController: попадание пули с моста над нижним уровнем', () => {
+  const renderer = { screen: { width: 800, height: 600 } };
+  // конец x = 150 над землёй, уровень конца (полёта) — 1; рампа фикстуры —
+  // x 64..128, точка 150 вне её
+  const airRow = [300, 40, 150, 40, 300, 40, 1, 1, 1, 1];
+  // центр камеры в `camera`: сцена сдвинута на полэкрана
+  const bridgeShot = (camera, data, dependencies = {}) => {
+    let stage = null;
+    const levelView = {
+      camera: () => cameraCenter(stage, renderer),
+      alphaFor: () => 1,
+      tintFor: () => 0xffffff,
+    };
+    const controller = makeController(data, {
+      levelView,
+      renderer,
+      ...dependencies,
+    });
+
+    stage = controller.parent;
+    stage.position.set(400 - camera.x, 300 - camera.y);
+    controller.run();
+
+    return controller;
+  };
+
+  it('осколки рождаются на уровне полёта и падают на пол', () => {
+    const camera = { x: 0, y: 40 };
+    const rampRuns = {
+      ...makeRampRuns(),
+      floorAt: vi.fn((level, x) => (x < 200 ? 0 : level)),
+    };
+    const controller = bridgeShot(camera, airRow, { rampRuns });
+
+    finishTracer(controller);
+
+    const { impact } = controller;
+
+    expect(impact._startK).toBeCloseTo(1 * parallax.shear, 9);
+
+    impact._update(300);
+    controller.onRender();
+
+    expect(impact.particlesData.length).toBeGreaterThan(0);
+
+    for (const p of impact.particlesData) {
+      // из проекции уровня 1 на пол 0
+      const expected = reproject(
+        impact.x + p.x,
+        impact.y + p.y,
+        camera,
+        parallax.shear,
+        0,
+      );
+
+      expect(impact.x + p.sprite.x).toBeCloseTo(expected.x, 6);
+    }
+  });
+
+  it('попадание на плите — осколки сразу на поверхности', () => {
+    const rampRuns = { ...makeRampRuns(), floorAt: vi.fn(level => level) };
+    const controller = bridgeShot({ x: 0, y: 40 }, airRow, { rampRuns });
+
+    finishTracer(controller);
+
+    expect(controller.impact._startK).toBeNull();
+  });
+
+  it('грань насыпи под пулей ищется на полу', () => {
+    // прогон 0 → 2 на [64, 128], полоса по y 16..80
+    const steep = [
+      {
+        axis: 0,
+        sign: 1,
+        from: 0,
+        to: 2,
+        min: 64,
+        max: 128,
+        crossMin: 16,
+        crossMax: 80,
+      },
+    ];
+    const rampRuns = {
+      heightAt: (level, x, y) => rampSurfaceAt(steep, level, x, y),
+      slopeAt: (level, x, y) => rampSlopeAt(steep, level, x, y),
+      faceAt: vi.fn((...args) => rampFaceAt(steep, ...args)),
+      floorAt: vi.fn(() => 0),
+    };
+    const camera = { x: 112, y: 200 };
+    // выстрел на север в борт y = 80 с уровня 1
+    const controller = bridgeShot(
+      camera,
+      [112, 120, 112, 80, 112, 120, W1_HIT_EMBANKMENT_FACE, 1, 1, 1],
+      { rampRuns },
+    );
+    const end = reproject(
+      112,
+      80,
+      camera,
+      1 * parallax.shear,
+      (1 + tracer.height) * parallax.shear,
+    );
+
+    expect(rampRuns.faceAt.mock.calls[0][0]).toBe(0);
+    expect(controller._wall.base).toBe(0);
+    // склон на x = 112: (112 − 64) / 64 · 2
+    expect(controller._wall.volume).toBeCloseTo(1.5, 6);
+    expect(controller.tracer.endPositionY).toBeCloseTo(end.y, 6);
+  });
+
+  it('стена под пулей с моста ищется на полу', () => {
+    const volumes = {
+      cellSize: () => ({ cellW: 32, cellH: 32 }),
+      heightAt: vi.fn((level, x) =>
+        level === 0 && x >= 96 && x < 128 ? 1.5 : 0,
+      ),
+    };
+    const rampRuns = { ...makeRampRuns(), floorAt: vi.fn(() => 0) };
+    // камера за стеной
+    const camera = { x: 300, y: 40 };
+    const controller = bridgeShot(camera, [10, 40, 96, 40, 0, 0, 1, 1, 1, 1], {
+      volumes,
+      rampRuns,
+    });
+
+    expect(volumes.heightAt.mock.calls[0][0]).toBe(0);
+    expect(controller._wall.base).toBe(0);
+
+    const t = crossingDistance({
+      x0: 10,
+      y0: 40,
+      dx: 1,
+      dy: 0,
+      face: controller._wall.face,
+      camera,
+      kBase: 1 * parallax.shear,
+      kLine: (0 + 1.5) * parallax.shear,
+    });
+    expect(t).not.toBeNull();
+
+    const along = Math.min(86, Math.max(0, t));
+
+    expect(controller.tracer.endPositionX).toBeCloseTo(10 + along, 6);
   });
 });

@@ -33,7 +33,7 @@ import {
 const SHOT_BASE_Z = 2;
 
 // попадание в видимую грань — над перекрывателем (иначе грань закрывает
-// искры), под картой освещённости
+// конец трассера и падающие осколки), под картой освещённости
 const WALL_HIT_BASE_Z = OCCLUDER_BASE_Z + 0.5;
 
 // допуск «конец луча на кромке клетки», мировые единицы: хост округляет
@@ -56,7 +56,7 @@ export default class ShotEffectController extends Container {
     // 2.5D: осколки и вспышка — на уровне КОНЦА луча, иначе осколки
     // провалятся под мост. Трассер режется по сегментам уровней ядра и
     // рисуется кусками на своих уровнях (`_layerFor`): луч с моста идёт над
-    // плитой и падает за кромкой. Уровень начала (`W1_START_LEVEL`) нужен
+    // плитой и дальше на её высоте (воздушный сегмент ядра). Уровень начала (`W1_START_LEVEL`) нужен
     // сегментам и вспышке выстрела на стволе
     this.endLevel = data[W1_END_LEVEL] || 0;
     this.startLevel = data[W1_START_LEVEL] || 0;
@@ -104,10 +104,8 @@ export default class ShotEffectController extends Container {
     // прогоны рамп (сервис `rampRuns`): осколки на склоне лежат на склоне,
     // а не на полу уровня конца луча (`_debrisSurface`, `_placeDebris`)
     this._rampRuns = dependencies.rampRuns || null;
-    // задетая стена `{ face, volume }` (`_wallEnd`); null — не стена
+    // задетая стена `{ face, volume, base }` (`_wallEnd`); null — не стена
     this._wall = null;
-    // слой искр попадания в стену (`_impactHost`)
-    this._impactLayer = null;
 
     // трассер и осколки уступают видимость игроку под плитой ровно так же,
     // как всё остальное на верхнем уровне (единая формула — в levelView).
@@ -135,7 +133,11 @@ export default class ShotEffectController extends Container {
 
         for (const [level, layer] of this.layers) {
           if (this._levelView) {
-            layer.alpha = this._levelView.alphaFor(level, layer.refX, layer.refY);
+            layer.alpha = this._levelView.alphaFor(
+              level,
+              layer.refX,
+              layer.refY,
+            );
             layer.tint = this._levelView.tintFor(level);
           }
 
@@ -145,7 +147,7 @@ export default class ShotEffectController extends Container {
         this._followMuzzle();
         this._placeFlash(camera);
         this._placeDebris(camera);
-        this._placeImpact(camera);
+        this._placeImpactZ(camera);
       };
     }
 
@@ -253,7 +255,9 @@ export default class ShotEffectController extends Container {
 
   // Задетая стена: конец луча на кромке клетки, а клетка за кромкой по
   // ходу луча — объём уровня конца, или грань насыпи рампы
-  // (`W1_HIT_EMBANKMENT_FACE`). `{ face, volume }` или null
+  // (`W1_HIT_EMBANKMENT_FACE`). `{ face, volume }` или null. Грань стоит на
+  // полу под пулей (`_floorAt`): у пули с моста — на земле. `base` — уровень
+  // этого пола
   _wallAt(nx, ny) {
     if (!this.hit) {
       return null;
@@ -262,16 +266,21 @@ export default class ShotEffectController extends Container {
     // грань насыпи рампы (борт или торец): ядро остановило пулю на ней
     // ниже её верха — рисуется тем же путём, что стена
     if (this.hitCode === W1_HIT_EMBANKMENT_FACE) {
-      return (
-        this._rampRuns?.faceAt?.(
-          this.endLevel,
-          this.endPositionX,
-          this.endPositionY,
-          nx,
-          ny,
-          WALL_EDGE_TOLERANCE,
-        ) ?? null
+      const ahead = 2 * WALL_EDGE_TOLERANCE;
+      const base = this._floorAt(
+        this.endPositionX + nx * ahead,
+        this.endPositionY + ny * ahead,
       );
+      const found = this._rampRuns?.faceAt?.(
+        base,
+        this.endPositionX,
+        this.endPositionY,
+        nx,
+        ny,
+        WALL_EDGE_TOLERANCE,
+      );
+
+      return found ? { ...found, base } : null;
     }
 
     if (!this._volumes) {
@@ -299,13 +308,21 @@ export default class ShotEffectController extends Container {
     }
 
     const probe = 0.01 * Math.min(cellW, cellH);
-    const volume = this._volumes.heightAt(
-      this.endLevel,
-      this.endPositionX + nx * probe,
-      this.endPositionY + ny * probe,
-    );
+    const px = this.endPositionX + nx * probe;
+    const py = this.endPositionY + ny * probe;
+    const base = this._floorAt(px, py);
+    const volume = this._volumes.heightAt(base, px, py);
 
-    return volume > 0 ? { face, volume } : null;
+    return volume > 0 ? { face, volume, base } : null;
+  }
+
+  // Уровень пола под мировой точкой для конца луча. `endLevel` — уровень
+  // полёта пули: у пули с моста над землёй пол ниже (`rampRuns.floorAt`,
+  // core.floor_level). Без сервиса — уровень конца, как раньше
+  _floorAt(x, y) {
+    const floor = this._rampRuns?.floorAt?.(this.endLevel, x, y);
+
+    return Number.isInteger(floor) ? floor : this.endLevel;
   }
 
   // Видимый конец трассера `{ x, y, dist, stopLine }` у попадания в стену
@@ -346,7 +363,7 @@ export default class ShotEffectController extends Container {
       return plain;
     }
 
-    const { face, volume } = this._wall;
+    const { face, volume, base } = this._wall;
     const { shear } = parallaxConfig;
     const kBase = this.endLevel * shear;
     let x;
@@ -370,7 +387,7 @@ export default class ShotEffectController extends Container {
         face,
         camera,
         kBase,
-        kLine: (this.endLevel + volume) * shear,
+        kLine: (base + volume) * shear,
       });
       const along = t === null ? dist : Math.min(dist, Math.max(0, t));
 
@@ -429,37 +446,18 @@ export default class ShotEffectController extends Container {
     };
   }
 
-  // Контейнер искр попадания. В стену — свой слой на сцене: искры рисуются
-  // на грани на высоте ствола и над перекрывателем, пока грань видна
-  // (`_placeImpact`). Остальные попадания — в самом контроллере, как раньше
-  _impactHost() {
-    if (!this._wall || !this.parent) {
-      return this;
-    }
-
-    const layer = new Container();
-
-    layer.label = 'shot-impact';
-    layer.eventMode = 'none';
-    this.parent.addChild(layer);
-    this._impactLayer = layer;
-    this._placeImpact(
-      this._levelView?.camera() ?? cameraCenter(this.parent, this._renderer),
-    );
-
-    return layer;
-  }
-
   // Коэффициент проекции поверхности под мировой точкой для осколков: на
   // склоне рампы — высота склона (`rampRuns.heightAt`, та же, что у вершин
   // клина), иначе null — пол уровня конца. Нужен выстрелу в склон
   // (`W1_HIT_SLOPE`) и попаданию в танк на рампе: танк виден лучам обоих
-  // уровней, а нарисован на своём `z`. Грани насыпи и стене не нужен — у
-  // них искры в своём слое на высоте ствола (`_impactHost`)
+  // уровней, а нарисован на своём `z`. У стены и грани насыпи осколки
+  // падают на эту поверхность с высоты ствола (`_debrisStartK`). Пол под
+  // осколком — `_floorAt`: осколки попадания пули с моста падают на землю,
+  // а не висят на высоте моста
   _debrisSurface() {
     const ramps = this._rampRuns;
 
-    if (this._wall || typeof ramps?.heightAt !== 'function') {
+    if (typeof ramps?.heightAt !== 'function') {
       return null;
     }
 
@@ -467,15 +465,42 @@ export default class ShotEffectController extends Container {
     const { shear } = parallaxConfig;
 
     return (x, y) => {
-      const height = ramps.heightAt(level, x, y);
+      const floor = this._floorAt(x, y);
+      const height = ramps.heightAt(floor, x, y);
 
-      return height === null ? null : height * shear;
+      if (height !== null) {
+        return height * shear;
+      }
+
+      // пол ниже уровня конца (пуля с моста над землёй): осколки на нём
+      return floor < level ? floor * shear : null;
     };
   }
 
-  // Осколки попадания в самом контроллере (не в стену) лежат на
-  // поверхности под собой: на склоне рампы — в его проекции, а не пола
-  // уровня конца (`ImpactEffect.project`)
+  // Коэффициент высоты рождения осколков: у стены и грани насыпи — высота
+  // ствола, там же конец трассера на грани (`_wallEnd`); у воздушного
+  // попадания — уровень полёта; иначе null — сразу на поверхности
+  _debrisStartK() {
+    const { shear } = parallaxConfig;
+
+    if (this._wall) {
+      return (this.endLevel + tracerConfig.height) * shear;
+    }
+
+    // склон: конец нарисован на склоне — осколки сразу на нём
+    if (this.hitCode === W1_HIT_SLOPE) {
+      return null;
+    }
+
+    // воздушное попадание (танк у верха рампы с моста): конец нарисован
+    // на уровне полёта, пол под ним ниже — осколки падают на него
+    return this._floorAt(this.endPositionX, this.endPositionY) < this.endLevel
+      ? this.endLevel * shear
+      : null;
+  }
+
+  // Осколки попадания лежат на поверхности под собой: на склоне рампы —
+  // в его проекции, а не пола уровня конца (`ImpactEffect.project`)
   _placeDebris(camera) {
     const impact = this.impact;
 
@@ -486,38 +511,32 @@ export default class ShotEffectController extends Container {
     impact.project(camera, this.endLevel * parallaxConfig.shear);
   }
 
-  // Слой искр попадания в стену: проекция высоты ствола над полом уровня
-  // конца, сторона грани — каждый кадр (камера за время искр сдвигается
-  // заметно). Отвёрнутая грань — искры под перекрывателем, под крышей
-  _placeImpact(camera) {
-    const layer = this._impactLayer;
+  // Осколки попадания в стену: пока они падают перед видимой гранью,
+  // контроллер над перекрывателем (иначе грань закрыла бы их). Лежащие
+  // на полу и за отвёрнутой гранью — под ним, под крышей, как всё на
+  // полу. Сторона — каждый кадр: осколки лежат 6–15 с, камера за это
+  // время уходит далеко
+  _placeImpactZ(camera) {
+    const impact = this.impact;
 
-    if (!layer || layer.destroyed) {
+    if (!this._wall || !impact || impact.destroyed) {
       return;
     }
 
-    const level = this.endLevel;
     const front = Boolean(
       camera &&
-        faceIsFront(this._wall.face, this.endPositionX, this.endPositionY, camera),
-    );
-
-    applyParallax(
-      layer,
-      camera,
-      (level + tracerConfig.height) * parallaxConfig.shear,
-      1,
-    );
-    layer.zIndex = levelZ(front ? WALL_HIT_BASE_Z : SHOT_BASE_Z, level);
-
-    if (this._levelView) {
-      layer.alpha = this._levelView.alphaFor(
-        level,
+      faceIsFront(
+        this._wall.face,
         this.endPositionX,
         this.endPositionY,
-      );
-      layer.tint = this._levelView.tintFor(level);
-    }
+        camera,
+      ),
+    );
+
+    this.zIndex = levelZ(
+      front && impact.isFalling() ? WALL_HIT_BASE_Z : SHOT_BASE_Z,
+      this.endLevel,
+    );
   }
 
   // Контейнер куска трассера уровня `level`. Днём кусок уровня конца
@@ -659,10 +678,13 @@ export default class ShotEffectController extends Container {
         impactDirectionY,
         this._onImpactComplete.bind(this), // callback
         this._assets,
-        { surfaceK: this._debrisSurface() },
+        {
+          surfaceK: this._debrisSurface(),
+          startK: this._debrisStartK(),
+        },
       );
 
-      this._impactHost().addChild(this.impact);
+      this.addChild(this.impact);
       this.impact.run();
 
       // иначе, если попадания не было,
@@ -719,11 +741,6 @@ export default class ShotEffectController extends Container {
     if (this.impact) {
       this.impact.destroy();
       this.impact = null;
-    }
-
-    if (this._impactLayer) {
-      this._impactLayer.destroy({ children: true });
-      this._impactLayer = null;
     }
 
     if (this.flash) {

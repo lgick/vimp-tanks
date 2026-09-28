@@ -29,6 +29,7 @@ fn flat_config_json() -> serde_json::Value {
                 "currentWeapon": "w1",
                 "size": 2,
                 "barrelHeight": 2.4,
+                "turretTop": 3.0,
                 "accelerationFactor": 1000,
                 "brakingFactor": 0.3,
                 "maxForwardSpeed": 260,
@@ -1129,10 +1130,10 @@ fn ground_shot_hits_a_tank_at_the_foot_of_the_ramp() {
     assert!(health.is_some_and(|h| h < 100.0), "цель у подножия поражена: {health:?}");
 }
 
-// Луч с моста падает на уровень 0 в верхней клетке рампы, на кромке, где
-// стоит страж торца: пуля стражей не видит, а насыпь ниже пули с моста.
+// Пуля с моста не падает: над рампой и землёй она летит на высоте моста,
+// танк на земле до неё не дорастает.
 #[test]
-fn shot_from_the_bridge_goes_down_the_ramp() {
+fn bridge_shot_down_the_ramp_passes_over_a_ground_tank() {
     let mut core = make_core();
 
     core.load_map(&layered_map_json()).unwrap();
@@ -1145,7 +1146,34 @@ fn shot_from_the_bridge_goes_down_the_ramp() {
 
     let health = health_of(&events(&mut core), 2);
 
-    assert!(health.is_some_and(|h| h < 100.0), "цель под рампой поражена: {health:?}");
+    assert_eq!(health, None, "пуля с моста прошла над целью под рампой: {health:?}");
+}
+
+// Танк на середине рампы (верх 0.69) ниже пули с моста (1.075).
+#[test]
+fn bridge_shot_passes_over_a_tank_midway_up_the_ramp() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, 400.0, 304.0, 180.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 208.0, 304.0, 0.0).unwrap();
+    core.apply_input(2, 1, "down", "forward");
+
+    for _ in 0..200 {
+        steps(&mut core, 1);
+
+        if tank_z(&core, 2) >= 0.6 {
+            break;
+        }
+    }
+
+    assert!(tank_z(&core, 2) >= 0.6, "цель не поднялась: z={}", tank_z(&core, 2));
+    assert_eq!(level_of(&core, 1), 1, "стрелок на плите");
+
+    core.take_events();
+    fire(&mut core, 1, 1);
+
+    assert_eq!(health_of(&events(&mut core), 2), None, "пуля прошла над целью на рампе");
 }
 
 #[test]
@@ -1469,7 +1497,7 @@ fn bridge_shot_hits_bridge_tank_not_ground_tank() {
 }
 
 #[test]
-fn shot_past_the_ledge_hits_the_ground_tank() {
+fn shot_past_the_ledge_passes_over_the_ground_tank() {
     let mut core = make_core();
 
     core.load_map(&layered_map_json()).unwrap();
@@ -1486,14 +1514,11 @@ fn shot_past_the_ledge_hits_the_ground_tank() {
 
     let all = events(&mut core);
 
-    assert!(
-        health_of(&all, 2).is_some_and(|h| h < 100.0),
-        "за кромкой луч падает на землю: {all:?}"
-    );
+    assert_eq!(health_of(&all, 2), None, "за кромкой пуля летит над землёй: {all:?}");
 }
 
 #[test]
-fn ground_shot_hits_the_tank_on_the_open_edge() {
+fn ground_shot_does_not_reach_a_tank_on_the_open_edge() {
     let mut core = make_core();
 
     core.load_map(&layered_map_json()).unwrap();
@@ -1510,10 +1535,7 @@ fn ground_shot_hits_the_tank_on_the_open_edge() {
 
     let all = events(&mut core);
 
-    assert!(
-        health_of(&all, 2).is_some_and(|h| h < 100.0),
-        "кромка без перил открыта снизу: {all:?}"
-    );
+    assert_eq!(health_of(&all, 2), None, "пуля с земли идёт под плитой: {all:?}");
 }
 
 #[test]
@@ -1521,8 +1543,8 @@ fn ground_shot_stops_at_the_second_slab_cell() {
     let mut core = make_core();
 
     core.load_map(&layered_map_json()).unwrap();
-    // тот же выстрел снизу, но цель — во ВТОРОЙ клетке плиты: проба
-    // уровня 1 живёт только в клетке кромки
+    // тот же выстрел снизу, но цель — во ВТОРОЙ клетке плиты: пуля с
+    // земли идёт под плитой
     core.spawn_actor(1, "m1", 1, 290.0, 272.0, 0.0).unwrap();
     core.spawn_actor(2, "m1", 2, 376.0, 272.0, 0.0).unwrap();
 
@@ -1537,7 +1559,7 @@ fn ground_shot_stops_at_the_second_slab_cell() {
     assert_eq!(
         health_of(&all, 2),
         None,
-        "вглубь плиты проба не достаёт: {all:?}"
+        "пуля с земли идёт под плитой: {all:?}"
     );
 }
 
@@ -1546,7 +1568,8 @@ fn railing_protects_the_tank_from_below() {
     let mut core = make_core();
 
     core.load_map(&railed_map_json()).unwrap();
-    // тот же выстрел снизу, но первая клетка плиты на пути — перила
+    // тот же выстрел снизу, первая клетка плиты на пути — перила; пуля с
+    // земли идёт под плитой
     core.spawn_actor(1, "m1", 1, 290.0, 272.0, 0.0).unwrap();
     // за перилами: клетка перил непроезжая, цель стоит на следующей плите
     core.spawn_actor(2, "m1", 2, 368.0, 272.0, 0.0).unwrap();

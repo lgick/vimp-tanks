@@ -564,7 +564,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
   describe('слоёная карта', () => {
     // 2.5D: клиент предсказывает уровень своего танка по той же слоёной
     // карте, что и хост, и режет луч теми же сегментами
-    it('на слоёной карте трассер с моста падает за кромкой плиты', () => {
+    it('на слоёной карте трассер с моста летит дальше на высоте моста', () => {
       const core = makeCore();
       const client = makeClientCore();
 
@@ -595,10 +595,10 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       // ствол смотрит на восток: кромка плиты на x = 416
       expect(tracer[8]).toBe(1); // startLevel — мост
-      expect(tracer[9]).toBe(0); // endLevel — луч упал на землю
+      expect(tracer[9]).toBe(1); // endLevel — уровень полёта
     });
 
-    it('shot_segments: луч с моста — плита до кромки, дальше земля', () => {
+    it('shot_segments: луч с моста — плита до кромки, дальше воздушный сегмент того же уровня полёта', () => {
       const client = makeClientCore();
 
       // без карты — один сегмент уровня стрелка
@@ -612,6 +612,7 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       const segments = [];
 
       for (let i = 0; i < flat.length; i += 3) {
+        // третье число тройки — уровень полёта (`fly`)
         segments.push({ t0: flat[i], t1: flat[i + 1], level: flat[i + 2] });
       }
 
@@ -619,8 +620,23 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(segments[0].level).toBe(1);
       expect(segments[0].t0).toBe(0);
       expect(segments[0].t1).toBeCloseTo(64, 0);
-      expect(segments.at(-1).level).toBe(0);
+      expect(segments).toHaveLength(2);
+      expect(segments.at(-1).level).toBe(1);
       expect(segments.at(-1).t1).toBeCloseTo(500, 3);
+    });
+
+    it('floor_level: пол под пулей', () => {
+      const client = makeClientCore();
+
+      // без карты — уровень пули
+      expect(client.floor_level(1, 352, 300)).toBe(1);
+
+      client.set_map(layeredMap);
+
+      expect(client.floor_level(1, 352, 300)).toBe(1); // плита
+      expect(client.floor_level(1, 450, 300)).toBe(0); // за кромкой
+      expect(client.floor_level(1, 250, 304)).toBe(0); // рампа
+      expect(client.floor_level(0, 100, 100)).toBe(0);
     });
   });
 
@@ -653,12 +669,12 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(tracer[9]).toBe(0);
     });
 
-    it('с моста вниз по рампе — пуля идёт дальше, до западной стены', () => {
+    it('с моста над рампой — пуля летит на высоте моста до западной стены', () => {
       const tracer = predictedTracer(352, 304, 180);
 
       expect(tracer[2]).toBeCloseTo(32, 0);
       expect(tracer[6]).toBe(1);
-      expect(tracer[9]).toBe(0);
+      expect(tracer[9]).toBe(1);
     });
 
     it('с земли в борт — грань насыпи', () => {

@@ -9,6 +9,11 @@ export default {
     // упирается в насыпь рампы, если та выше (core/src/shot_height.rs).
     // = tankModel.barrelHeight 8 px · size 3 / 10 (src/config/render.js)
     barrelHeight: 2.4,
+    // высота танка над полом (верх башни), мировые единицы: пуля поражает
+    // танк, только если он дорастает до неё (core/src/shot_height.rs,
+    // `tank_reaches`). = tankModel.turretTop 10 px · size 3 / 10
+    // (src/config/render.js)
+    turretTop: 3.0,
 
     // коэффициент ускорения
     // (чем выше, тем быстрее танк достигает максимальной скорости)

@@ -10,7 +10,8 @@ export default class ImpactEffect extends BaseEffect {
   // он пересчитывает точку удара по актуальному трансформу ящика в момент
   // запуска эффекта (см. якорь трассера в core/src/client/shot.rs).
   // Высоту поверхности под осколками (склон рампы) даёт контроллер через
-  // `surfaceK`, а проекцию — `project`.
+  // `surfaceK`, а проекцию — `project`. Осколки попадания в стену
+  // рождаются на высоте `startK` и за `fallDuration` падают на поверхность.
   constructor(
     x,
     y,
@@ -18,7 +19,7 @@ export default class ImpactEffect extends BaseEffect {
     impactDirectionY,
     onComplete,
     assets,
-    { surfaceK = null } = {},
+    { surfaceK = null, startK = null } = {},
   ) {
     super(onComplete);
 
@@ -64,6 +65,9 @@ export default class ImpactEffect extends BaseEffect {
       minSpeedThreshold: 1.0,
       // сколько времени частица лежит неподвижно перед угасанием (мс)
       lingerDuration: 6000,
+
+      // мс: падение осколка с высоты рождения на поверхность
+      fallDuration: 250,
     };
 
     // обработка случая, когда impactDirection (0,0) - например, выстрел в точку
@@ -83,6 +87,11 @@ export default class ImpactEffect extends BaseEffect {
     // 2.5D: коэффициент проекции поверхности под мировой точкой (склон
     // рампы) или null — пол контейнера-хозяина. Даёт контроллер выстрела
     this._surfaceK = typeof surfaceK === 'function' ? surfaceK : null;
+
+    // 2.5D: коэффициент проекции высоты, на которой осколки рождаются
+    // (попадание в стену — высота ствола); null — сразу на поверхности.
+    // С неё осколок падает на поверхность за `fallDuration`
+    this._startK = typeof startK === 'number' ? startK : null;
 
     this._createParticles();
   }
@@ -148,6 +157,7 @@ export default class ImpactEffect extends BaseEffect {
         isMoving: true,
         timeSinceStopped: 0,
         k: null,
+        lift: 1, // доля высоты рождения, убывает от 1 до 0
       };
 
       particleData.k = this._kAt(particleData);
@@ -178,6 +188,11 @@ export default class ImpactEffect extends BaseEffect {
 
       activeParticlesCount += 1;
       pData.age += deltaMs;
+
+      // падение с высоты рождения: с ускорением, как под тяжестью
+      const fall = Math.min(pData.age / this.config.fallDuration, 1);
+
+      pData.lift = 1 - fall * fall;
 
       if (pData.isMoving) {
         // сопротивление среды (drag)
@@ -268,14 +283,23 @@ export default class ImpactEffect extends BaseEffect {
     }
   }
 
+  // Падает ли ещё хоть один осколок с высоты рождения
+  isFalling() {
+    return (
+      this._startK !== null &&
+      this.particlesData.some(pData => pData.active && pData.lift > 0)
+    );
+  }
+
   // 2.5D: осколок на склоне рампы лежит на склоне. Контейнер-хозяин уже в
   // проекции `kHost` (контроллер — уровень конца луча), осколок с высотой
   // поверхности `pData.k` переносится внутри неё в проекцию своей высоты
   // (`reproject`). Считается из `pData`, а не из спрайта: вызов
-  // идемпотентен, порядок с тиком `_update` не важен. Без `surfaceK` —
-  // ничего не делает
+  // идемпотентен, порядок с тиком `_update` не важен. Осколки попадания
+  // в стену рождаются на высоте `startK` и за `fallDuration` падают на
+  // поверхность. Без `surfaceK` и `startK` — ничего не делает
   project(camera, kHost) {
-    if (!this._surfaceK) {
+    if (!this._surfaceK && this._startK === null) {
       return;
     }
 
@@ -284,12 +308,17 @@ export default class ImpactEffect extends BaseEffect {
         continue;
       }
 
+      const surface = pData.k ?? kHost;
+      const k =
+        this._startK === null
+          ? surface
+          : surface + (this._startK - surface) * pData.lift;
       const point = reproject(
         this.x + pData.x,
         this.y + pData.y,
         camera,
         kHost,
-        pData.k ?? kHost,
+        k,
       );
 
       pData.sprite.position.set(point.x - this.x, point.y - this.y);

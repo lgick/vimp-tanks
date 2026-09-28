@@ -544,7 +544,7 @@ impl GameClientDef for TanksClient {
         self.predictor.reset();
         self.reset_remote_tanks();
         self.predictor.set_map(&cfg, Rc::clone(&levels), surface_map);
-        self.shot.set_map(levels);
+        self.shot.set_map(levels, cfg.game.clone());
         self.map_generation = self.map_generation.wrapping_add(1);
         self.props = cfg.physics_dynamic.iter().map(|item| item.game.clone()).collect();
         self.map_game = cfg.game;

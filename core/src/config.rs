@@ -50,6 +50,12 @@ pub struct ModelConfig {
     /// самого пола.
     #[serde(default)]
     pub barrel_height: f32,
+    /// Высота танка над полом (верх башни), мировые единицы (`turretTop`):
+    /// пуля поражает танк, только если он дорастает до неё
+    /// (`shot_height::tank_reaches`). Нет в конфиге — 0; тогда танк считается
+    /// высотой в свой ствол (`Tank::turret_top`).
+    #[serde(default)]
+    pub turret_top: f32,
     pub acceleration_factor: f32,
     pub braking_factor: f32,
     pub max_forward_speed: f32,

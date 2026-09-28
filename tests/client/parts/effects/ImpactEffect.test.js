@@ -116,3 +116,63 @@ describe('ImpactEffect: осколки на склоне рампы', () => {
     expect(p.sprite.scale.x).toBeCloseTo(p.size / CONTENT_SIZE, 9);
   });
 });
+
+describe('ImpactEffect: падение с высоты рождения', () => {
+  it('рождается на высоте startK и падает', () => {
+    const effect = makeEffect({ startK: 0.5 * SHEAR });
+    const p = effect.particlesData[0];
+    const k = 0.5 * SHEAR;
+
+    effect.project(camera, 0);
+
+    expect(effect.x + p.sprite.x).toBeCloseTo(
+      offsetPoint(80, 0, camera, k).x,
+      9,
+    );
+    expect(p.sprite.scale.x).toBeCloseTo((p.size / CONTENT_SIZE) * (1 + k), 9);
+    expect(effect.isFalling()).toBe(true);
+  });
+
+  it('на середине падения — с ускорением, lift = 0.75', () => {
+    const effect = makeEffect({ startK: 0.5 * SHEAR });
+    const p = effect.particlesData[0];
+    const k = 0.5 * SHEAR * 0.75;
+
+    effect._update(125);
+    effect.project(camera, 0);
+
+    expect(effect.x + p.sprite.x).toBeCloseTo(
+      offsetPoint(80, 0, camera, k).x,
+      9,
+    );
+    expect(p.sprite.scale.x).toBeCloseTo((p.size / CONTENT_SIZE) * (1 + k), 9);
+  });
+
+  it('за fallDuration упал на пол хозяина', () => {
+    const effect = makeEffect({ startK: 0.5 * SHEAR });
+    const p = effect.particlesData[0];
+
+    effect._update(250);
+    effect.project(camera, 0);
+
+    expect(effect.x + p.sprite.x).toBeCloseTo(80, 9);
+    expect(p.sprite.y).toBeCloseTo(0, 9);
+    expect(p.sprite.scale.x).toBeCloseTo(p.size / CONTENT_SIZE, 9);
+    expect(effect.isFalling()).toBe(false);
+  });
+
+  it('падает на склон рампы', () => {
+    const effect = makeEffect({ surfaceK: slopeK, startK: SHEAR });
+    const p = effect.particlesData[0];
+    const k = 0.3 * SHEAR;
+
+    effect._update(250);
+    effect.project(camera, 0);
+
+    expect(effect.x + p.sprite.x).toBeCloseTo(
+      offsetPoint(80, 0, camera, k).x,
+      9,
+    );
+    expect(p.sprite.scale.x).toBeCloseTo((p.size / CONTENT_SIZE) * (1 + k), 9);
+  });
+});

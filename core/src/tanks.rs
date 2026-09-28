@@ -26,7 +26,9 @@ use vimp_engine_core::physics::{is_map_object, round1, round2};
 use vimp_engine_core::rng::Rng;
 use vimp_engine_core::sim::{GameDef, GameSim, SimCtx};
 use vimp_engine_core::snapshot::Block;
-use crate::shot_height::{bullet_line, first_embankment_hit, HIT_NONE, HIT_TARGET};
+use crate::shot_height::{
+    bullet_line, first_embankment_hit, first_tall_wall, tank_reaches, HIT_NONE, HIT_TARGET,
+};
 use crate::tank::{PlayerKeyBits, ShotCommand, Tank, TankRow};
 
 /// Маркер игры для `EngineSim<TanksGame>` (единственная игра в дереве).
@@ -1436,17 +1438,6 @@ impl TanksSim {
         let start_level = self.tanks[&shooter_id].level_state.level;
 
         let layered = self.levels.as_ref().is_some_and(MapLevels::is_layered);
-        let segments = match self.levels.as_ref() {
-            Some(levels) => crate::shot_levels::ray_segments(
-                levels,
-                [origin.x, origin.y],
-                [dir.x, dir.y],
-                range,
-                start_level,
-            ),
-            None => vec![crate::shot_levels::RaySegment { t0: 0.0, t1: range, level: 0 }],
-        };
-
         let shooter = &self.tanks[&shooter_id];
         let muzzle_offset = (origin - shot.body_position).dot(dir);
         let bullet = self.levels.as_ref().map(|levels| {
@@ -1459,10 +1450,27 @@ impl TanksSim {
                 levels.level_height(),
             )
         });
+        let segments = match self.levels.as_ref() {
+            Some(levels) => crate::shot_levels::ray_segments(
+                levels,
+                [origin.x, origin.y],
+                [dir.x, dir.y],
+                range,
+                start_level,
+                bullet.as_ref(),
+            ),
+            None => vec![crate::shot_levels::RaySegment {
+                t0: 0.0,
+                t1: range,
+                level: 0,
+                fly: 0,
+            }],
+        };
 
-        // ближайшее попадание среди сегментов: сегменты уровней 0 и 1
-        // перекрываются у кромки плиты, минимальная дистанция выигрывает
-        let mut hit: Option<(ColliderHandle, f32, u8)> = None;
+        let level_height = self.levels.as_ref().map_or(1.0, MapLevels::level_height);
+        // ближайшее попадание: коллайдер (None — стена сетки воздушного
+        // сегмента, без урона и импульса), дистанция, уровень ПРОЕКЦИИ конца
+        let mut hit: Option<(Option<ColliderHandle>, f32, u8)> = None;
 
         for segment in &segments {
             let length = segment.t1 - segment.t0;
@@ -1472,22 +1480,57 @@ impl TanksSim {
             }
 
             let ray = Ray::new(origin + dir * segment.t0, dir * length);
+            let air = segment.is_air();
+            let tanks = &self.tanks;
+            let bodies = &ctx.world.bodies;
+            // пуля на своей высоте (`shot_height`): танк поражается, только если
+            // дорастает до неё — в любом сегменте; в воздушном сегменте стены судит
+            // `first_tall_wall`, а реквизит пуля перелетает
+            let reach = |_: ColliderHandle, collider: &Collider| -> bool {
+                let Some(body) = collider.parent().and_then(|handle| bodies.get(handle)) else {
+                    return !air;
+                };
+
+                match (BodyTag::decode(body.user_data), bullet.as_ref()) {
+                    (Some(BodyTag::Player { game_id, .. }), Some(line)) => {
+                        tanks.get(&game_id).is_none_or(|tank| {
+                            let t = (body.translation() - origin).dot(dir);
+
+                            tank_reaches(tank.level_state.z, tank.turret_top(), level_height, line.at(t))
+                        })
+                    }
+                    (Some(BodyTag::Player { .. }), None) => true,
+                    _ => !air,
+                }
+            };
             let mut filter = QueryFilter::new().exclude_sensors().exclude_rigid_body(shooter_body);
 
-            // одноуровневая карта фильтр по группам не ставит вовсе —
-            // путь стрельбы обязан остаться прежним бит-в-бит
+            // одноуровневая карта фильтр не ставит вовсе — путь стрельбы
+            // обязан остаться прежним бит-в-бит
             if layered {
-                // пуля видит уровень как тело на прогоне — без стражей рамп:
+                // пуля видит уровень пола как тело на прогоне — без стражей рамп:
                 // насыпь судит её высота (`shot_height::embankment_hit`)
-                filter = filter.groups(levels_interaction_on_ramp(level_group(segment.level)));
+                filter = filter
+                    .groups(levels_interaction_on_ramp(level_group(segment.level)))
+                    .predicate(&reach);
             }
 
             if let Some((collider_handle, toi)) = ctx.world.cast_ray(&ray, 1.0, true, filter) {
                 let distance = segment.t0 + toi * length;
 
                 if hit.is_none_or(|(_, best, _)| distance < best) {
-                    hit = Some((collider_handle, distance, segment.level));
+                    hit = Some((Some(collider_handle), distance, segment.fly));
                 }
+            }
+
+            // стены воздушного сегмента — по высоте (`first_tall_wall`)
+            if air
+                && let (Some(levels), Some(line)) = (self.levels.as_ref(), bullet.as_ref())
+                && let Some(distance) =
+                    first_tall_wall(levels, &self.map_game, segment, [origin.x, origin.y], [dir.x, dir.y], line)
+                && hit.is_none_or(|(_, best, _)| distance < best)
+            {
+                hit = Some((None, distance, segment.fly));
             }
         }
 
@@ -1512,10 +1555,8 @@ impl TanksSim {
         };
         let mut end_x = round1(end_point_ray.x);
         let mut end_y = round1(end_point_ray.y);
-        // промах: уровень, действующий В КОНЦЕ луча, а не последний в
-        // списке — проба уровня 1 у кромки плиты лежит внутри наземного
-        // сегмента и последней в списке идёт именно она, из-за чего
-        // наземный трассер рисовался бы на слое моста
+        // промах: уровень ПРОЕКЦИИ на конце луча (`fly` сегмента) — у пули с
+        // моста над землёй это уровень моста
         let mut end_level =
             crate::shot_levels::level_at_distance(&segments, range).unwrap_or(start_level);
 
@@ -1528,46 +1569,49 @@ impl TanksSim {
             end_level = e.level;
         }
 
-        if let Some((collider_handle, distance, level)) = hit {
+        if let Some((handle, distance, level)) = hit {
             let impact = origin + dir * distance;
 
             end_x = round1(impact.x);
             end_y = round1(impact.y);
             end_level = level;
 
-            let hit_body_handle = ctx
-                .world
-                .colliders
-                .get(collider_handle)
-                .and_then(|collider| collider.parent());
+            // стена сетки воздушного сегмента — без урона и импульса
+            if let Some(collider_handle) = handle {
+                let hit_body_handle = ctx
+                    .world
+                    .colliders
+                    .get(collider_handle)
+                    .and_then(|collider| collider.parent());
 
-            if let Some(handle) = hit_body_handle {
-                let mut hit_player: Option<u32> = None;
-                let hit_prop = ctx
-                    .map
-                    .as_ref()
-                    .and_then(|map| map.dynamic_index_of(ctx.world, handle))
-                    .filter(|index| self.props.get(*index).is_some());
+                if let Some(handle) = hit_body_handle {
+                    let mut hit_player: Option<u32> = None;
+                    let hit_prop = ctx
+                        .map
+                        .as_ref()
+                        .and_then(|map| map.dynamic_index_of(ctx.world, handle))
+                        .filter(|index| self.props.get(*index).is_some());
 
-                if let Some(body) = ctx.world.bodies.get_mut(handle) {
-                    // если тело динамическое, то применение физического импульса
-                    // (от нормализованного направления — величина не зависит от range)
-                    if impulse_magnitude > 0.0 && body.is_dynamic() {
-                        body.apply_impulse_at_point(dir * impulse_magnitude, impact, true);
+                    if let Some(body) = ctx.world.bodies.get_mut(handle) {
+                        // если тело динамическое, то применение физического импульса
+                        // (от нормализованного направления — величина не зависит от range)
+                        if impulse_magnitude > 0.0 && body.is_dynamic() {
+                            body.apply_impulse_at_point(dir * impulse_magnitude, impact, true);
+                        }
+
+                        if let Some(BodyTag::Player { game_id, .. }) = BodyTag::decode(body.user_data) {
+                            hit_player = Some(game_id);
+                        }
                     }
 
-                    if let Some(BodyTag::Player { game_id, .. }) = BodyTag::decode(body.user_data) {
-                        hit_player = Some(game_id);
+                    if let Some(target) = hit_player {
+                        self.apply_damage(ctx, target, shooter_id, weapon_index, None);
                     }
-                }
 
-                if let Some(target) = hit_player {
-                    self.apply_damage(ctx, target, shooter_id, weapon_index, None);
-                }
-
-                // множитель `bulletFactor` применяет сама `Props::damage`
-                if let Some(index) = hit_prop {
-                    self.damage_prop(ctx, index, weapon.damage as f32, DamageCause::Bullet);
+                    // множитель `bulletFactor` применяет сама `Props::damage`
+                    if let Some(index) = hit_prop {
+                        self.damage_prop(ctx, index, weapon.damage as f32, DamageCause::Bullet);
+                    }
                 }
             }
         }

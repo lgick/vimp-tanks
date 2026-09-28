@@ -577,31 +577,16 @@ impl BotBrain {
 
         let direction = Vector::new(target_pos[0], target_pos[1]) - my_position;
 
-        // цель на чужом уровне может быть закрыта плитой моста: тогда не
-        // стреляем, а идём к ней — путь пойдёт через рампу, потому что
-        // `find_path_on` знает уровни
+        // цель на чужом уровне может быть закрыта плитой моста или быть ниже
+        // либо выше пули: тогда не стреляем, а идём к ней — путь пойдёт через
+        // рампу, потому что `find_path_on` знает уровни
         if let Some(levels) = game.levels {
-            let target_level = game.tank_level(target);
             let dir = direction.normalize_or_zero();
             let range = game
                 .weapons
                 .get_index(current_weapon)
                 .and_then(|(_, weapon)| weapon.range)
                 .unwrap_or(MAX_FIRING_DISTANCE);
-            let segments = crate::shot_levels::ray_segments(
-                levels,
-                [my_position.x, my_position.y],
-                [dir.x, dir.y],
-                range,
-                self.my_level,
-            );
-
-            if !crate::shot_levels::covers_level(&segments, direction.length(), target_level) {
-                return;
-            }
-
-            // насыпь рампы выше пули закрывает цель (`shot_height`): танк высоко на
-            // рампе с земли не достать — не тратим выстрел, путь приведёт к нему
             let bullet = bullet_line(
                 tank.level_state.z,
                 tank.level_state.slope_vec,
@@ -610,7 +595,41 @@ impl BotBrain {
                 0.0,
                 levels.level_height(),
             );
+            let segments = crate::shot_levels::ray_segments(
+                levels,
+                [my_position.x, my_position.y],
+                [dir.x, dir.y],
+                range,
+                self.my_level,
+                Some(&bullet),
+            );
 
+            let target_distance = direction.length();
+            let Some(target_tank) = game.tanks.get(&target) else {
+                return;
+            };
+            let target_z = target_tank.level_state.z;
+            // пол под пулей на дистанции цели — один из уровней, которых касается
+            // цель (у стоящей — её уровень, у танка на рампе — оба соседних), и цель
+            // дорастает до пули (`shot_height`): танк на земле с моста, танк на мосту
+            // с земли и наземный танк под пулей стрелка высоко на склоне не достать —
+            // не тратим выстрел
+            let covered = (target_z.floor() as u8..=target_z.ceil() as u8)
+                .any(|lvl| crate::shot_levels::covers_level(&segments, target_distance, lvl));
+
+            if !covered
+                || !crate::shot_height::tank_reaches(
+                    target_z,
+                    target_tank.turret_top(),
+                    levels.level_height(),
+                    bullet.at(target_distance),
+                )
+            {
+                return;
+            }
+
+            // насыпь рампы выше пули закрывает цель (`shot_height`): танк высоко на
+            // рампе с земли не достать — не тратим выстрел, путь приведёт к нему
             if crate::shot_height::first_embankment_hit(
                 levels,
                 &segments,
@@ -895,7 +914,8 @@ mod tests {
             "maxGunAngle": 1.4,
             "gunRotationSpeed": 3.0,
             "gunCenterSpeed": 10.0,
-            "barrelHeight": 2.4
+            "barrelHeight": 2.4,
+            "turretTop": 3.0
         }))
         .unwrap()
     }
@@ -1101,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn bot_fires_at_the_enemy_on_the_open_edge() {
+    fn bot_holds_fire_at_the_enemy_on_the_open_edge() {
         let mut fixture = Fixture::new();
 
         // бот на земле западнее моста, цель — на кромке без перил
@@ -1114,18 +1134,17 @@ mod tests {
         brain.target = Some(2);
 
         assert!(
-            fires_within(&mut fixture, &mut brain, 100),
-            "цель на открытой кромке достижима с земли"
+            !fires_within(&mut fixture, &mut brain, 100),
+            "пуля с земли идёт под плитой — танк на кромке недосягаем"
         );
     }
 
     #[test]
-    fn bot_fires_at_a_ground_enemy_inside_the_probe_window() {
+    fn bot_fires_at_a_ground_enemy_under_the_edge() {
         let mut fixture = Fixture::new();
 
-        // оба на земле, но враг стоит ПОД кромкой плиты: на этой
-        // дистанции луч везёт и сегмент уровня 1 (проба), и свой
-        // наземный — «максимум уровня» запрещал бы выстрел
+        // оба на земле, враг под кромкой плиты — пуля идёт под плитой и
+        // достаёт его
         fixture.add_tank(1, 1, 200.0, 208.0, 0);
         fixture.add_tank(2, 2, 336.0, 208.0, 0);
 
@@ -1136,7 +1155,7 @@ mod tests {
 
         assert!(
             fires_within(&mut fixture, &mut brain, 100),
-            "наземная цель в окне пробы должна обстреливаться"
+            "наземная цель под кромкой должна обстреливаться"
         );
     }
 
@@ -1157,6 +1176,28 @@ mod tests {
         assert!(
             !fires_within(&mut fixture, &mut brain, 100),
             "насыпь рампы закрывает цель — выстрела быть не должно"
+        );
+    }
+
+    #[test]
+    fn bot_on_the_slope_holds_fire_at_a_ground_tank_below_its_bullet() {
+        let mut fixture = Fixture::new();
+
+        // бот на склоне рампы (на x = 230.4 склон ровно 0.3) стреляет вбок:
+        // пуля 0.375 выше верха наземной цели 0.094
+        fixture.add_tank(1, 1, 230.4, 304.0, 0);
+        fixture.tanks[&1].level_state.z = 0.3;
+        fixture.tanks[&1].gun_rotation = std::f32::consts::FRAC_PI_2;
+        fixture.add_tank(2, 2, 230.4, 400.0, 0);
+
+        let mut brain = brain_at(1, [230.4, 304.0], 0);
+
+        brain.state = BotState::Attacking;
+        brain.target = Some(2);
+
+        assert!(
+            !fires_within(&mut fixture, &mut brain, 100),
+            "пуля со склона проходит над наземной целью — выстрела быть не должно"
         );
     }
 

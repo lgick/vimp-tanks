@@ -199,9 +199,11 @@ impl ClientCore {
     /// Сегменты луча выстрела по уровням — те же `shot_levels::ray_segments`,
     /// по которым хост судит попадание: `(x, y)` — дуло, `(dx, dy)` —
     /// единичное направление, `range` — длина луча, `level` — уровень
-    /// стрелка. Плоско: `[t0, t1, level, …]`, `t` — мировые единицы вдоль
-    /// луча. Трассер режется по ним на куски, и каждый рисуется на своём
-    /// уровне: луч с моста идёт над плитой и падает за кромкой. Карты нет —
+    /// стрелка (пуля ровно на уровне стрелка — наклона ствола рендер не
+    /// знает). Плоско: `[t0, t1, fly, …]`, `t` — мировые единицы вдоль
+    /// луча, третий элемент — уровень ПРОЕКЦИИ сегмента. Трассер режется по
+    /// ним на куски, и каждый рисуется на своём уровне: луч с моста идёт над
+    /// плитой и дальше на её высоте. Карты нет —
     /// один сегмент `[0, range, level]`; одноуровневая карта — один
     /// сегмент уровня 0, как у хоста.
     pub fn shot_segments(&self, x: f32, y: f32, dx: f32, dy: f32, range: f32, level: u8) -> Vec<f32> {
@@ -209,10 +211,24 @@ impl ClientCore {
             return vec![0.0, range, f32::from(level)];
         };
 
-        shot_levels::ray_segments(levels, [x, y], [dx, dy], range, level)
+        shot_levels::ray_segments(levels, [x, y], [dx, dy], range, level, None)
             .iter()
-            .flat_map(|segment| [segment.t0, segment.t1, f32::from(segment.level)])
+            .flat_map(|segment| [segment.t0, segment.t1, f32::from(segment.fly)])
             .collect()
+    }
+
+    /// Уровень пола под мировой точкой для пули, летящей на уровне `level`:
+    /// сам `level`, если там его плита (у земли — всегда), иначе уровень
+    /// приземления — то же правило, что у сегментов луча
+    /// (`shot_levels::floor_under`). По нему клиент ищет грань стены или
+    /// насыпи под пулей с моста и кладёт осколки её попадания на пол под ними.
+    /// Карты нет — `level`.
+    pub fn floor_level(&self, level: u8, x: f32, y: f32) -> u8 {
+        let Some(levels) = self.state.game().levels() else {
+            return level;
+        };
+
+        shot_levels::floor_under(levels, level, x, y)
     }
 }
 

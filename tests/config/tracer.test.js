@@ -19,7 +19,8 @@ describe('tracer.height ↔ высота ствола модели', () => {
 // мировые единицы — на ней летит пуля hitscan, core/src/shot_height.rs),
 // рендер — в пикселях рисунка и в уровнях трассера. Общего источника нет:
 // разойдутся — конец выстрела в насыпь нарисуется не там, где его
-// остановило ядро.
+// остановило ядро. То же — высота танка (`turretTop`): по ней пуля решает,
+// дорастает ли танк до неё.
 describe('models.m1.barrelHeight ↔ рендер', () => {
   it('совпадает с tankModel.barrelHeight · size / 10', () => {
     expect(models.m1.barrelHeight).toBe(
@@ -31,5 +32,15 @@ describe('models.m1.barrelHeight ↔ рендер', () => {
     expect(
       Math.abs(tracer.height - models.m1.barrelHeight / tankModel.levelHeight),
     ).toBeLessThanOrEqual(0.01);
+  });
+
+  it('models.m1.turretTop = tankModel.turretTop · size / 10', () => {
+    expect(models.m1.turretTop).toBe(
+      (tankModel.turretTop * models.m1.size) / 10,
+    );
+  });
+
+  it('танк выше своего ствола', () => {
+    expect(models.m1.turretTop).toBeGreaterThan(models.m1.barrelHeight);
   });
 });
