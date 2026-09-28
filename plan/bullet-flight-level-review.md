@@ -276,7 +276,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 
 ---
 
-## Этап 4. `wall_heights` с числовыми ключами (производительность, низкий приоритет)
+## Этап 4. `wall_heights` с числовыми ключами (производительность, низкий приоритет) ✅ выполнен
 
 **Проблема.** `MapGame::wall_height` (`core/src/map_game.rs` ≈ 115) на каждый вызов создаёт
 `level.to_string()` и `tile.to_string()`. Вызов идёт в каждой клетке воздушного сегмента на каждом уровне с
