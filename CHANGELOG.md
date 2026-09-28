@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.9] - 2026-09-28
+
 ### Added
 
 - Client service `volumes`: volume heights of the map's cells per level,
