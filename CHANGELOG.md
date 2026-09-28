@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.10] - 2026-09-28
+
 ### Changed
 
 - Bullets fly at the shooter's gun height: a ramp's slope and sides stop
