@@ -5,6 +5,7 @@ import {
   coneUv,
   fanUvs,
   firstHit,
+  frameOf,
   rampBlocks,
   rampHeight,
   wallWash,
@@ -12,41 +13,6 @@ import {
 
 // отступ отсвета фары от стены в долях его радиуса
 const BOUNCE_PULL = 0.6;
-
-// Раскладка текстуры источника в мировых единицах — `coneUv`: вершина
-// конуса (центр пятна) — в `(margin, height / 2)` текстуры, ось — по
-// `rotation`, `sx`/`sy` — мировых единиц на пиксель вдоль и поперёк. Та
-// же, что у спрайта `itemOf` (createLighting.js): у пятна `margin` —
-// полширины, поворота нет
-export function frameOf(light, asset) {
-  const { width, height } = asset.texture;
-
-  if (light.kind === 'cone') {
-    return {
-      x: light.x,
-      y: light.y,
-      rotation: light.rotation || 0,
-      sx: light.radius / asset.length,
-      sy: (light.radius * (light.spread ?? 0.5)) / asset.halfWidth,
-      margin: asset.margin,
-      width,
-      height,
-    };
-  }
-
-  const size = (light.radius * 2) / asset.contentSize;
-
-  return {
-    x: light.x,
-    y: light.y,
-    rotation: 0,
-    sx: size,
-    sy: size,
-    margin: width / 2,
-    width,
-    height,
-  };
-}
 
 // Препятствия свету фар и окклюзия конусов сервиса `lighting`: сетка стен и
 // рамп по уровням, веер фары у стены, упор оси, засветка грани и отсвет.
@@ -79,10 +45,10 @@ export function createOcclusion({ getMap, cfg }) {
 
     const inside = (col, row) => col >= 0 && col < cols && row >= 0 && row < rows;
 
-    for (const [level, byOwner] of tops) {
+    for (const [level, contributions] of tops) {
       let grid = null;
 
-      for (const { cells, volume } of byOwner.values()) {
+      for (const { cells, volume } of contributions) {
         for (const [col, row] of cells) {
           if (inside(col, row)) {
             grid ||= new Float32Array(cols * rows);

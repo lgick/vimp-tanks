@@ -18,6 +18,7 @@ import {
 } from '../../config/render.js';
 import { offsetPoint } from '../parallax.js';
 import LevelLightMap, { hasLevelMap } from './LevelLightMap.js';
+import { frameOf } from './lightGeometry.js';
 import {
   EMISSIVE_BASE_Z,
   LAMP_HEAD_BASE_Z,
@@ -72,7 +73,9 @@ export function lightArea(size, step, scale) {
 //   на тик (`lightsAt`). Переживает смену карты: танки и эффекты — не части
 //   карты, движок уничтожает их отдельно, и снимают своё они сами.
 // Вершины объёмов и сетку препятствий фар сервис берёт из реестра `volumes`
-// (`deps.volumes`, src/client/volumes.js).
+// (`deps.volumes`, src/client/volumes.js). Без реестра стен у освещения
+// нет: фары не упираются, вершины объёмов не закрыты. В игре реестр
+// передаёт `hooks.services` (src/client/index.js) — тот же, что у частей.
 export function createLighting(cfg = lightingConfig, deps = {}) {
   const enabled = Boolean(cfg.enabled);
   const levelView = deps.levelView || null;
@@ -324,6 +327,11 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   // вклады объёмов по уровням: level -> [{ cells, volume }]
   const volumeTops = () => volumes?.levels() ?? new Map();
 
+  // реестр `volumes` правили после последней сборки вершин объёмов и
+  // сетки препятствий фар (без реестра — никогда)
+  const volumesChanged = () =>
+    volumes !== null && volumes.version !== volumesVersion;
+
   // объединение вкладов уровня без повторов: `[cells, keys]`, где `keys` —
   // Set('col,row'); клетки из `exclude` пропускаются
   const unionOf = (byOwner, exclude = null) => {
@@ -394,7 +402,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   const syncLevels = () => {
     // вклады объёмов сменились (слой карты пришёл или ушёл) — вершины и
     // сетка препятствий пересобираются, как при правке масок
-    if (volumes && volumes.version !== volumesVersion) {
+    if (volumesChanged()) {
       volumesVersion = volumes.version;
       masksDirty = true;
     }
@@ -476,6 +484,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
   // --- раскладка источников ---
 
+  // спрайт источника: проекция, охват на экране и раскладка текстуры
   const itemOf = (light, camera, factor) => {
     const asset = light.kind === 'cone' ? textures.cone : textures.radial;
 
@@ -484,43 +493,29 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     }
 
     const view = projectLight(light.x, light.y, light.z ?? light.level, camera, stage, shear);
-
-    if (light.kind === 'cone') {
-      const length = light.radius * view.scale;
-      const halfWidth = length * (light.spread ?? 0.5);
-      const reach = length * stage.scale.x;
-
-      return {
-        reach,
-        view,
-        // веер и упор оси — `occludeItem`, уже после отсечения по экрану
-        fan: null,
-        hit: null,
-        texture: asset.texture,
-        anchorX: asset.margin / asset.texture.width,
-        anchorY: 0.5,
-        scaleX: length / asset.length,
-        scaleY: halfWidth / asset.halfWidth,
-        rotation: light.rotation || 0,
-        color: light.color,
-        alpha: light.intensity * factor,
-      };
-    }
-
-    const radius = light.radius * view.scale;
-
-    return {
-      reach: radius * stage.scale.x,
+    // раскладка текстуры — та же, что у вееров фар и света на клиньях
+    // (`frameOf`), в масштабе проекции источника
+    const frame = frameOf(light, asset);
+    const item = {
+      reach: light.radius * view.scale * stage.scale.x,
       view,
       texture: asset.texture,
-      anchorX: 0.5,
+      anchorX: frame.margin / frame.width,
       anchorY: 0.5,
-      scaleX: (radius * 2) / asset.contentSize,
-      scaleY: (radius * 2) / asset.contentSize,
-      rotation: 0,
+      scaleX: frame.sx * view.scale,
+      scaleY: frame.sy * view.scale,
+      rotation: frame.rotation,
       color: light.color,
       alpha: light.intensity * factor,
     };
+
+    if (light.kind === 'cone') {
+      // веер и упор оси — `occludeItem`, уже после отсечения по экрану
+      item.fan = null;
+      item.hit = null;
+    }
+
+    return item;
   };
 
   // Окклюзия конуса, прошедшего отсечение по экрану: веер по полигону
@@ -563,7 +558,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     let count = 0;
 
     // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
-    // его источники в `rampLights`
+    // его источники в свой контейнер `LevelLightMap.rampLights`
     const rampTargets = rampLights.targets();
 
     const spill = cfg.rampSpill ?? 1;
@@ -1154,7 +1149,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         key.width === screen.width &&
         key.height === screen.height &&
         !masksDirty &&
-        volumesVersion === (volumes ? volumes.version : null)
+        !volumesChanged()
       ) {
         return;
       }

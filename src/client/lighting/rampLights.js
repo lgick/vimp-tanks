@@ -1,6 +1,5 @@
 import { volume as volumeConfig } from '../../config/render.js';
-import { rampLight } from './lightGeometry.js';
-import { frameOf } from './occlusion.js';
+import { frameOf, rampLight } from './lightGeometry.js';
 
 // Свет на клиньях рамп сервиса `lighting`: меши `rampLight` на источник и
 // полосу (кеш по вееру) и уровни подножия, чьи карты получают свет уровня
@@ -111,7 +110,7 @@ export function createRampLights({ getMap, textures }) {
   };
 
   // уровень вершины -> уровни подножия: их карты кладут источники вершины
-  // в `rampLights`
+  // в контейнер `LevelLightMap.rampLights`
   const targets = () => {
     const rampTargets = new Map();
 

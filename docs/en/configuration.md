@@ -446,9 +446,9 @@ per level, with the same sources as the level's ordinary map; the ordinary
 floor mask leaves roof cells out. Its hole opens only while a roof covers the
 drawn point of the local tank, not whenever the player is lower. A level's
 map also covers the tops of its volumes (their cells come from the `volumes`
-service): over the sources it draws the cells of every volume tile in the projection `(L + volume) · shear` in `ambient`.
-Headlights of a tank on the ground still light the side walls, but not the
-top of a building.
+service): over the sources it draws the cells of every volume tile in the
+projection `(L + volume) · shear` in `ambient`. Headlights of a tank on the
+ground still light the side walls, but not the top of a building.
 
 The service (`componentDependencies.lighting`: `Map`, `Tank`,
 `ExplosionEffect`, `ShotEffect`, `WreckFire`) exposes `enabled`, `attachStage`,

@@ -1,5 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// шпион на фабрику освещения: тест связки сервисов смотрит, ЧТО ей
+// передал hooks.services. Поведение фабрики — настоящее
+vi.mock('../../src/client/lighting/createLighting.js', async importOriginal => {
+  const actual = await importOriginal();
+
+  return { ...actual, createLighting: vi.fn(actual.createLighting) };
+});
+
 import clientPlugin from '../../src/client/index.js';
+import { createLighting } from '../../src/client/lighting/createLighting.js';
 
 // ClientPlugin танков: хуки игровых методов клиентского ядра
 // (движок main.js зовёт их, не зная set_model/sync_panel/try_fire).
@@ -76,6 +86,17 @@ describe('ClientPlugin.hooks.services', () => {
     expect(services.levelView.level).toBe(1);
     expect(services.levelView.x).toBe(320);
     expect(services.levelView.y).toBe(640);
+  });
+
+  it('освещение получает те же levelView и volumes, что и части', () => {
+    const services = clientPlugin.hooks.services(makeCore());
+    const [, deps] = createLighting.mock.calls.at(-1);
+
+    // один реестр на свет и выстрел: иначе фары светят сквозь стены,
+    // в которые попадает выстрел (src/client/volumes.js)
+    expect(deps.volumes).toBe(services.volumes);
+    expect(deps.levelView).toBe(services.levelView);
+    expect(createLighting.mock.results.at(-1).value).toBe(services.lighting);
   });
 });
 

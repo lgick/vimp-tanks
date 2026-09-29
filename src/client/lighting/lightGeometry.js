@@ -1,8 +1,8 @@
 import { edgeFace } from '../wallFace.js';
 
 // Геометрия света фар и рамп: обход сетки лучом, веер видимости,
-// засветка грани, свет на клине и его контур. Чистые функции, мировые
-// единицы
+// засветка грани, свет на клине и его контур, раскладка текстуры
+// источника (`frameOf`). Чистые функции, мировые единицы
 
 // --- полоса рампы и контур клина в проекции ---
 
@@ -288,9 +288,44 @@ export function coneFan(
   return { points, clipped, closed, reaches, forward: count };
 }
 
-// UV мировой точки `(px, py)` в текстуре конуса — та же раскладка, что у
-// спрайта (`itemOf`): вершина — в `(margin, height / 2)` текстуры, ось — по
-// `+x`, `sx`/`sy` — мировых единиц на пиксель текстуры вдоль и поперёк оси.
+// Раскладка текстуры источника в мировых единицах — `coneUv`: вершина
+// конуса (центр пятна) — в `(margin, height / 2)` текстуры, ось — по
+// `rotation`, `sx`/`sy` — мировых единиц на пиксель вдоль и поперёк. Её
+// же берёт спрайт `itemOf` (createLighting.js), в масштабе проекции. У
+// пятна `margin` — полширины, поворота нет
+export function frameOf(light, asset) {
+  const { width, height } = asset.texture;
+
+  if (light.kind === 'cone') {
+    return {
+      x: light.x,
+      y: light.y,
+      rotation: light.rotation || 0,
+      sx: light.radius / asset.length,
+      sy: (light.radius * (light.spread ?? 0.5)) / asset.halfWidth,
+      margin: asset.margin,
+      width,
+      height,
+    };
+  }
+
+  const size = (light.radius * 2) / asset.contentSize;
+
+  return {
+    x: light.x,
+    y: light.y,
+    rotation: 0,
+    sx: size,
+    sy: size,
+    margin: width / 2,
+    width,
+    height,
+  };
+}
+
+// UV мировой точки `(px, py)` в текстуре конуса — раскладка `frameOf`:
+// вершина — в `(margin, height / 2)` текстуры, ось — по `+x`, `sx`/`sy` —
+// мировых единиц на пиксель текстуры вдоль и поперёк оси.
 // `cos`/`sin` поворота можно передать готовыми — веер зовёт это на каждую
 // точку. Возвращает `[u, v]`
 export function coneUv(

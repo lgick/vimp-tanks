@@ -302,12 +302,7 @@ export default class LevelLightMap {
   // (она под крышей), получает вырожденные индексы — переписываются они
   // только при смене видимости, как в `orderWallMesh`
   layoutWashes(items, camera, shear) {
-    growMeshPool(
-      this.washPool,
-      this.lights,
-      items.length,
-      () => new Uint32Array(6),
-    );
+    growMeshPool(this.washPool, this.lights, items.length);
 
     for (let i = 0; i < this.washPool.length; i += 1) {
       const mesh = this.washPool[i];
@@ -375,12 +370,7 @@ export default class LevelLightMap {
   // cam)·k`, `k = высота·shear`. UV и индексы заливаются только на смене
   // меша
   layoutRampLights(items, camera, shear) {
-    growMeshPool(
-      this.rampLightPool,
-      this.rampLights,
-      items.length,
-      () => new Uint32Array(3),
-    );
+    growMeshPool(this.rampLightPool, this.rampLights, items.length);
 
     for (let i = 0; i < this.rampLightPool.length; i += 1) {
       const mesh = this.rampLightPool[i];
@@ -533,14 +523,15 @@ export function hasLevelMap(map, level) {
 }
 
 // Пул мешей-добавок света в `container`: растёт до `count`. Меш — режим
-// `add`, пустая текстура; `indices()` — индексы новой геометрии (у
-// каждого меша свой массив). Лишние меши прячет вызывающий
-function growMeshPool(pool, container, count, indices) {
+// `add`, пустая текстура, геометрия-заглушка: все её буферы вызывающий
+// заменяет при первой раскладке меша (новый меш не совпадает ни с одним
+// веером, засветкой или клином). Лишние меши прячет вызывающий
+function growMeshPool(pool, container, count) {
   while (pool.length < count) {
     const geometry = new MeshGeometry({
       positions: new Float32Array(6),
       uvs: new Float32Array(6),
-      indices: indices(),
+      indices: new Uint32Array(3),
     });
     const mesh = new Mesh({ geometry, texture: Texture.EMPTY });
 
@@ -609,7 +600,7 @@ function layoutPool(pool, container, items) {
 // стоит; проекцию высоты даёт трансформ меша `p·scale + (x, y)` — ровно
 // `offsetPoint`
 function layoutFans(pool, container, items) {
-  growMeshPool(pool, container, items.length, () => fanIndices(2));
+  growMeshPool(pool, container, items.length);
 
   for (let i = 0; i < pool.length; i += 1) {
     const mesh = pool[i];

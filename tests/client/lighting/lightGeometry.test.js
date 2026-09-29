@@ -9,6 +9,7 @@ import {
   coneUv,
   fanUvs,
   fanIndices,
+  frameOf,
   rampBlocks,
   rampHeight,
   rampLight,
@@ -323,6 +324,52 @@ describe('lightGeometry: coneFan / fanUvs / fanIndices', () => {
   });
 });
 
+describe('lightGeometry: frameOf', () => {
+  it('конус: вершина — фара, масштабы по длине и полуширине', () => {
+    const asset = {
+      texture: { width: 140, height: 60 },
+      length: 100,
+      halfWidth: 25,
+      margin: 20,
+    };
+    const light = {
+      kind: 'cone',
+      x: 40,
+      y: 48,
+      radius: 100,
+      spread: 0.5,
+      rotation: 0.3,
+    };
+
+    expect(frameOf(light, asset)).toEqual({
+      x: 40,
+      y: 48,
+      rotation: 0.3,
+      sx: 1,
+      sy: 2,
+      margin: 20,
+      width: 140,
+      height: 60,
+    });
+  });
+
+  it('пятно: без поворота, масштаб по contentSize, вершина в центре', () => {
+    const asset = { texture: { width: 68, height: 68 }, contentSize: 64 };
+    const light = { kind: 'radial', x: 1, y: 2, radius: 32, rotation: 1 };
+
+    expect(frameOf(light, asset)).toEqual({
+      x: 1,
+      y: 2,
+      rotation: 0,
+      sx: 1,
+      sy: 1,
+      margin: 34,
+      width: 68,
+      height: 68,
+    });
+  });
+});
+
 // Засветка грани стены: лучи веера, упёршиеся в одну грань, — квады от
 // подножия вверх; UV верха — конец того же луча, яркость гаснет вверх
 describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
@@ -488,21 +535,26 @@ describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
       reaches: new Float32Array([100, 100, 100]),
       forward: 3,
       uvOf,
-      wallAt: () => 1,
       cellW: CELL,
       cellH: CELL,
       height: 0.6,
     };
-    const plain = wallWash(args);
-    const withLevel = wallWash({ ...args, level: 1 });
 
-    for (let v = 0; v < plain.heights.length; v += 1) {
-      expect(withLevel.heights[v]).toBe(plain.heights[v] + 1);
+    // объём 1 — верх засветки на `height`, объём 0.35 (перила) — на объёме
+    for (const wallAt of [() => 1, () => 0.35]) {
+      const plain = wallWash({ ...args, wallAt });
+      const withLevel = wallWash({ ...args, wallAt, level: 1 });
+
+      for (let v = 0; v < plain.heights.length; v += 1) {
+        // высоты во Float32Array: `level + h` округляется целиком и с
+        // `plain.heights[v] + 1` совпадает не при всех `h` (0.35 — нет)
+        expect(withLevel.heights[v]).toBeCloseTo(plain.heights[v] + 1, 6);
+      }
+
+      expect([...withLevel.base]).toEqual([...plain.base]);
+      expect([...withLevel.uvs]).toEqual([...plain.uvs]);
+      expect([...withLevel.indices]).toEqual([...plain.indices]);
     }
-
-    expect([...withLevel.base]).toEqual([...plain.base]);
-    expect([...withLevel.uvs]).toEqual([...plain.uvs]);
-    expect([...withLevel.indices]).toEqual([...plain.indices]);
   });
 });
 

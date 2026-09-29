@@ -12,6 +12,7 @@ import {
   lightArea,
 } from '../../../src/client/lighting/createLighting.js';
 import LevelLightMap from '../../../src/client/lighting/LevelLightMap.js';
+import { frameOf } from '../../../src/client/lighting/lightGeometry.js';
 import { createLevelView } from '../../../src/client/levelView.js';
 import { createVolumes } from '../../../src/client/volumes.js';
 import { levelZ } from '../../../src/client/levelZ.js';
@@ -1404,6 +1405,35 @@ describe('lighting: фары и стены', () => {
     );
 
     expect(free.fan).toBeNull();
+  });
+
+  // спрайт в чистом поле кладёт текстуру так же, как веер фары у стены и
+  // свет на клине: раскладка одна — `frameOf` (у спрайта — в масштабе
+  // проекции)
+  it('спрайты конуса и пятна: раскладка текстуры — frameOf', () => {
+    const { service, cone } = scene({ walls: [[15, 15]] });
+    const lamp = service.addLight({
+      kind: 'radial',
+      x: 200,
+      y: 200,
+      radius: 40,
+    });
+    const layout = spyLayout();
+
+    frame(service);
+
+    const items = lastItems(layout, 0);
+
+    for (const [light, name] of [[cone, 'cone'], [lamp, 'radial']]) {
+      const asset = service.texture(name);
+      const item = items.find(entry => entry.texture === asset.texture);
+      const expected = frameOf(light, asset);
+
+      expect(item.anchorX).toBe(expected.margin / expected.width);
+      expect(item.scaleX).toBe(expected.sx * item.view.scale);
+      expect(item.scaleY).toBe(expected.sy * item.view.scale);
+      expect(item.rotation).toBe(expected.rotation);
+    }
   });
 
   // стены на карте есть, но прямоугольник текстуры конуса их не задевает:
