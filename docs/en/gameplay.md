@@ -334,30 +334,157 @@ Left to right: round time, health, `w1`/`w2` ammo (the active weapon is highligh
 
 AI lives in this game's Rust core ([core.md](core.md)): bots are full participants —
 they show up in stats, drive tanks, and shoot through the same input as
-players. Navigation is the engine's grid-based pathfinding plus a spatial grid for target
-search. Added via `/bot` or a vote; a bot is evicted when a human joins a
-full team (also when a human connects past the combined `maxPlayers` limit).
+players. Navigation is the engine's grid-based pathfinding. Added via
+`/bot` or a vote; a bot is evicted when a human joins a full team (also
+when a human connects past the combined `maxPlayers` limit).
+
+How a bot knows about enemies:
+
+- like a player from the radar, it knows where every living enemy is — but
+  with a delay (it "glances at the radar" every `radarInterval`) and an
+  error (`radarNoise`), and without their speed;
+- only an enemy it sees (a clear line of sight within 900 units; a bot on a
+  bridge also sees tanks below it) is known exactly: its position, speed
+  and hull condition;
+- it remembers which enemy aims at it and which one wounded it last.
+
+How a bot picks a target: by route distance, visibility (a visible target
+it can shoot at weighs most), threat (an enemy aiming at it or the one that
+just wounded it), how damaged the enemy is, and its own level. It keeps a
+chosen target for a while instead of flickering between two, unless another
+enemy has just wounded it. It chases a target it does not see to where the
+radar shows it, now and then pausing to look around. It does not shoot when
+a teammate or a crate stands in the line of fire.
+
+How a bot drives:
+
+- it always follows a route over the engine's nav graph, and the route fits
+  its hull — it does not squeeze through gaps narrower than the tank or
+  scrape along walls, and it cuts corners only where a hull-wide corridor
+  is clear;
+- chasing an enemy behind a wall, it drives that route instead of straight
+  at the target;
+- when it runs into a wall it backs off, turns and re-plans the route
+  around the spot; a fence or crate in its way is shot through, and after
+  repeated failures it gives up the goal and picks another;
+- a watchdog re-plans a bot that has not moved for 5 s (a bot standing
+  still while shooting at a visible target is not stuck).
 
 On a 2.5D map (levels, ramps, bridges) a bot knows its own level:
 
 - it paths through ramps — a route to the bridge goes over a ramp, because
-  the nav graph carries level transitions as its own edges;
-- it jumps off a ledge only when the shortcut is worth it — a ledge edge
-  costs extra in the graph, since the landing costs health;
+  the nav graph carries level transitions as its own edges. It enters a
+  ramp head-on: it first lines up with the run in front of its foot, since
+  the entry gate lets a tank onto the run only from its end;
+- it jumps off a ledge when the route down is shorter — a ledge edge costs
+  extra in the graph, since the landing costs health. An aggressive bot
+  that is healthy enough to afford the landing (`fallDamage`) jumps more
+  readily in a chase; a wounded one does not;
 - while falling it is not steered at all, and the fall is not mistaken for
-  being stuck;
+  being stuck; if it lands somewhere unexpected it re-plans;
 - it prefers a target on its own level, and holds fire when the bridge slab
   shields the target — instead it drives towards it, over a ramp. A target
   its bullet does reach is shot at; one the bullet would pass over or
   under — a ground tank for a bot on a bridge or high on a ramp, a tank on
   a bridge for a bot on the ground — is not;
-- it strafes after a shot only to a point walkable on its own level, and it
-  steers around obstacles of its own level (railings above a bot on the
-  ground are not obstacles).
+- it weaves in a fight only to points walkable on its own level — except
+  that in the heat of a fight it may drive off a bridge edge (`edgeRisk`)
+  — and it steers around obstacles of its own level (railings above a bot
+  on the ground are not obstacles).
 
-What it does not do: it does not jump off a ledge to shorten a chase (only
-when the path itself is shorter), it does not weigh its remaining health
-against `fallDamage`, and it does not shoot at a level it cannot reach.
+What it does not do: it does not shoot at a level it cannot reach, does not
+take surfaces (oil, ice, boosts) into account, does not know that a fence or
+a crate has been destroyed (its nav graph is static) and does not use the
+chat.
+
+### Combat
+
+A bot aims and shoots like a player, with the same keys:
+
+- it reacts to a new target with a delay (`reactionTime`; faster if its gun
+  was already pointing where the target appeared), and first it misses: the
+  aim error (`aimError`, larger for a target crossing its view) fades while
+  it keeps tracking (`aimSettleTime`). On top of it the aim trembles
+  (`aimTremor`), jumps off after every shot, and is worse while the bot is
+  driving or the target moves fast across its view;
+- it pulls the trigger once the barrel is close enough to the target
+  (`fireTolerance` — above 1 it also fires while the barrel is still just
+  beside the target, so it misses);
+- it fires in bursts (`burstShots`, `shotInterval`) with pauses between them
+  (`burstPause`); it fires on the move too, at a visible target in its line
+  of fire; sometimes it fires one blind shot at a target that has just
+  ducked behind a wall (`panicFire`);
+- the turret turns at most `maxGunAngle` from the hull: a target beyond it
+  makes the bot turn its hull first.
+
+How a bot moves in a fight: it closes in when the target is farther than
+`preferredRange`, backs off in reverse, facing it, when the target is
+closer (an aggressive bot instead closes in for a bomb), and weaves inside
+the range — at about 61° to the line to the target, so the target stays
+within the turret's arc. It switches the weaving side every 1.5–3 s, when
+it bumps into something and (except `easy`) when the target aims at it; a
+teammate or a crate in the line of fire makes it move at once — it does
+not shoot a crate. In the heat of a fight it may drive off a bridge edge
+(`edgeRisk`) and take the fall damage.
+
+The bomb (`w2`, dropped under itself) is used only point-blank: the enemy
+closer than 0.8 of the blast radius, on the bot's level, and only if its
+own bomb cannot hurt it (`friendlyFire` off) — with `friendlyFire` on, only
+a very aggressive bot with health to spare. It then drives away from the
+bomb for a second and takes the gun back. With no gun ammo left (and no
+enemy within the bomb's reach) a bot retreats.
+
+### Teamwork
+
+- A bot knows where its teammates are — humans included — and how battered
+  their hulls look (it sees hulls, not health).
+- The team shares a focus: the enemy closest to the team, seen by the most
+  of its bots and the most damaged. Bots prefer it as a target, so they hit
+  the same tank; the focus changes only when another enemy is clearly
+  better (and not within 3 s of the last change).
+- Roles: with three bots or more, the most aggressive one flanks — its
+  route avoids the straight line from the team to the focus and comes out
+  from the side; a wounded bot (health below 50) supports — it hangs back
+  about 200 units behind the nearest teammate on the line to the target
+  and joins the fight only at a visible target. The rest assault.
+- A bot that has run far ahead of the team (350 units closer to the target
+  than the team's centre) without an advantage waits: it drives back
+  towards the team's centre and resumes the chase after at most 4 s.
+- It does not shoot through teammates (a teammate in the line of fire makes
+  it move), steps aside from a teammate nearby, and in a fight weaves away
+  from a teammate closer than 120 units.
+- When a visible enemy wounds it while it is driving around, chasing or
+  regrouping, it turns on the attacker at once.
+
+### Retreat and defence
+
+A bot retreats when:
+
+- its health is at or below `retreatHealth` and it is under fire (wounded
+  within 4 s or a visible enemy within 450 units); a very aggressive bot
+  (`aggression` above 0.8) holds out longer — down to 0.6 of that;
+- the enemy is stronger nearby (the strength ratio within 350 units is below
+  `retreatAdvantage`) and its health is below 70;
+- it has nothing left to fight with.
+
+Where to: behind the nearest teammate who is farther from the threats, into
+cover (a point within 5–8 tiles that no threat can see), home (its spawn
+point) or — on a bridge, with health to spare for the landing — down off
+the edge. The candidates are compared by the route around the threats, and
+a point next to teammates is preferred, one a threat can see is avoided.
+With a visible enemy behind it the bot backs away in reverse, facing it,
+and fires back — with a worse aim than usual; an enemy chasing it closer
+than 60 units gets a bomb.
+
+At the retreat point (or once no threat has been seen for 2 s and a
+teammate is near) the bot holds the position: it stands, keeps the
+threat within the turret's arc with its gun already pointing where the
+enemy is expected (so it reacts faster when the enemy shows up), fires at
+a visible enemy and now and then shifts a tile aside if the new spot is
+still covered. It goes back to the chase when the hold time is over and
+the forces are even, or at once when teammates push forward; an enemy
+coming close is engaged; a bot finished off in its cover (health below 20)
+retreats again to another spot.
 
 ## Kicks
 

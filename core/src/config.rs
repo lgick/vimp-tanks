@@ -706,6 +706,251 @@ impl PropRules {
     }
 }
 
+/// Пресет сложности ботов (coreParams.bots.skill).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BotSkill {
+    Easy,
+    #[default]
+    Normal,
+    Hard,
+}
+
+/// Параметры одного пресета сложности. Единицы — в комментариях полей.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotSkillParams {
+    /// Задержка реакции на новую цель, с.
+    pub reaction_time: f32,
+    /// Начальная ошибка прицела, рад.
+    pub aim_error: f32,
+    /// За сколько секунд ошибка прицела сходит на нет, с.
+    pub aim_settle_time: f32,
+    /// Постоянное дрожание прицела, рад.
+    pub aim_tremor: f32,
+    /// Множитель допуска «ствол смотрит в цель» перед выстрелом.
+    pub fire_tolerance: f32,
+    /// Выстрелов в очереди `[min, max]`, шт.
+    pub burst_shots: [u8; 2],
+    /// Пауза между очередями `[min, max]`, с.
+    pub burst_pause: [f32; 2],
+    /// Интервал выстрелов внутри очереди, с.
+    pub shot_interval: f32,
+    /// Как часто бот «смотрит на радар», с.
+    pub radar_interval: f32,
+    /// Шум позиции врага с радара, ед.
+    pub radar_noise: f32,
+    /// Желаемая дистанция боя `[min, max]`, ед.
+    pub preferred_range: [f32; 2],
+    /// Агрессивность, 0..1.
+    pub aggression: f32,
+    /// Порог здоровья для отступления, HP.
+    pub retreat_health: f32,
+    /// Отношение сил (свои/чужие), ниже которого бот отступает.
+    pub retreat_advantage: f32,
+    /// Шум руления, рад.
+    pub steer_noise: f32,
+    /// Вероятность сорваться с края в бою.
+    pub edge_risk: f32,
+    /// Частота «замешательства», 1/с.
+    pub hesitation: f32,
+    /// Вероятность выстрела наугад под давлением.
+    pub panic_fire: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotPresets {
+    pub easy: BotSkillParams,
+    pub normal: BotSkillParams,
+    pub hard: BotSkillParams,
+}
+
+/// Правила ботов (game.js coreParams.bots). Секция необязательна: без неё — `normal`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotRules {
+    #[serde(default)]
+    pub skill: BotSkill,
+    /// Разброс «характера» между ботами: 0 — все одинаковые, 1 — ±50 % от пресета.
+    #[serde(default = "default_bot_variance")]
+    pub variance: f32,
+    #[serde(default = "default_bot_presets")]
+    pub presets: BotPresets,
+}
+
+fn default_bot_variance() -> f32 {
+    0.3
+}
+
+/// Те же числа, что в `src/config/game.js` (coreParams.bots.presets).
+fn default_bot_presets() -> BotPresets {
+    BotPresets {
+        easy: BotSkillParams {
+            reaction_time: 0.55,
+            aim_error: 0.3,
+            aim_settle_time: 1.1,
+            aim_tremor: 0.05,
+            fire_tolerance: 1.8,
+            burst_shots: [1, 2],
+            burst_pause: [0.9, 1.6],
+            shot_interval: 0.4,
+            radar_interval: 2.0,
+            radar_noise: 40.0,
+            preferred_range: [140.0, 340.0],
+            aggression: 0.35,
+            retreat_health: 45.0,
+            retreat_advantage: 0.6,
+            steer_noise: 0.1,
+            edge_risk: 0.25,
+            hesitation: 0.08,
+            panic_fire: 0.3,
+        },
+        normal: BotSkillParams {
+            reaction_time: 0.35,
+            aim_error: 0.18,
+            aim_settle_time: 0.7,
+            aim_tremor: 0.03,
+            fire_tolerance: 1.25,
+            burst_shots: [1, 3],
+            burst_pause: [0.55, 1.1],
+            shot_interval: 0.3,
+            radar_interval: 1.4,
+            radar_noise: 25.0,
+            preferred_range: [170.0, 420.0],
+            aggression: 0.5,
+            retreat_health: 35.0,
+            retreat_advantage: 0.5,
+            steer_noise: 0.05,
+            edge_risk: 0.12,
+            hesitation: 0.04,
+            panic_fire: 0.15,
+        },
+        hard: BotSkillParams {
+            reaction_time: 0.2,
+            aim_error: 0.09,
+            aim_settle_time: 0.4,
+            aim_tremor: 0.012,
+            fire_tolerance: 0.9,
+            burst_shots: [2, 3],
+            burst_pause: [0.35, 0.7],
+            shot_interval: 0.22,
+            radar_interval: 0.9,
+            radar_noise: 12.0,
+            preferred_range: [200.0, 480.0],
+            aggression: 0.65,
+            retreat_health: 25.0,
+            retreat_advantage: 0.4,
+            steer_noise: 0.02,
+            edge_risk: 0.04,
+            hesitation: 0.01,
+            panic_fire: 0.05,
+        },
+    }
+}
+
+impl Default for BotRules {
+    fn default() -> Self {
+        Self {
+            skill: BotSkill::default(),
+            variance: default_bot_variance(),
+            presets: default_bot_presets(),
+        }
+    }
+}
+
+impl BotRules {
+    /// Пресет выбранной сложности.
+    pub fn params(&self) -> &BotSkillParams {
+        match self.skill {
+            BotSkill::Easy => &self.presets.easy,
+            BotSkill::Normal => &self.presets.normal,
+            BotSkill::Hard => &self.presets.hard,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&self.variance) {
+            return Err(format!("bots.variance must be in [0, 1], got {}", self.variance));
+        }
+
+        for (name, params) in [
+            ("easy", &self.presets.easy),
+            ("normal", &self.presets.normal),
+            ("hard", &self.presets.hard),
+        ] {
+            params.validate(name)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl BotSkillParams {
+    fn validate(&self, name: &str) -> Result<(), String> {
+        let prefix = format!("bots.presets.{name}");
+
+        for (field, value) in [
+            ("reactionTime", self.reaction_time),
+            ("aimSettleTime", self.aim_settle_time),
+            ("shotInterval", self.shot_interval),
+            ("radarInterval", self.radar_interval),
+            ("fireTolerance", self.fire_tolerance),
+            ("retreatAdvantage", self.retreat_advantage),
+        ] {
+            if !(value > 0.0 && value.is_finite()) {
+                return Err(format!("{prefix}.{field} must be > 0, got {value}"));
+            }
+        }
+
+        for (field, value) in [
+            ("aimError", self.aim_error),
+            ("aimTremor", self.aim_tremor),
+            ("radarNoise", self.radar_noise),
+            ("steerNoise", self.steer_noise),
+            ("hesitation", self.hesitation),
+        ] {
+            if !(value >= 0.0 && value.is_finite()) {
+                return Err(format!("{prefix}.{field} must be >= 0, got {value}"));
+            }
+        }
+
+        for (field, value) in [
+            ("edgeRisk", self.edge_risk),
+            ("panicFire", self.panic_fire),
+            ("aggression", self.aggression),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(format!("{prefix}.{field} must be in [0, 1], got {value}"));
+            }
+        }
+
+        if !(0.0..=100.0).contains(&self.retreat_health) {
+            return Err(format!(
+                "{prefix}.retreatHealth must be in [0, 100], got {}",
+                self.retreat_health
+            ));
+        }
+
+        for (field, [a, b]) in [
+            ("burstPause", self.burst_pause),
+            ("preferredRange", self.preferred_range),
+        ] {
+            if !(a >= 0.0 && a <= b && b.is_finite()) {
+                return Err(format!("{prefix}.{field} must be 0 <= min <= max, got [{a}, {b}]"));
+            }
+        }
+
+        let [a, b] = self.burst_shots;
+
+        if !(a >= 1 && a <= b) {
+            return Err(format!("{prefix}.burstShots must be 1 <= min <= max, got [{a}, {b}]"));
+        }
+
+        Ok(())
+    }
+}
+
 /// Игровая половина init-JSON хостового ядра (`GameCore::new`) — см.
 /// `vimp_engine_core::sim::GameDef::Config`.
 #[derive(Clone, Deserialize)]
@@ -728,6 +973,9 @@ pub struct TanksConfig {
     /// Разрушаемые тела карты (coreParams.props).
     #[serde(default)]
     pub props: PropRules,
+    /// Правила ботов (coreParams.bots).
+    #[serde(default)]
+    pub bots: BotRules,
 }
 
 impl TanksConfig {
@@ -907,6 +1155,7 @@ impl TanksConfig {
 
         self.surfaces.validate(&self.models)?;
         self.props.validate()?;
+        self.bots.validate()?;
 
         Ok(())
     }
@@ -993,6 +1242,7 @@ mod validate_tests {
             levels: LevelRules::default(),
             surfaces: SurfaceRules::default(),
             props: PropRules::default(),
+            bots: BotRules::default(),
         }
     }
 
@@ -1497,5 +1747,47 @@ mod validate_tests {
         // 0.15 / (1/120) = 18; у типов без chainDelay — один шаг
         assert_eq!(cfg.props.chain_steps(1.0 / 120.0), vec![18, 1, 1]);
         assert_eq!(cfg.props.chain_steps(1.0), vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn bots_section_is_optional() {
+        let json = serde_json::json!({
+            "models": {},
+            "weapons": {},
+            "playerKeys": {},
+            "panel": {}
+        });
+        let cfg: TanksConfig = serde_json::from_value(json).unwrap();
+
+        assert_eq!(cfg.bots.skill, BotSkill::Normal);
+        assert_eq!(cfg.bots.variance, 0.3);
+        assert_eq!(cfg.bots.params(), &cfg.bots.presets.normal);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn bots_validate_rejects_bad_values() {
+        let mut variance = config_with_panel_keys(&["health"]);
+
+        variance.bots.variance = 1.5;
+        assert!(variance.validate().unwrap_err().contains("bots.variance"));
+
+        for (edit, message) in [
+            (
+                (|p: &mut BotSkillParams| p.burst_shots = [0, 1]) as fn(&mut BotSkillParams),
+                "bots.presets.normal.burstShots",
+            ),
+            (|p| p.preferred_range = [300.0, 100.0], "bots.presets.normal.preferredRange"),
+            (|p| p.edge_risk = 2.0, "bots.presets.normal.edgeRisk"),
+            (|p| p.reaction_time = 0.0, "bots.presets.normal.reactionTime"),
+        ] {
+            let mut cfg = config_with_panel_keys(&["health"]);
+
+            edit(&mut cfg.bots.presets.normal);
+
+            let error = cfg.validate().unwrap_err();
+
+            assert!(error.contains(message), "{message}: {error}");
+        }
     }
 }

@@ -4,7 +4,7 @@
 //! (`map::ramp_guards`) — препятствие для ТЕЛ; пуле они давали упор у
 //! верхней кромки, в кромку моста и в борт на полу. Одна модель на хост
 //! (`TanksSim::process_hitscan`), предиктор (`ShotPredictor::cast_ray`) и
-//! ботов (`bots::controller`) — копии расходятся молча. Уровень полёта и
+//! ботов (`bots::perception`) — копии расходятся молча. Уровень полёта и
 //! пол под пулей — `shot_levels::ray_segments`.
 
 use vimp_engine_core::client::raycast::walk_ray_cells;

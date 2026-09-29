@@ -8,7 +8,7 @@ import gameConfig from '../../src/config/game.js';
 // обновляется она тем же сериализатором, что и dist/maps/*.json
 // (scripts/export-maps.js).
 describe('tests/core/fixtures/*.json', () => {
-  it.each(['overpass', 'terraces'])('%s.json совпадает с модулем карты', name => {
+  it.each(['overpass', 'terraces', 'downtown'])('%s.json совпадает с модулем карты', name => {
     const fixture = JSON.parse(
       readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8'),
     );

@@ -9,11 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
 use crate::bomb::{Bomb, BombRow, BombSpawn};
-use crate::bots::controller::BotBrain;
+use crate::bots::brain::BotDebug;
+use crate::bots::profile::BotProfile;
+use crate::bots::team::{Role, TeamBoard};
+use crate::bots::BotBrain;
 use vimp_engine_core::nav::navigation::NavigationSystem;
 use vimp_engine_core::nav::spatial::{SpatialEntity, SpatialGrid};
 use crate::config::{
-    CameraShake, LevelRules, ModelConfig, PanelValue, PropRules, SurfaceRules, TanksConfig, WeaponConfig, WeaponKind,
+    BotRules, BotSkill, CameraShake, LevelRules, ModelConfig, PanelValue, PropRules, SurfaceRules, TanksConfig, WeaponConfig, WeaponKind,
 };
 use crate::level::{self, LevelEvent};
 use crate::map_game::MapGame;
@@ -142,9 +145,11 @@ impl GameDef for TanksGame {
 pub type GameState = vimp_engine_core::game::EngineSim<TanksGame>;
 
 /// Вид движковых+игровых ресурсов, которым пользуется ИИ бота
-/// (core/src/bots/controller.rs) — имена полей/методов совпадают с
+/// (core/src/bots/) — имена полей/методов совпадают с
 /// прежним монолитным `GameState`, чтобы тело `BotBrain` осталось
 /// нетронутым.
+// поля и методы для ИИ этапов 3–6 (plan/bots-ai) пока не все используются
+#[allow(dead_code)]
 pub(crate) struct BotView<'a> {
     pub world: &'a mut PhysicsWorld,
     pub nav: &'a Option<NavigationSystem>,
@@ -155,8 +160,26 @@ pub(crate) struct BotView<'a> {
     pub weapons: &'a IndexMap<String, WeaponConfig>,
     /// Слоистая геометрия карты; `None` — одноуровневая карта.
     pub levels: Option<&'a MapLevels>,
+    /// Огонь по своим включён: своя бомба ранит и бота (`TanksSim::explode`).
+    pub friendly_fire: bool,
+    /// Модели танков (лимит башни `max_gun_angle`, размеры).
+    pub models: &'a IndexMap<String, ModelConfig>,
+    /// Правила ботов (`coreParams.bots`).
+    pub rules: &'a BotRules,
+    /// Правила уровней (урон падения — цена прыжка с обрыва).
+    pub level_rules: &'a LevelRules,
+    /// Сколько поисков маршрута ещё можно сделать на этом тике ИИ (общий на всех ботов).
+    pub route_budget: &'a mut u32,
+    /// Доска своей команды (`TanksSim::rebuild_team_boards`).
+    pub team: Option<&'a TeamBoard>,
 }
 
+/// Сколько поисков маршрута боты могут сделать за один тик ИИ (на всех).
+const BOT_ROUTE_BUDGET_PER_TICK: u32 = 2;
+/// Период пересборки досок команд, с.
+const TEAM_BOARD_INTERVAL: f32 = 0.1;
+
+#[allow(dead_code)]
 impl BotView<'_> {
     pub fn tank_alive(&self, game_id: u32) -> bool {
         self.tanks.get(&game_id).is_some_and(|tank| tank.is_alive())
@@ -193,6 +216,96 @@ impl BotView<'_> {
             .get(&game_id)
             .is_some_and(|tank| tank.level_state.input_locked())
     }
+
+    fn tank_body(&self, game_id: u32) -> Option<&RigidBody> {
+        self.world.bodies.get(self.tanks.get(&game_id)?.body)
+    }
+
+    /// Половины корпуса: вдоль оси и поперёк, ед.
+    pub fn tank_half_extents(&self, game_id: u32) -> (f32, f32) {
+        self.tanks
+            .get(&game_id)
+            .map_or((0.0, 0.0), |tank| tank.half_extents())
+    }
+
+    /// Курс корпуса, рад.
+    pub fn tank_heading(&self, game_id: u32) -> f32 {
+        self.tank_body(game_id).map_or(0.0, |body| body.rotation().angle())
+    }
+
+    pub fn tank_linvel(&self, game_id: u32) -> [f32; 2] {
+        self.tank_body(game_id).map_or([0.0, 0.0], |body| {
+            let v = body.linvel();
+
+            [v.x, v.y]
+        })
+    }
+
+    /// Скорость вдоль оси корпуса (отрицательная — задний ход).
+    pub fn tank_forward_speed(&self, game_id: u32) -> f32 {
+        let heading = self.tank_heading(game_id);
+        let v = self.tank_linvel(game_id);
+
+        v[0] * heading.cos() + v[1] * heading.sin()
+    }
+
+    /// Мировой угол ствола, рад.
+    pub fn gun_world_angle(&self, game_id: u32) -> f32 {
+        let gun = self.tanks.get(&game_id).map_or(0.0, |tank| tank.gun_rotation);
+
+        self.tank_heading(game_id) + gun
+    }
+
+    /// Лимит поворота башни от оси корпуса, рад (`maxGunAngle` модели).
+    pub fn max_gun_angle(&self, game_id: u32) -> f32 {
+        self.tanks
+            .get(&game_id)
+            .and_then(|tank| self.models.get(&tank.model))
+            .map_or(1.4, |model| model.max_gun_angle)
+    }
+
+    pub fn tank_health(&self, game_id: u32) -> f64 {
+        self.tanks.get(&game_id).map_or(0.0, |tank| tank.health)
+    }
+
+    pub fn tank_condition(&self, game_id: u32) -> u8 {
+        self.tanks.get(&game_id).map_or(0, |tank| tank.condition)
+    }
+
+    pub fn tank_team(&self, game_id: u32) -> Option<u8> {
+        self.tanks.get(&game_id).map(|tank| tank.team_id)
+    }
+
+    /// Боезапас оружия по индексу.
+    pub fn ammo(&self, game_id: u32, weapon_index: usize) -> f64 {
+        self.tanks
+            .get(&game_id)
+            .and_then(|tank| tank.ammo.get(weapon_index).copied())
+            .unwrap_or(0.0)
+    }
+
+    /// Танк в полёте (падение с обрыва).
+    pub fn tank_airborne(&self, game_id: u32) -> bool {
+        self.tanks
+            .get(&game_id)
+            .is_some_and(|tank| tank.level_state.airborne())
+    }
+
+    /// Танк на рампе.
+    pub fn tank_on_ramp(&self, game_id: u32) -> bool {
+        self.tanks
+            .get(&game_id)
+            .is_some_and(|tank| tank.level_state.on_ramp())
+    }
+
+    /// Размер тайла карты, ед.
+    pub fn tile_size(&self) -> f32 {
+        if let Some(levels) = self.levels {
+            return levels.tile_size();
+        }
+
+        self.nav.as_ref().map_or(32.0, |nav| nav.grid_step())
+    }
 }
 
 pub struct TanksSim {
@@ -204,6 +317,14 @@ pub struct TanksSim {
     panel: IndexMap<String, PanelValue>,
     pub(crate) tanks: IndexMap<u32, Tank>,
     bots: IndexMap<u32, BotBrain>,
+    /// Правила ботов (coreParams.bots).
+    bot_rules: BotRules,
+    /// Доски команд ботов по `team_id`. Производные: в дамп не едут,
+    /// пересобираются раз в 0.1 с (`rebuild_team_boards`).
+    team_boards: IndexMap<u8, TeamBoard>,
+    /// Часы ИИ и таймер пересборки досок, с (после `deserialize` — с нуля).
+    ai_clock: f32,
+    team_timer: f32,
 
     shots: IndexMap<u32, Bomb>,
     shots_at_time: Vec<Vec<u32>>,
@@ -230,6 +351,11 @@ pub struct TanksSim {
     /// Танки, заспавненные до того, как слои доехали, — им уровень
     /// назначается первым же `update_levels`.
     levels_dirty: bool,
+    /// Уровни танков приехали из дампа: ближайшая копия слоёв
+    /// (`sync_levels`) их по геометрии не пересчитывает, иначе сбросились бы
+    /// полёт с рампы и уровень, заданный явно. Ставит `deserialize`, снимает
+    /// первый `sync_levels` или спавн до приезда слоёв.
+    levels_from_dump: bool,
     /// Разобранное поле `game` текущей карты. Пересобирается только
     /// `rebuild_map_derived`.
     map_game: MapGame,
@@ -284,6 +410,10 @@ impl GameSim<TanksGame> for TanksSim {
             panel: cfg.panel.clone(),
             tanks: IndexMap::new(),
             bots: IndexMap::new(),
+            bot_rules: cfg.bots,
+            team_boards: IndexMap::new(),
+            ai_clock: 0.0,
+            team_timer: 0.0,
             shots: IndexMap::new(),
             shots_at_time: vec![Vec::new(); max_shot_time_in_steps],
             current_shot_id: 0,
@@ -298,6 +428,7 @@ impl GameSim<TanksGame> for TanksSim {
             levels: None,
             levels_fingerprint: None,
             levels_dirty: false,
+            levels_from_dump: false,
             map_game: MapGame::default(),
             surface_rules: cfg.surfaces.clone(),
             surfaces: None,
@@ -409,7 +540,7 @@ impl GameSim<TanksGame> for TanksSim {
         self.spawn_actor(world, events, game_id, model_name, team_id, x, y, angle_deg)?;
 
         if !self.bots.contains_key(&game_id) {
-            let brain = BotBrain::new(game_id, rng);
+            let brain = BotBrain::new(game_id, rng, &self.bot_rules);
 
             self.bots.insert(game_id, brain);
         }
@@ -672,10 +803,23 @@ impl GameSim<TanksGame> for TanksSim {
             return;
         }
 
+        self.ai_clock += dt;
+        self.team_timer -= dt;
+
+        if self.team_timer <= 0.0 {
+            self.team_timer = TEAM_BOARD_INTERVAL;
+            self.rebuild_team_boards(ctx.world);
+        }
+
         let ids: Vec<u32> = self.bots.keys().copied().collect();
+        let mut route_budget = BOT_ROUTE_BUDGET_PER_TICK;
 
         for id in ids {
             if let Some(mut brain) = self.bots.shift_remove(&id) {
+                let team = self
+                    .tanks
+                    .get(&id)
+                    .and_then(|tank| self.team_boards.get(&tank.team_id));
                 let mut view = crate::tanks::BotView {
                     world: &mut *ctx.world,
                     nav: ctx.nav,
@@ -685,6 +829,12 @@ impl GameSim<TanksGame> for TanksSim {
                     key_bits: &self.key_bits,
                     weapons: &self.weapons,
                     levels: self.levels.as_ref(),
+                    friendly_fire: self.friendly_fire,
+                    models: &self.models,
+                    rules: &self.bot_rules,
+                    level_rules: &self.level_rules,
+                    route_budget: &mut route_budget,
+                    team,
                 };
 
                 brain.update(&mut view, dt);
@@ -844,6 +994,7 @@ impl GameSim<TanksGame> for TanksSim {
         self.levels = None;
         self.levels_fingerprint = None;
         self.levels_dirty = false;
+        self.levels_from_dump = false;
 
         self.map_game = MapGame::default();
         self.surfaces = None;
@@ -880,6 +1031,10 @@ impl GameSim<TanksGame> for TanksSim {
         // разрушенное на прошлом хосте восстановилось бы
         self.props = dump.props;
         self.pre_step_vel.clear();
+        // доски команд производные: пересоберутся на первом тике ИИ
+        self.team_boards.clear();
+        self.ai_clock = 0.0;
+        self.team_timer = 0.0;
 
         self.new_tracers.clear();
         self.new_bombs.clear();
@@ -887,9 +1042,11 @@ impl GameSim<TanksGame> for TanksSim {
         self.pending_null_tanks.clear();
         self.cached_players.clear();
 
-        // слои в дамп не едут (карта восстанавливается своим путём):
-        // уровни танков пересчитает первый же `update_levels`
-        self.levels_dirty = true;
+        // слои в дамп не едут (карта восстанавливается своим путём) и
+        // копируются первым же шагом; уровни танков — из дампа, по геометрии
+        // они не пересчитываются
+        self.levels_dirty = false;
+        self.levels_from_dump = true;
         // хук `on_map_loaded` при восстановлении не зовётся: данные из поля
         // `game` карты пересоберёт первый же шаг
         self.map_derived_dirty = true;
@@ -920,6 +1077,142 @@ impl GameSim<TanksGame> for TanksSim {
 }
 
 impl TanksSim {
+    /// Снимок мозга бота — для тестов и отладки.
+    pub fn bot_debug(&self, game_id: u32) -> Option<BotDebug> {
+        self.bots.get(&game_id).map(BotBrain::debug)
+    }
+
+    /// Общий фокус команды — для тестов и отладки.
+    pub fn team_focus(&self, team: u8) -> Option<u32> {
+        self.team_boards.get(&team).and_then(|board| board.focus)
+    }
+
+    /// Роль бота в команде — для тестов и отладки.
+    pub fn team_role(&self, id: u32) -> Option<Role> {
+        let team = self.tanks.get(&id)?.team_id;
+
+        self.team_boards.get(&team).map(|board| board.role(id))
+    }
+
+    /// Пересборка досок команд: живые танки с телом (и люди, и боты), их
+    /// «сила» по корпусу, видимые ботам враги, фокус и роли. Команды — по
+    /// возрастанию `team_id`, члены — по возрастанию id.
+    fn rebuild_team_boards(&mut self, world: &PhysicsWorld) {
+        use crate::bots::team::{BotInfo, Enemy, Member, strength_of};
+
+        let mut alive: Vec<(u32, u8, [f32; 2], u8, u8)> = self
+            .tanks
+            .iter()
+            .filter(|(_, tank)| tank.is_alive())
+            .filter_map(|(id, tank)| {
+                let pos = world.bodies.get(tank.body)?.translation();
+
+                Some((
+                    *id,
+                    tank.team_id,
+                    [round2(pos.x), round2(pos.y)],
+                    tank.level_state.level,
+                    tank.condition,
+                ))
+            })
+            .collect();
+
+        alive.sort_by_key(|(id, ..)| *id);
+
+        let mut teams: Vec<u8> = alive.iter().map(|(_, team, ..)| *team).collect();
+
+        teams.sort_unstable();
+        teams.dedup();
+        self.team_boards.retain(|team, _| teams.contains(team));
+
+        for team in teams {
+            let members: Vec<Member> = alive
+                .iter()
+                .filter(|(_, t, ..)| *t == team)
+                .map(|&(id, _, pos, level, condition)| {
+                    let brain = self.bots.get(&id);
+
+                    Member {
+                        id,
+                        pos,
+                        level,
+                        strength: strength_of(condition),
+                        is_bot: brain.is_some(),
+                        mode: brain.map(|brain| brain.mode),
+                        target: brain.and_then(BotBrain::target),
+                    }
+                })
+                .collect();
+            let enemies: Vec<Enemy> = alive
+                .iter()
+                .filter(|(_, t, ..)| *t != team)
+                .map(|&(id, _, pos, _, condition)| Enemy { id, pos, condition })
+                .collect();
+            let bots: Vec<BotInfo> = members
+                .iter()
+                .filter_map(|member| {
+                    let brain = self.bots.get(&member.id)?;
+
+                    Some(BotInfo {
+                        id: member.id,
+                        health: self.tanks.get(&member.id).map_or(0.0, |t| t.health) as f32,
+                        aggression: brain.profile.aggression,
+                        sees: brain.visible_enemies(),
+                    })
+                })
+                .collect();
+
+            self.team_boards.entry(team).or_default().update(
+                team,
+                members,
+                &enemies,
+                &bots,
+                self.ai_clock,
+            );
+        }
+
+        self.team_boards.sort_keys();
+    }
+
+    /// Ставит здоровье танку и пересчитывает `condition` по порогам
+    /// `Tank::take_damage` (для тестов). Мёртвый танк и `health <= 0` не
+    /// трогаются: для смерти есть урон.
+    #[doc(hidden)]
+    pub fn debug_set_health(&mut self, game_id: u32, health: f64) {
+        let Some(tank) = self.tanks.get_mut(&game_id) else {
+            return;
+        };
+
+        if tank.condition == 0 || health <= 0.0 {
+            return;
+        }
+
+        tank.health = health;
+        tank.condition = if health < 35.0 {
+            1
+        } else if health < 70.0 {
+            2
+        } else {
+            3
+        };
+    }
+
+    /// Перебрасывает «характер» бота по пресету `skill` без разброса (для
+    /// тестов): профиль равен пресету, общий `rng` игры не трогается.
+    #[doc(hidden)]
+    pub fn debug_set_bot_skill(&mut self, game_id: u32, skill: BotSkill) {
+        let Some(brain) = self.bots.get_mut(&game_id) else {
+            return;
+        };
+        let rules = BotRules {
+            skill,
+            variance: 0.0,
+            ..self.bot_rules
+        };
+
+        brain.profile = BotProfile::roll(&rules, &mut Rng::new(0));
+    }
+
     /// Пересобирает данные, выводимые из карты и конфига (`map_game`,
     /// `surfaces`).
     /// Единственное место разбора `game`: зовётся из `on_map_loaded` и из
@@ -1252,6 +1545,7 @@ impl TanksSim {
                 levels_checksum(map.levels()),
             )
         });
+        let from_dump = std::mem::take(&mut self.levels_from_dump);
 
         if fingerprint == self.levels_fingerprint {
             return;
@@ -1259,7 +1553,7 @@ impl TanksSim {
 
         self.levels = layered.map(|map| map.levels().clone());
         self.levels_fingerprint = fingerprint;
-        self.levels_dirty = true;
+        self.levels_dirty = !from_dump;
     }
 
     /// Правила уровней для всех танков: рампы, обрывы, падение, маски
@@ -1408,6 +1702,9 @@ impl TanksSim {
     /// могут ещё не приехать — тогда уровень назначит `update_levels`.
     fn apply_geometry_level(&mut self, world: &mut PhysicsWorld, game_id: u32, x: f32, y: f32) {
         let Some(levels) = self.levels.as_ref() else {
+            // спавн после `deserialize` до первого шага: уровень новому
+            // танку назначит пересчёт всех по геометрии, как без дампа
+            self.levels_from_dump = false;
             return;
         };
         let level = levels.level_at(x, y);

@@ -1,9 +1,14 @@
 // Интеграционные тесты симуляции: сценарии портированы с поведения
 // текущего JS-сервера (tests/server/integration/) как эталона Этапа 2.
 
+use std::sync::OnceLock;
+
 use vimp_engine_core::config::FieldValue;
 use vimp_engine_core::events::CoreEvent;
 use vimp_engine_core::snapshot::Block;
+use vimp_tanks_core::bots::brain::{BotMode, BotStats};
+use vimp_tanks_core::bots::BotBrain;
+use vimp_tanks_core::config::BotSkill;
 use vimp_tanks_core::GameCore;
 
 const DT: f32 = 1.0 / 120.0;
@@ -587,9 +592,8 @@ fn bots_fight_each_other() {
     core.spawn_scripted_actor(1, "m1", 1, 150.0, 200.0, 0.0).unwrap();
     core.spawn_scripted_actor(2, "m1", 2, 300.0, 200.0, 180.0).unwrap();
 
-    // до 60 секунд боя (боты мажут: AIM_INACCURACY). Проверяется завязка боя,
-    // а не его исход: добить противника мешает патрулирование — бот уезжает
-    // и залипает у стены, это отдельное поведение нав-системы
+    // до 60 секунд боя (боты мажут, как люди). Проверяется завязка боя;
+    // исход — в `bots_duel_ends_with_a_kill`
     let mut damaged = false;
 
     for _ in 0..60 {
@@ -604,6 +608,119 @@ fn bots_fight_each_other() {
     }
 
     assert!(damaged, "боты в прямой видимости должны наносить урон");
+}
+
+#[test]
+fn bots_duel_ends_with_a_kill() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 150.0, 300.0, 0.0).unwrap();
+    core.spawn_scripted_actor(2, "m1", 2, 450.0, 300.0, 180.0).unwrap();
+
+    let killed = (0..60).any(|_| {
+        steps(&mut core, 120);
+        events(&mut core)
+            .iter()
+            .any(|e| matches!(e, CoreEvent::Death { .. }))
+    });
+
+    assert!(killed, "за 60 с дуэли никто не погиб");
+}
+
+#[test]
+fn bot_accuracy_is_human_like() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 150.0, 300.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 450.0, 300.0, 180.0).unwrap();
+    core.state_mut().sim.debug_set_bot_skill(1, BotSkill::Normal);
+
+    let mut hits = 0;
+
+    // 30 с порциями по 0.1 с: цели возвращается здоровье, чтобы она не
+    // умерла, и каждое попадание — это `PanelSet health` меньше 100; импульс
+    // попаданий сдвигает цель — она возвращается на место
+    for _ in 0..300 {
+        steps(&mut core, 12);
+        hits += events(&mut core)
+            .iter()
+            .filter(|e| {
+                matches!(e, CoreEvent::PanelSet { id: 2, field, value } if field == "health" && *value < 100.0)
+            })
+            .count();
+        core.reset_actor(2, 2, 450.0, 300.0, 180.0);
+        core.state_mut().sim.debug_set_health(2, 100.0);
+    }
+
+    let shots = core.state().sim.bot_debug(1).unwrap().stats.shots_fired;
+    let accuracy = hits as f32 / shots.max(1) as f32;
+
+    assert!(shots > 10, "бот почти не стрелял: {shots}");
+    assert!(
+        (0.2..=0.9).contains(&accuracy),
+        "меткость {accuracy}: {hits} попаданий из {shots}"
+    );
+}
+
+/// Дуэль двух ботов до первой смерти (не дольше 60 с): победитель или `None`.
+fn duel_winner(a: (f32, f32, f32), b: (f32, f32, f32), skills: [BotSkill; 2]) -> Option<u32> {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, a.0, a.1, a.2).unwrap();
+    core.spawn_scripted_actor(2, "m1", 2, b.0, b.1, b.2).unwrap();
+    core.state_mut().sim.debug_set_bot_skill(1, skills[0]);
+    core.state_mut().sim.debug_set_bot_skill(2, skills[1]);
+
+    for _ in 0..60 {
+        steps(&mut core, 120);
+
+        let death = events(&mut core).into_iter().find_map(|e| match e {
+            CoreEvent::Death { victim, killer } => Some((victim, killer)),
+            _ => None,
+        });
+
+        if let Some((victim, killer)) = death {
+            // самоубийство (падение, своя бомба) — победа другого
+            return Some(if killer == victim { 3 - victim } else { killer });
+        }
+    }
+
+    None
+}
+
+#[test]
+fn hard_bots_beat_easy_bots_more_often() {
+    let layouts = [
+        ((150.0, 300.0, 0.0), (450.0, 300.0, 180.0)),
+        ((150.0, 150.0, 0.0), (450.0, 450.0, 180.0)),
+        ((150.0, 450.0, 0.0), (450.0, 150.0, 180.0)),
+        ((300.0, 120.0, 90.0), (300.0, 500.0, 270.0)),
+        ((120.0, 120.0, 45.0), (500.0, 500.0, 225.0)),
+        ((200.0, 300.0, 90.0), (450.0, 250.0, 0.0)),
+    ];
+    let mut hard_wins = 0;
+    let mut results = Vec::new();
+
+    for (i, (a, b)) in layouts.into_iter().enumerate() {
+        // стороны меняются: `hard` стартует то с `a`, то с `b`
+        let (skills, hard_id) = if i % 2 == 0 {
+            ([BotSkill::Hard, BotSkill::Easy], 1)
+        } else {
+            ([BotSkill::Easy, BotSkill::Hard], 2)
+        };
+        let winner = duel_winner(a, b, skills);
+
+        if winner == Some(hard_id) {
+            hard_wins += 1;
+        }
+
+        results.push((hard_id, winner));
+    }
+
+    assert!(hard_wins >= 4, "hard выиграл {hard_wins} из 6: {results:?}");
 }
 
 #[test]
@@ -1067,6 +1184,28 @@ fn set_actor_level_overrides_geometry() {
     steps(&mut core, 2);
 
     assert_eq!(level_of(&core, 1), 0);
+}
+
+#[test]
+fn state_dump_keeps_the_tank_level() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    core.spawn_actor(1, "m1", 1, SLAB.0, SLAB.1, 0.0).unwrap();
+    steps(&mut core, 2);
+    // под мостом: уровень задан явно и расходится с геометрией
+    core.set_actor_level(1, 0);
+    steps(&mut core, 2);
+    core.pack_body().unwrap();
+    core.take_events();
+
+    let dump = core.serialize_state().unwrap();
+    let mut restored = make_core();
+
+    restored.deserialize_state(&dump).unwrap();
+    steps(&mut restored, 2);
+
+    assert_eq!(level_of(&restored, 1), 0, "уровень из дампа пересчитан по геометрии");
 }
 
 #[test]
@@ -1969,6 +2108,19 @@ fn scripted_bot_drives_onto_the_bridge() {
 /// tests/config/game.test.js.
 fn overpass_map_json() -> &'static str {
     include_str!("../../tests/core/fixtures/overpass.json")
+}
+
+fn downtown_map_json() -> &'static str {
+    include_str!("../../tests/core/fixtures/downtown.json")
+}
+
+/// Фикстура `downtown` (тестовая база ботов на многоуровневой карте)
+/// грузится ядром.
+#[test]
+fn downtown_fixture_loads() {
+    let mut core = make_core();
+
+    core.load_map(downtown_map_json()).unwrap();
 }
 
 /// Критерий приёмки уклона: дефолтные `climbGravity`/`climbMaxSpeedFactor`
@@ -3726,4 +3878,877 @@ fn bomb_pushes_a_map_box_from_its_center() {
 
     assert!(body.linvel().length() > 1.0, "взрыв толкает ящик: {:?}", body.linvel());
     assert!(body.angvel().abs() < 1e-4, "импульс через центр не закручивает: {}", body.angvel());
+}
+
+/// Арена 30×20 тайлов (шаг 32, масштаб 1): периметр и внутренняя стена в
+/// колонке 15, строки 0..=13 — проход внизу, строки 14..18.
+fn walled_arena_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 30]; 20];
+
+    for x in 0..30 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[29] = 1;
+    }
+
+    for row in grid.iter_mut().take(14) {
+        row[15] = 1;
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[160, 96, 0]],
+            "team2": [[800, 96, 180]]
+        }
+    })
+    .to_string()
+}
+
+/// Шагает до `max_steps`, копя события; `true`, как только здоровье `id`
+/// упало ниже 100.
+fn wounded_within(core: &mut GameCore, id: u32, max_steps: usize) -> bool {
+    let mut all = Vec::new();
+
+    for step in 0..max_steps {
+        core.step(DT);
+
+        if step % 120 == 0 {
+            all.extend(events(core));
+
+            if health_of(&all, id).is_some_and(|health| health < 100.0) {
+                return true;
+            }
+        }
+    }
+
+    all.extend(events(core));
+    health_of(&all, id).is_some_and(|health| health < 100.0)
+}
+
+fn distance(a: &[f32], b: &[f32]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+#[test]
+fn bot_drives_around_a_wall_to_the_enemy() {
+    let mut core = make_core();
+
+    core.load_map(&walled_arena_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 5.0 * 32.0, 3.0 * 32.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 25.0 * 32.0, 3.0 * 32.0, 180.0).unwrap();
+
+    // 45 с: путь за стену один — через проход внизу
+    assert!(
+        wounded_within(&mut core, 2, 5400),
+        "бот не добрался до врага за стеной"
+    );
+}
+
+#[test]
+fn stuck_bot_backs_off_the_wall() {
+    let mut core = make_core();
+
+    core.load_map(&walled_arena_json()).unwrap();
+    // вплотную к внутренней стене, лицом к ней; враг за стеной
+    core.spawn_scripted_actor(1, "m1", 1, 15.0 * 32.0 - 7.0, 3.0 * 32.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 25.0 * 32.0, 3.0 * 32.0, 180.0).unwrap();
+
+    let start = core.position_of(1);
+
+    steps(&mut core, 1200);
+
+    let moved = distance(&start, &core.position_of(1));
+    let stats = core.state().sim.bot_debug(1).unwrap().stats;
+
+    assert!(moved > 60.0, "бот не отъехал от стены: {moved}");
+    assert!(
+        stats.stuck_events == 0 || stats.unstuck_resolved > 0,
+        "застревание без выхода: {stats:?}"
+    );
+}
+
+#[test]
+fn bot_climbs_the_ramp_after_a_side_approach() {
+    let mut core = make_core();
+
+    core.load_map(&layered_map_json()).unwrap();
+    // сбоку от прогона (строка 9), нос на север — в борт рампы
+    core.spawn_scripted_actor(1, "m1", 1, 7.5 * 32.0, 11.5 * 32.0, 270.0).unwrap();
+    core.spawn_actor(2, "m1", 2, SLAB.0, SLAB.1, 180.0).unwrap();
+    core.set_actor_level(2, 1);
+
+    let mut reached = false;
+
+    for _ in 0..3600 {
+        core.step(DT);
+
+        if level_of(&core, 1) == 1 {
+            reached = true;
+            break;
+        }
+    }
+
+    assert!(reached, "бот не заехал на мост с бокового подхода");
+}
+
+#[test]
+fn bot_on_the_bridge_gets_down_to_a_ground_enemy() {
+    let mut core = make_core();
+
+    core.load_map(overpass_map_json()).unwrap();
+    // точка респауна на плите (spawnOn(10, 29, 0, 1)) и наземный враг
+    // (респаун team2 [1584, 1168]); масштаб карты 0.4
+    core.spawn_scripted_actor(1, "m1", 1, 336.0 * 0.4, 944.0 * 0.4, 0.0).unwrap();
+    core.set_actor_level(1, 1);
+    core.spawn_actor(2, "m1", 2, 1584.0 * 0.4, 1168.0 * 0.4, 180.0).unwrap();
+
+    steps(&mut core, 2);
+    assert_eq!(level_of(&core, 1), 1);
+
+    let wounded = wounded_within(&mut core, 2, 7200);
+
+    assert_eq!(level_of(&core, 1), 0, "бот не спустился с моста");
+    assert!(wounded, "бот не ранил наземного врага");
+}
+
+#[test]
+fn bots_do_not_stall_on_downtown() {
+    let map = downtown_map_json();
+    let parsed: serde_json::Value = serde_json::from_str(map).unwrap();
+    let scale = parsed["scale"].as_f64().unwrap() as f32;
+    let mut core = make_core();
+
+    core.load_map(map).unwrap();
+
+    let mut ids = Vec::new();
+
+    for (team, key) in [(1u8, "team1"), (2u8, "team2")] {
+        for point in parsed["respawns"][key].as_array().unwrap().iter().take(4) {
+            let id = ids.len() as u32 + 1;
+            let x = point[0].as_f64().unwrap() as f32 * scale;
+            let y = point[1].as_f64().unwrap() as f32 * scale;
+            let angle = point[2].as_f64().unwrap() as f32;
+
+            core.spawn_scripted_actor(id, "m1", team, x, y, angle).unwrap();
+            ids.push(id);
+        }
+    }
+
+    // самое длинное окно «жив и сместился меньше 8 ед.» на бота; выборка в
+    // Engage и Hold окно прерывает (стоять и стрелять, держать засаду — норма)
+    let mut anchor: Vec<Option<(Vec<f32>, usize)>> = vec![None; ids.len()];
+    let mut longest = vec![0usize; ids.len()];
+
+    for sample in 0..180 {
+        steps(&mut core, 60);
+
+        for (i, &id) in ids.iter().enumerate() {
+            let debug = core.state().sim.bot_debug(id).unwrap();
+
+            if !core.is_alive(id) || debug.mode == "engage" || debug.mode == "hold" {
+                anchor[i] = None;
+                continue;
+            }
+
+            let pos = core.position_of(id);
+
+            match &anchor[i] {
+                Some((start, since)) if distance(start, &pos) < 8.0 => {
+                    longest[i] = longest[i].max(sample - since);
+                }
+                _ => anchor[i] = Some((pos, sample)),
+            }
+        }
+    }
+
+    for (i, &id) in ids.iter().enumerate() {
+        let stats = core.state().sim.bot_debug(id).unwrap().stats;
+
+        assert!(
+            longest[i] as f32 * 0.5 <= 6.0,
+            "бот {id} стоял {} с: {stats:?}",
+            longest[i] as f32 * 0.5
+        );
+        assert!(stats.watchdog_resets <= 3, "бот {id}: сторож {stats:?}");
+    }
+}
+
+/// Арена 60×20 тайлов (шаг 32, масштаб 1, ширина 1920) с парой стенок
+/// посередине.
+fn wide_arena_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 60]; 20];
+
+    for x in 0..60 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[59] = 1;
+    }
+
+    for y in 4..9 {
+        grid[y][28] = 1;
+    }
+
+    for y in 11..16 {
+        grid[y][31] = 1;
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[96, 320, 0]],
+            "team2": [[1820, 320, 180]]
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn bot_finds_an_enemy_across_the_map() {
+    let mut core = make_core();
+
+    core.load_map(&wide_arena_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 96.0, 320.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 1820.0, 320.0, 180.0).unwrap();
+
+    assert!(distance(&core.position_of(1), &core.position_of(2)) > 1500.0);
+    // 40 с: враг дальше дальности пушки и вне видимости — бот знает о нём
+    // только по радару
+    assert!(
+        wounded_within(&mut core, 2, 4800),
+        "бот не нашёл врага на другом краю карты"
+    );
+}
+
+#[test]
+fn bot_does_not_waste_shots_into_a_crate() {
+    // ящик 32×32 (тело — угол, коллайдер смещён на полгабарита) вплотную к
+    // врагу, ровно на прямой бот—враг. Толкать ящик корпусом боту можно,
+    // стрелять в него — нет
+    const BOX_X: f32 = 384.0;
+    const BOX_Y: f32 = 284.0;
+
+    let mut core = make_core();
+
+    core.load_map(&map_with_box_json(BOX_X, BOX_Y)).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 120.0, 300.0, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, 420.0, 300.0, 180.0).unwrap();
+
+    steps(&mut core, 360);
+
+    // пушка молчит; бомба вплотную к врагу (ящик отодвинут) — не выстрел в ящик
+    let gun_shots = events(&mut core)
+        .iter()
+        .filter(|e| matches!(e, CoreEvent::PanelSet { id: 1, field, .. } if field == "w1"))
+        .count();
+    let stats = core.state().sim.bot_debug(1).unwrap().stats;
+
+    assert_eq!(gun_shots, 0, "бот стрелял в ящик: {stats:?}");
+}
+
+#[test]
+fn wounded_bot_retreats_and_fires_back() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 150.0, 200.0, 0.0).unwrap();
+    // неподвижный враг в прямой видимости: с 25 HP бот погиб бы от одного
+    // выстрела, а отход запускает и видимый враг ближе 450
+    core.spawn_actor(2, "m1", 2, 450.0, 200.0, 180.0).unwrap();
+    core.state_mut().sim.debug_set_health(1, 25.0);
+
+    let enemy_start = core.position_of(2);
+    let start_gap = distance(&core.position_of(1), &enemy_start);
+    let mut retreat: Option<(usize, u32)> = None;
+    let mut gap_grew = false;
+    let mut shots = 0;
+
+    // 4 с, режим — каждые 0.1 с
+    for sample in 0..40 {
+        steps(&mut core, 12);
+
+        let debug = core.state().sim.bot_debug(1).unwrap();
+
+        shots = debug.stats.shots_fired;
+
+        if debug.mode == "retreat" && retreat.is_none() {
+            retreat = Some((sample, shots));
+        }
+
+        if core.is_alive(1) && distance(&core.position_of(1), &enemy_start) > start_gap + 40.0 {
+            gap_grew = true;
+        }
+    }
+
+    let (at, shots_before) = retreat.expect("раненый бот не отступал");
+
+    assert!(at < 20, "отступление началось только на {} с", at as f32 * 0.1);
+    assert!(gap_grew, "бот не отъехал от врага");
+    assert!(shots > shots_before, "бот не отстреливался на отходе");
+}
+
+#[test]
+fn team_focuses_one_target() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+
+    for (id, y) in [(1, 150.0), (2, 250.0), (3, 350.0)] {
+        core.spawn_scripted_actor(id, "m1", 1, 100.0, y, 0.0).unwrap();
+    }
+
+    // неподвижные враги в прямой видимости; не умирают, чтобы фокус не сменился
+    core.spawn_actor(4, "m1", 2, 400.0, 250.0, 180.0).unwrap();
+    core.spawn_actor(5, "m1", 2, 430.0, 350.0, 180.0).unwrap();
+
+    for id in [4, 5] {
+        core.state_mut().sim.debug_set_health(id, 1.0e6);
+    }
+
+    steps(&mut core, 600);
+
+    let focus = core.state().sim.team_focus(1);
+    let focused = [1, 2, 3]
+        .iter()
+        .filter(|&&id| core.state().sim.bot_debug(id).unwrap().target == focus)
+        .count();
+
+    assert!(focus.is_some(), "у команды нет фокуса");
+    assert!(focused >= 2, "в фокус {focus:?} бьют только {focused} из 3");
+}
+
+/// Арена 60×20 тайлов (шаг 32, масштаб 1): периметр и стена в колонке 45,
+/// строки 0..=13 — проход внизу.
+fn long_walled_arena_json() -> String {
+    let mut grid: Vec<Vec<i32>> = vec![vec![0; 60]; 20];
+
+    for x in 0..60 {
+        grid[0][x] = 1;
+        grid[19][x] = 1;
+    }
+
+    for row in grid.iter_mut() {
+        row[0] = 1;
+        row[59] = 1;
+    }
+
+    for row in grid.iter_mut().take(14) {
+        row[45] = 1;
+    }
+
+    serde_json::json!({
+        "setId": "c1",
+        "scale": 1,
+        "step": 32,
+        "map": grid,
+        "physicsStatic": [1],
+        "physicsDynamic": [],
+        "respawns": {
+            "team1": [[160, 160, 0]],
+            "team2": [[1600, 160, 180]]
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn leading_bot_waits_for_the_team() {
+    let mut core = make_core();
+
+    core.load_map(&long_walled_arena_json()).unwrap();
+    // двое сзади, лидер (id 3) в 800 ед. впереди, у стены; враги за стеной
+    core.spawn_scripted_actor(1, "m1", 1, 500.0, 150.0, 0.0).unwrap();
+    core.spawn_scripted_actor(2, "m1", 1, 500.0, 250.0, 0.0).unwrap();
+    core.spawn_scripted_actor(3, "m1", 1, 1300.0, 150.0, 0.0).unwrap();
+    core.spawn_actor(4, "m1", 2, 1600.0, 96.0, 180.0).unwrap();
+    core.spawn_actor(5, "m1", 2, 1600.0, 192.0, 180.0).unwrap();
+
+    // равная агрессия: фланкер — бот 1 (меньший id), не лидер
+    for id in [1, 2, 3] {
+        core.state_mut().sim.debug_set_bot_skill(id, BotSkill::Normal);
+    }
+
+    let mut regrouped = false;
+    let mut gathered = false;
+
+    for _ in 0..100 {
+        steps(&mut core, 12);
+
+        regrouped |= core.state().sim.bot_debug(3).unwrap().mode == "regroup";
+
+        let positions: Vec<Vec<f32>> = [1, 2, 3].iter().map(|&id| core.position_of(id)).collect();
+        let center = [
+            positions.iter().map(|p| p[0]).sum::<f32>() / 3.0,
+            positions.iter().map(|p| p[1]).sum::<f32>() / 3.0,
+        ];
+
+        gathered |= positions.iter().all(|p| distance(p, &center) < 400.0);
+    }
+
+    assert!(regrouped, "лидер не ждал команду");
+    assert!(gathered, "команда так и не собралась");
+}
+
+// ***** приёмка ИИ ботов: матчи 4×4 на слоёных картах ***** //
+
+/// Снимок одного бота раз в 0.5 с матча.
+#[derive(Clone)]
+struct BotSample {
+    pos: Vec<f32>,
+    alive: bool,
+    mode: &'static str,
+    /// Уровень из players_data; `None`, если танка там нет (мёртв).
+    level: Option<u64>,
+}
+
+/// Журнал матча ботов (`run_bot_match`).
+struct MatchLog {
+    /// (game_id, команда) по порядку спавна.
+    bots: Vec<(u32, u8)>,
+    /// `samples[k][i]` — k-я выборка бота `bots[i]`.
+    samples: Vec<Vec<BotSample>>,
+    stats: Vec<BotStats>,
+    /// Урон, полученный танками каждой команды: (команда 1, команда 2).
+    damage_taken: (f64, f64),
+    deaths: usize,
+    seconds: f32,
+}
+
+impl MatchLog {
+    fn index(&self, id: u32) -> usize {
+        self.bots.iter().position(|&(bot, _)| bot == id).unwrap()
+    }
+
+    /// Самое длинное окно «жив, не в `Engage`/`Hold`, сместился меньше
+    /// 8 ед.», с.
+    fn longest_stall(&self, id: u32) -> f32 {
+        let i = self.index(id);
+        let mut anchor: Option<(&[f32], usize)> = None;
+        let mut longest = 0usize;
+
+        for (k, sample) in self.samples.iter().map(|row| &row[i]).enumerate() {
+            if !sample.alive || sample.mode == "engage" || sample.mode == "hold" {
+                anchor = None;
+                continue;
+            }
+
+            match anchor {
+                Some((start, since)) if distance(start, &sample.pos) < 8.0 => {
+                    longest = longest.max(k - since);
+                }
+                _ => anchor = Some((&sample.pos, k)),
+            }
+        }
+
+        longest as f32 * 0.5
+    }
+
+    /// Урон, нанесённый командой: `friendlyFire` выключен, поэтому это урон,
+    /// полученный противником (с учётом его падений с высоты).
+    fn damage_by_team(&self, team: u8) -> f64 {
+        if team == 1 {
+            self.damage_taken.1
+        } else {
+            self.damage_taken.0
+        }
+    }
+
+    fn replans(&self, id: u32) -> u32 {
+        self.stats[self.index(id)].replans
+    }
+
+    fn route_failures(&self, id: u32) -> u32 {
+        self.stats[self.index(id)].route_failures
+    }
+
+    fn watchdog_resets(&self, id: u32) -> u32 {
+        self.stats[self.index(id)].watchdog_resets
+    }
+
+    /// Хоть один бот был на уровне ≥ 1; хоть один спустился на уровень 0
+    /// после уровня ≥ 1.
+    fn levels_used(&self) -> (bool, bool) {
+        let mut upper = false;
+        let mut came_down = false;
+
+        for i in 0..self.bots.len() {
+            let mut was_up = false;
+
+            for sample in self.samples.iter().map(|row| &row[i]) {
+                match sample.level {
+                    Some(level) if level >= 1 => was_up = true,
+                    Some(0) if was_up => came_down = true,
+                    _ => {}
+                }
+            }
+
+            upper |= was_up;
+        }
+
+        (upper, came_down)
+    }
+}
+
+/// Спавнит по `per_team` ботов на первых точках `respawns.team1/team2`
+/// карты (точки в немасштабированных единицах; уровень — 4-й элемент).
+fn spawn_bot_teams(core: &mut GameCore, map_json: &str, per_team: usize) -> Vec<(u32, u8)> {
+    spawn_teams(core, map_json, per_team, true)
+}
+
+/// То же, что `spawn_bot_teams`; `with_ai: false` — танки без ИИ.
+fn spawn_teams(core: &mut GameCore, map_json: &str, per_team: usize, with_ai: bool) -> Vec<(u32, u8)> {
+    let parsed: serde_json::Value = serde_json::from_str(map_json).unwrap();
+    let scale = parsed["scale"].as_f64().unwrap() as f32;
+    let mut bots = Vec::new();
+
+    for (team, key) in [(1u8, "team1"), (2u8, "team2")] {
+        let points = parsed["respawns"][key].as_array().unwrap();
+
+        assert!(points.len() >= per_team, "на карте мало респаунов {key}");
+
+        for point in points.iter().take(per_team) {
+            let id = bots.len() as u32 + 1;
+            let x = point[0].as_f64().unwrap() as f32 * scale;
+            let y = point[1].as_f64().unwrap() as f32 * scale;
+            let angle = point[2].as_f64().unwrap() as f32;
+
+            if with_ai {
+                core.spawn_scripted_actor(id, "m1", team, x, y, angle).unwrap();
+            } else {
+                core.spawn_actor(id, "m1", team, x, y, angle).unwrap();
+            }
+
+            if let Some(level) = point.get(3).and_then(|level| level.as_u64()) {
+                core.set_actor_level(id, level as u8);
+            }
+
+            bots.push((id, team));
+        }
+    }
+
+    bots
+}
+
+/// Матч ботов `per_team` на `per_team`: `seconds` симуляции, выборка
+/// каждые 0.5 с, события копятся.
+fn run_bot_match(map_json: &str, per_team: usize, seconds: f32) -> MatchLog {
+    let mut core = make_core();
+
+    core.load_map(map_json).unwrap();
+
+    let bots = spawn_bot_teams(&mut core, map_json, per_team);
+    let mut health: std::collections::HashMap<u32, f64> =
+        bots.iter().map(|&(id, _)| (id, 100.0)).collect();
+    let mut damage_taken = (0.0, 0.0);
+    let mut deaths = 0;
+    let mut samples = Vec::new();
+
+    for _ in 0..(seconds * 2.0) as usize {
+        steps(&mut core, 60);
+
+        for event in events(&mut core) {
+            match event {
+                CoreEvent::PanelSet { id, field, value } if field == "health" => {
+                    let Some(&(_, team)) = bots.iter().find(|&&(bot, _)| bot == id) else {
+                        continue;
+                    };
+                    let drop = (health[&id] - value).max(0.0);
+
+                    health.insert(id, value);
+
+                    if team == 1 {
+                        damage_taken.0 += drop;
+                    } else {
+                        damage_taken.1 += drop;
+                    }
+                }
+                CoreEvent::Death { .. } => deaths += 1,
+                _ => {}
+            }
+        }
+
+        let data: serde_json::Value = serde_json::from_str(&core.players_data()).unwrap();
+
+        samples.push(
+            bots.iter()
+                .map(|&(id, _)| BotSample {
+                    pos: core.position_of(id),
+                    alive: core.is_alive(id),
+                    mode: core.state().sim.bot_debug(id).unwrap().mode,
+                    level: data["m1"][id.to_string()][12].as_u64(),
+                })
+                .collect(),
+        );
+    }
+
+    let stats = bots
+        .iter()
+        .map(|&(id, _)| core.state().sim.bot_debug(id).unwrap().stats)
+        .collect();
+
+    MatchLog {
+        bots,
+        samples,
+        stats,
+        damage_taken,
+        deaths,
+        seconds,
+    }
+}
+
+/// Матч 4×4 на 120 с — один на карту на весь прогон тестов (тесты карты
+/// читают общий журнал).
+fn match_on(map: &'static str) -> &'static MatchLog {
+    static DOWNTOWN: OnceLock<MatchLog> = OnceLock::new();
+    static TERRACES: OnceLock<MatchLog> = OnceLock::new();
+    static OVERPASS: OnceLock<MatchLog> = OnceLock::new();
+
+    let (cell, json) = match map {
+        "downtown" => (&DOWNTOWN, downtown_map_json()),
+        "terraces" => (&TERRACES, terraces_map_json()),
+        "overpass" => (&OVERPASS, overpass_map_json()),
+        _ => unreachable!("нет фикстуры {map}"),
+    };
+
+    cell.get_or_init(|| run_bot_match(json, 4, 120.0))
+}
+
+fn assert_never_stall(map: &'static str) {
+    let log = match_on(map);
+
+    for &(id, _) in &log.bots {
+        let stats = log.stats[log.index(id)];
+
+        assert!(
+            log.longest_stall(id) <= 6.0,
+            "{map}: бот {id} стоял {} с: {stats:?}",
+            log.longest_stall(id)
+        );
+        assert!(log.watchdog_resets(id) <= 3, "{map}: бот {id}, сторож: {stats:?}");
+    }
+}
+
+fn assert_fight(map: &'static str) {
+    let log = match_on(map);
+
+    assert!(log.damage_by_team(1) > 0.0, "{map}: команда 1 не нанесла урона");
+    assert!(log.damage_by_team(2) > 0.0, "{map}: команда 2 не нанесла урона");
+    assert!(log.deaths > 0, "{map}: за {} с никто не погиб", log.seconds);
+}
+
+fn assert_use_levels(map: &'static str) {
+    let (upper, came_down) = match_on(map).levels_used();
+
+    assert!(upper, "{map}: ни один бот не был на уровне ≥ 1");
+    assert!(came_down, "{map}: ни один бот не спустился на уровень 0");
+}
+
+fn assert_replans_bounded(map: &'static str) {
+    let log = match_on(map);
+    let minutes = log.seconds / 60.0;
+
+    for &(id, _) in &log.bots {
+        let replans = log.replans(id);
+        let failures = log.route_failures(id);
+
+        assert!(
+            replans as f32 <= 90.0 * minutes,
+            "{map}: бот {id} перестроил маршрут {replans} раз за {} с",
+            log.seconds
+        );
+        assert!(
+            (failures as f32) / (replans.max(1) as f32) < 0.1,
+            "{map}: бот {id}: {failures} неудач из {replans} перестроений"
+        );
+    }
+}
+
+#[test]
+fn bots_never_stall_downtown() {
+    assert_never_stall("downtown");
+}
+
+#[test]
+fn bots_never_stall_terraces() {
+    assert_never_stall("terraces");
+}
+
+#[test]
+fn bots_never_stall_overpass() {
+    assert_never_stall("overpass");
+}
+
+#[test]
+fn bots_fight_on_downtown() {
+    assert_fight("downtown");
+}
+
+#[test]
+fn bots_fight_on_terraces() {
+    assert_fight("terraces");
+}
+
+#[test]
+fn bots_fight_on_overpass() {
+    assert_fight("overpass");
+}
+
+#[test]
+fn bots_use_levels_on_downtown() {
+    assert_use_levels("downtown");
+}
+
+#[test]
+fn bots_use_levels_on_terraces() {
+    assert_use_levels("terraces");
+}
+
+#[test]
+fn bots_use_levels_on_overpass() {
+    assert_use_levels("overpass");
+}
+
+#[test]
+fn bot_replans_are_bounded_downtown() {
+    assert_replans_bounded("downtown");
+}
+
+#[test]
+fn bot_replans_are_bounded_terraces() {
+    assert_replans_bounded("terraces");
+}
+
+#[test]
+fn bot_replans_are_bounded_overpass() {
+    assert_replans_bounded("overpass");
+}
+
+#[test]
+fn bot_match_is_deterministic() {
+    let run = || {
+        let map = downtown_map_json();
+        let mut core = make_core();
+
+        core.load_map(map).unwrap();
+
+        let bots = spawn_bot_teams(&mut core, map, 4);
+
+        steps(&mut core, 60 * 120);
+
+        bots.iter().map(|&(id, _)| core.position_of(id)).collect::<Vec<_>>()
+    };
+
+    assert_eq!(run(), run(), "два прогона матча разошлись");
+}
+
+#[test]
+fn bot_dump_restores_identical_simulation() {
+    let map = terraces_map_json();
+    let mut core = make_core();
+
+    core.load_map(map).unwrap();
+
+    let bots = spawn_bot_teams(&mut core, map, 2);
+
+    steps(&mut core, 20 * 120);
+    core.pack_body().unwrap(); // дренаж накопителей перед дампом
+    core.take_events();
+
+    let dump = core.serialize_state().unwrap();
+    let mut restored = make_core();
+
+    restored.deserialize_state(&dump).unwrap();
+
+    steps(&mut core, 20 * 120);
+    steps(&mut restored, 20 * 120);
+
+    for &(id, _) in &bots {
+        assert_eq!(core.position_of(id), restored.position_of(id), "бот {id}");
+        assert_eq!(
+            core.state().sim.bot_debug(id).unwrap().mode,
+            restored.state().sim.bot_debug(id).unwrap().mode,
+            "бот {id}"
+        );
+    }
+}
+
+#[test]
+fn old_bot_dump_still_loads() {
+    // мозг в форме `BotBrain` до нового ИИ (bots::controller, HEAD 32e229f)
+    let old = serde_json::json!({
+        "game_id": 1,
+        "state": "Patrolling",
+        "target": null,
+        "path": null,
+        "path_index": 0,
+        "repath_timer": 0.0,
+        "target_scan_timer": 0.5,
+        "ai_update_timer": 0.1,
+        "firing_timer": 0.0,
+        "bomb_cooldown_timer": 0.0,
+        "last_known_position": null,
+        "stuck_timer": 0.0,
+        "last_position": [10.0, 20.0],
+        "reposition_timer": 0.0,
+        "reposition_target": null,
+        "patrol_target": null,
+        "key_states": [false, false, false, false, false, false]
+    });
+    let brain: BotBrain = serde_json::from_value(old).unwrap();
+
+    assert_eq!(brain.game_id, 1);
+    assert_eq!(brain.mode, BotMode::Roam);
+}
+
+/// Среднее время `core.step(DT)` на `downtown` с 5×5 танками за 60 с, мкс.
+fn mean_step_micros(with_ai: bool) -> f64 {
+    let map = downtown_map_json();
+    let mut core = make_core();
+
+    core.load_map(map).unwrap();
+    spawn_teams(&mut core, map, 5, with_ai);
+
+    let count = 60 * 120;
+    let mut total = std::time::Duration::ZERO;
+
+    for _ in 0..count {
+        let start = std::time::Instant::now();
+
+        core.step(DT);
+        total += start.elapsed();
+    }
+
+    total.as_secs_f64() * 1.0e6 / count as f64
+}
+
+/// Замер вклада ИИ (этап 7.3): `cargo test --release -q -p vimp-tanks-core
+/// --test sim bench_bot_ai_downtown -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn bench_bot_ai_downtown() {
+    let idle = mean_step_micros(false);
+    let bots = mean_step_micros(true);
+
+    println!(
+        "downtown 5×5, 60 с: шаг без ИИ {idle:.1} мкс, с ботами {bots:.1} мкс, вклад ИИ {:.1} мкс",
+        bots - idle
+    );
 }

@@ -42,7 +42,17 @@ src/
 ├── shot_height.rs             # bullet height, ramp embankments, what the bullet
 │                              #   reaches (host, shot predictor and bots)
 ├── bots/
-│   └── controller.rs         # BotBrain — bot AI (input is generated inside the core)
+│   ├── mod.rs                # pub use brain::BotBrain
+│   ├── brain.rs              # BotBrain — bot AI state machine (input is generated
+│   │                         #   inside the core), BotStats, BotDebug
+│   ├── geom.rs               # distances, angles, rotations
+│   ├── keys.rs               # KeyPad — held keys, one-shot presses, release
+│   ├── navigator.rs          # Navigator — find_route routes, re-planning, smoothing
+│   ├── perception.rs         # fire_line — what stands on the bot's line of fire
+│   ├── profile.rs            # BotProfile — per-bot "character" rolled from coreParams.bots
+│   ├── steering.rs           # decide_drive, obstacle rays, stuck detector
+│   ├── team.rs               # TeamBoard — teammates, focus, roles, team centre
+│   └── test_support.rs       # #[cfg(test)] fixture and factories
 └── client/                    # the core's client mode: TanksClient (impl GameClientDef)
     ├── mod.rs                 # TanksClient — wires Predictor/ShotPredictor into the
     │                          #   engine's generic ClientState<TanksClient>
@@ -729,7 +739,7 @@ reads as the glued blocks of `MapLevels::static_blocks`
 by.
 
 The guards are invisible to a bot's obstacle-avoidance rays
-(`bots::controller::avoid_obstacles` casts with
+(`bots::steering::avoid_obstacles` casts with
 `map::levels_interaction_on_ramp`): a run is one tile wide, so the side rays
 would hit its rails on every approach and turn the bot away from the foot.
 Driving in from the side is held by the guards themselves and by the nav
@@ -738,7 +748,11 @@ graph, which routes no path through the cells of a run.
 `TanksSim` keeps its own copy of the map's `MapLevels` (`spawn_actor` never
 sees the map): it is refreshed in `on_fixed_step` whenever the map's
 fingerprint — `setId` plus the level-0 grid dimensions — changes, and every
-tank is then re-levelled by geometry. `on_fixed_step` runs in this order:
+tank is then re-levelled by geometry. The one exception is the first copy
+after `deserialize`: the tanks' level state (level, `z`, a flight off a
+ramp, a level set explicitly) comes from the dump and is kept as is — unless
+a tank was spawned before that first step. `on_fixed_step` runs in this
+order:
 
 ```
 1. sync_levels(ctx)      # the levels copy follows the current map
@@ -978,7 +992,7 @@ Physics and rays are 2D, but a ramp is a slope. The ramp guards
 answers — a stop at the top edge, at the bridge edge, on the floor by a
 side. So a bullet has a height, one model for the host
 (`TanksSim::process_hitscan`), the shot predictor (`ShotPredictor::cast_ray`)
-and the bots (`bots::controller`):
+and the bots (`bots::perception::fire_line`):
 
 - `bullet_line()` — the bullet flies at the shooter's gun height: in levels
   along the ray `h(t) = base + rate·t`, `base = z + barrelHeight /
@@ -1074,27 +1088,199 @@ A prop is a dynamic map body whose `game.prop` names a type from
   search, and to explosions; `step_dynamic_levels` and the body surfaces skip
   it. The bots' nav graph is static: a broken fence opens no route.
 
-### Bots on the levels (`core/src/bots/controller.rs`)
+### Bots on the levels (`core/src/bots/`)
 
 `BotView` — the bot's view of the world — carries the map's layered
 geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
 `tank_level()` / `tank_input_locked()`. From them the brain caches its own
 `my_level` every frame, next to `my_position`.
 
-- The path is a `Vec<PathPoint>` (the engine's point + level), built by
-  `find_path_on()`, so ramps and ledges are ordinary graph edges. On a
-  waypoint that changes the level the "reached it" threshold is doubled: on
-  a ramp the tank cannot stand exactly in the node of the level it is
-  driving to.
+- `bots/navigator.rs` — `Navigator` owns the route: the engine's
+  `find_route()` ([engine core.md][engine-map]) with the hull width, a
+  wall-clearance preference, the ledge price and the bot's own "stuck here"
+  penalty zones. A failed query falls back to no width limit, then to a goal
+  and a start snapped to the nearest walkable cell. Every query spends one
+  unit of a per-tick budget shared by all bots (`BotView::route_budget`).
+  The route is re-planned when the goal moves far or changes level, every
+  2 s for a moving target, when the bot leaves the route or the expected
+  level, and when it makes no progress for 1.5 s. Each leg keeps its kind
+  (`Walk`/`Ramp`/`Ledge`): a ramp top counts as reached within a tile, a
+  ledge once the bot has landed on its level; smoothing skips up to four
+  walk points through a hull-wide corridor but never a ramp, its foot or a
+  ledge.
+- `bots/steering.rs` — `decide_drive()` is a pure "which keys" function
+  (steering hysteresis, slowing before a turn, turning in place, reversing
+  to a close point behind); `probe_obstacles()` casts five rays of the
+  bot's own level (centre, front corners, diagonals) and returns the
+  corrected direction, "blocked ahead" and a prop in the way;
+  `StuckMonitor` fires when the throttle is held and the tank does not
+  move. The brain then runs an `UnstuckPhase` escalation (reverse and turn
+  → the same plus a penalty mark → shoot the prop or detour → drop the
+  goal), and a watchdog resets a bot that has not moved for 5 s. A ramp is
+  entered head-on: the bot lines up with the run at a point in front of
+  its foot before driving on it.
+- `bots/perception.rs` — what the bot knows. `Perception::update()` runs
+  once per 0.1 s decision tick and keeps a `Contact` per living enemy
+  (sorted by id): an enemy in sight (within `VIEW_RANGE` = 900 units, a
+  clear line on the bot's level or on the enemy's — the view down from a
+  bridge) is exact, with its speed, hull condition, `FireLine` and whether
+  its gun points at the bot; every other enemy is refreshed only on a radar
+  tick (`radarInterval` · 0.8–1.2) at its true position plus `radarNoise`
+  on each axis, with zero speed. A dead enemy's contact is dropped at once.
+  The same pass tracks damage: `damage_recent` (decays with a 3 s time
+  constant), `last_damage_at` and `last_attacker` (the nearest visible enemy
+  aiming at the bot, else the nearest visible, else the nearest). The RNG
+  is drawn only on a radar tick, contact by contact in id order.
+- `FireLine` — what stands in the line of fire: `OutOfRange` (farther than
+  the `w1` range), `Wall`, `OutOfReach` and `Embankment` (the level rules
+  above), and for a target on the bot's own level a physical ray from the
+  muzzle with the hitscan's filter: `Ally(id)` (a teammate first), `Prop`
+  (a crate, barrel or fence first), `Wall` (map statics) or `Clear` (the
+  target or another enemy first). The bot fires only on `Clear`.
+- `bots/team.rs` — `TeamBoard`, what a team knows on this AI tick. A
+  derived structure: it is not in the dump, `TanksSim::rebuild_team_boards`
+  rebuilds it every 0.1 s (before the bots' loop in `on_ai_tick`) and a
+  bot gets its own team's board as `BotView::team`. Per team (by
+  `team_id`): `members` — living tanks with a body, humans too, by id, with
+  `strength` from the hull condition (3/2/1 → 1/0.6/0.3) and a bot's mode
+  and target; `centroid`; `sightings` — enemies seen by the team's bots and
+  how many see each; `focus` — the living enemy with the best
+  `Σ 1/(1 + d/300) + 0.5 · seers + 0.3 · (3 − condition)` (ties go to the
+  lower id), kept unless it died, or it has been held 3 s and the new one
+  is at least 1.3 times better; `roles` — every 2 s: health below 50 →
+  `Support`, with three bots or more the most aggressive of the rest →
+  `Flanker` (ties go to the lower id), others `Assault`. Debug:
+  `TanksSim::team_focus()`/`team_role()`.
+- `bots/brain.rs` — the `BotMode` state machine, switched on the decision
+  tick. All transitions live in the pure `next_mode(&ModeInputs)`; rules in
+  priority order, the first that fires wins, and a mode is held at least
+  0.5 s for every rule except 1, 2 and 4:
+
+  | # | Condition | To |
+  | --- | --- | --- |
+  | 1 | no body or the tank is dead | `Dead` (keys released, route dropped) |
+  | 2 | `Dead` and alive | `Roam` (spawn point kept as `home`, all contacts unseen) |
+  | 3 | no contacts | `Roam` |
+  | 4 | `Hunt`/`Engage`/`Regroup` and (health ≤ `retreatHealth` (× 0.6 with `aggression` > 0.8) and (wounded within 4 s or a visible enemy within 450)) or (advantage < `retreatAdvantage` and health < 70) or nothing to fight with | `Retreat` |
+  | 5 | `Retreat` and (within 1.5 tiles of the point or (no visible threat for 2 s and a teammate within 250)) | `Hold` |
+  | 6 | `Hold`, health < 20, a visible enemy within 450, held over 1 s | `Retreat` (to another point) |
+  | 7 | `Hold` and a visible enemy closer than `preferredRange[0]`, health > the retreat threshold | `Engage` |
+  | 8 | `Hold` and ((the hold is over and advantage ≥ 1) or two teammates within 300 in `Hunt`/`Engage`) | `Hunt` |
+  | 9 | `Hunt` and ran ahead alone | `Regroup` |
+  | 10 | `Regroup` and within 180 of the team centre or over 4 s | `Hunt` |
+  | 11 | `Hunt`/`Regroup`, the target visible, `FireLine::Clear`, within `preferredRange[1]` · 1.3 | `Engage` |
+  | 12 | `Engage` and the target unseen for over 1 s or the line not clear for over 1.5 s | `Hunt` |
+  | 13 | `Roam` with contacts | `Hunt` |
+
+  Advantage: own health / 100 plus teammates' `strength` within 350, over
+  the `strength` of contacts within 350 that are visible or refreshed by
+  the radar under 2 s ago (10 with none). "Ran ahead alone": not a
+  `Flanker`, two members or more, advantage < 1 and the target 350 closer
+  to the bot than to the team centre. "Nothing to fight with": no `w1` ammo
+  and no bomb or no visible enemy within its radius. On top of the table,
+  fresh damage from a visible attacker in `Roam`/`Hunt`/`Regroup` switches
+  to `Engage` at once and flips the weaving side.
+
+  `Roam` drives to random walkable points; `Hunt` follows the route to the
+  target's contact (for an unseen one — its radar position) with the
+  turret turned towards it, now and then pausing (`hesitation`), and fires
+  on the move at a visible target with a clear line; `Engage` closes in
+  beyond `preferredRange[1]`, backs off in reverse closer than
+  `preferredRange[0]` (with `aggression` > 0.7 it closes in instead) and
+  weaves in between: a point 3–6 tiles away at `π/2 − 0.5` (≈ 61°) to the
+  line to the target, so the target stays within the turret arc. The
+  weaving side flips every 1.5–3 s, when blocked ahead and (not on `easy`)
+  with a 0.5 chance when the target starts aiming at the bot; `Ally`/`Prop`
+  in the line of fire picks a new point at once (away from the ally). A
+  point must be walkable on the bot's level, fit the hull and have no wall
+  on the way; a point past a ledge with a walkable level below it is
+  accepted with the `edgeRisk` chance — the bot drives off the edge.
+  `aim.hull_request` has priority: the hull turns in place until the target
+  is within `maxGunAngle − 0.3`. After a bomb the bot drives for 1 s away
+  from it (reverse allowed). The target is re-chosen every
+  0.3 s, at once when it dies or on new damage: the score is the route
+  cost (cached for the three nearest enemies, 2 s, one unit of the route
+  budget per query; the straight distance · 1.3 otherwise) times 1.25 for
+  another level, 0.6 for a visible clear target (0.85 visible but not
+  clear), 0.5 for a threat, 0.8/0.9 for a damaged hull and 0.8 for the
+  current target; a target is held at least 1.5 s unless the new one has
+  just wounded the bot, and ties go to the lower id; the team focus scores
+  · 0.75. In `Hunt` a `Flanker` farther than `1.3 · preferredRange[1]`
+  from the target adds a penalty zone (centre — the middle of the team
+  centre → focus segment, radius 0.35 of its length, 3 per unit) to its
+  route, and a `Support` drives to a point 200 units behind the nearest
+  `Assault` teammate on the line to the target. In `Engage` the weaving
+  side leads away from a teammate within 120.
+- `Retreat`: the point is picked on entry and every 1 s. Threats — visible
+  contacts within 600 plus `last_attacker`. Candidates (up to 12): behind
+  the nearest teammate farther from the threats than the bot; `home`; with
+  the bot above level 0 and health above the one-level fall cost + 10, up
+  to two cells within 5 tiles with no floor on its level and walkable
+  ground below; cover — 8 directions × 5 and 8 tiles, snapped to a
+  hull-wide cell, kept only if every threat's line to it is blocked on the
+  threat's and on the bot's level. Points within 1.5 tiles of the bot (or
+  of the point excluded by rule 6) are dropped. The 4 best by
+  `d(bot, p) − 1.5 · min d(threat, p)` are costed by `find_route` with
+  threat penalty zones (radius 220, 4 per unit) and a ledge price of 0.3
+  (one route budget unit each; without budget the heuristic stands in),
+  `− 200` per teammate within 250 of the point, `+ 300` if a threat sees
+  it. Fallback: `home`, then 6 tiles away from the nearest threat. The
+  route avoids the threat zones; with a visible threat more than 2 rad off
+  the retreat direction the bot reverses up to 8 tiles, facing it. The
+  turret holds the nearest visible threat and fires back with the aim error
+  × 1.3; a bomb goes to an enemy behind (by the direction of motion) within
+  60 units that is closing in.
+- `Hold`: on entry the hold lasts `U(4, 8) · (1.5 − aggression)` s. No
+  throttle; the hull turns in place to keep the threat (`last_attacker`,
+  else the nearest contact) within `maxGunAngle − 0.3`, the turret points
+  at it in advance (a pre-aimed reaction is × 0.6); every 2–3 s it may
+  shift a tile across the line to the threat if that spot is walkable,
+  fits the hull and is hidden too. The watchdog counts `Hold` as an
+  intentional stop.
+- `Regroup`: the route goes to the team centre snapped to a walkable cell
+  on the level of the member nearest to it; firing at a visible target is
+  allowed.
 - A falling bot is skipped at the top of `update()`: keys released, the
-  stuck timer zeroed — otherwise the 0.35 s of locked input would throw it
-  into `ClearingObstacle` on flat ground.
+  stuck detector reset — the locked input is not mistaken for being stuck.
 - The shot check runs `ray_segments()` with the bot's own bullet: a bot
   holds fire unless the floor under the bullet at the target's distance is
   one of the levels the target touches (both neighbours for a tank on a
   ramp) and the target reaches the bullet (`tank_reaches`), and keeps
   driving to it instead.
-- The line of sight, the strafe point after a shot and the obstacle
+- `bots/aim.rs` — `Aim`, the human-like aim. On a new target, or on a
+  target seen again after over 1 s unseen, `retarget()` rolls the reaction
+  (`reactionTime` · 0.8–1.3, · 0.6 if the gun was within 0.3 rad of it),
+  the initial error `error0 = ±aimError · (1 + 0.5 · min(1, v⊥/150))`, the
+  tremor phase and frequency (1.5–3 Hz) and the burst size. The error each
+  tick is
+
+  ```
+  settle   = error0 · exp(−(t − acquired_at) / aimSettleTime)
+  tremor   = aimTremor · sin(phase + t · freq)
+  motion   = 0.15 · aimError · min(1, |forward speed| / maxForwardSpeed)
+  tracking = 0.1 · |target angular speed around the bot|
+  error    = settle + tremor + recoil + sign(settle) · (motion + tracking)
+  ```
+
+  `recoil` gets `±(0.3–1.0) · 0.5 · aimError` per shot and decays with a
+  0.3 s time constant. The turret aims at the true position of a visible
+  target plus the error (an unseen one — its contact, "holding the
+  angle"); the needed angle from the hull is clamped to `maxGunAngle`, and
+  beyond `maxGunAngle − 0.1` `hull_request` asks the hull to turn. Turret
+  keys stay released until the reaction is over and within a 0.03 rad
+  deadband. A shot needs the reaction and the burst pause over,
+  `FireLine::Clear`, `w1` in hand with ammo and the barrel within
+  `max(0.01, atan(target half-length / d) · fireTolerance)` of the true
+  target; then the next shot comes after `shotInterval` · 0.9–1.2 inside a
+  burst, or after a `burstPause` roll. One blind shot per disappearance
+  (the `panicFire` roll) goes at a target lost from sight under 0.4 s ago
+  behind a `Wall`, if the barrel is within twice the tolerance. The bomb
+  (`w2`: `radius` and `damage` from the weapon config) is dropped when a
+  visible enemy on the bot's level is closer than `0.8 · radius`, there is
+  bomb ammo, the previous bomb's evade is over and `friendlyFire` is off
+  (on: `aggression` > 0.8 and health > `damage` + 10). Weapons are switched
+  with `nextWeapon`, at most one press per 0.15 s.
+- The line of sight, the weaving point and the obstacle
   avoidance rays all run on the bot's own level
   (`has_obstacle_between_on`, `is_walkable_on`,
   `level_interaction(my_level)`); a flat map sets no group filter at all.
@@ -1105,9 +1291,11 @@ Levels moved the dump the same way: `LevelState` gained `prev_cell` and
 `Airborne { vz, from, to, peak }`), and `LevelState` itself gained
 `clear_walls`.
 
-`BotBrain` is `Serialize`/`Deserialize` (the handoff dump), so the path
-type change moved the dump's shape — the dump is internal and unversioned,
-and an old one no longer restores.
+`BotBrain` is `Serialize`/`Deserialize` (the handoff dump). The navigator,
+the stuck detector, the manoeuvre, the mode, the perception, the aim and
+the combat manoeuvre ride in it
+as `#[serde(default)]` fields, so a dump without them still restores (the
+bot re-plans on its next tick); the old `state` field is ignored.
 
 [engine-map]: https://github.com/lgick/vimp-engine/blob/main/docs/en/core.md
 

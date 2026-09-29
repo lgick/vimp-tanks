@@ -278,6 +278,11 @@ impl Tank {
         self.barrel_height
     }
 
+    /// Половины корпуса: вдоль оси (длина) и поперёк (ширина), ед.
+    pub fn half_extents(&self) -> (f32, f32) {
+        (self.width / 2.0, self.height / 2.0)
+    }
+
     /// Верх танка для пули, мировые единицы (`ModelConfig::hit_top`).
     pub fn hit_top(&self) -> f32 {
         self.hit_top

@@ -183,6 +183,74 @@ export default {
         blast: { radius: 70, damage: 80, impulse: 2500000, cameraShake: { intensity: 30, duration: 400 } },
       },
     },
+    // боты: пресет сложности + разброс «характера» между ботами. Числа —
+    // стартовые, подбираются руками (docs/*/configuration.md → Bots)
+    bots: {
+      skill: 'normal', // 'easy' | 'normal' | 'hard'
+      variance: 0.3, // 0 — все боты одинаковые, 1 — ±50 % от пресета
+      presets: {
+        easy: {
+          reactionTime: 0.55, // реакция на новую цель, с
+          aimError: 0.3, // начальная ошибка прицела, рад
+          aimSettleTime: 1.1, // за сколько ошибка прицела сходит на нет, с
+          aimTremor: 0.05, // дрожание прицела, рад
+          fireTolerance: 1.8, // множитель допуска «ствол в цели»
+          burstShots: [1, 2], // выстрелов в очереди [min, max]
+          burstPause: [0.9, 1.6], // пауза между очередями [min, max], с
+          shotInterval: 0.4, // интервал выстрелов в очереди, с
+          radarInterval: 2.0, // как часто «смотрит на радар», с
+          radarNoise: 40, // шум позиции врага с радара, ед.
+          preferredRange: [140, 340], // дистанция боя [min, max], ед.
+          aggression: 0.35, // агрессивность, 0..1
+          retreatHealth: 45, // порог HP для отступления
+          retreatAdvantage: 0.6, // отношение сил, ниже которого отступает
+          steerNoise: 0.1, // шум руления, рад
+          edgeRisk: 0.25, // вероятность сорваться с края в бою
+          hesitation: 0.08, // частота замешательства, 1/с
+          panicFire: 0.3, // вероятность выстрела наугад под давлением
+        },
+        normal: {
+          reactionTime: 0.35,
+          aimError: 0.18,
+          aimSettleTime: 0.7,
+          aimTremor: 0.03,
+          fireTolerance: 1.25,
+          burstShots: [1, 3],
+          burstPause: [0.55, 1.1],
+          shotInterval: 0.3,
+          radarInterval: 1.4,
+          radarNoise: 25,
+          preferredRange: [170, 420],
+          aggression: 0.5,
+          retreatHealth: 35,
+          retreatAdvantage: 0.5,
+          steerNoise: 0.05,
+          edgeRisk: 0.12,
+          hesitation: 0.04,
+          panicFire: 0.15,
+        },
+        hard: {
+          reactionTime: 0.2,
+          aimError: 0.09,
+          aimSettleTime: 0.4,
+          aimTremor: 0.012,
+          fireTolerance: 0.9,
+          burstShots: [2, 3],
+          burstPause: [0.35, 0.7],
+          shotInterval: 0.22,
+          radarInterval: 0.9,
+          radarNoise: 12,
+          preferredRange: [200, 480],
+          aggression: 0.65,
+          retreatHealth: 25,
+          retreatAdvantage: 0.4,
+          steerNoise: 0.02,
+          edgeRisk: 0.04,
+          hesitation: 0.01,
+          panicFire: 0.05,
+        },
+      },
+    },
   },
 
   // рамки настроек комнаты в лобби (GameManifest.roomDefaults)

@@ -67,6 +67,60 @@ describe('gameConfig.coreParams.levels (2.5D)', () => {
   });
 });
 
+describe('gameConfig.coreParams.bots', () => {
+  const { bots } = gameConfig.coreParams;
+  const skills = ['easy', 'normal', 'hard'];
+  const presets = skills.map(skill => bots.presets[skill]);
+
+  it('выбирает известный пресет из трёх', () => {
+    expect(skills).toContain(bots.skill);
+    expect(Object.keys(bots.presets).sort()).toEqual([...skills].sort());
+  });
+
+  it('у всех пресетов одинаковый набор ключей', () => {
+    const keys = Object.keys(bots.presets.normal).sort();
+
+    for (const preset of presets) {
+      expect(Object.keys(preset).sort()).toEqual(keys);
+    }
+  });
+
+  it('держит диапазоны и вероятности в допустимых границах', () => {
+    expect(bots.variance).toBeGreaterThanOrEqual(0);
+    expect(bots.variance).toBeLessThanOrEqual(1);
+
+    for (const preset of presets) {
+      for (const key of ['burstPause', 'preferredRange']) {
+        const [min, max] = preset[key];
+
+        expect(min).toBeGreaterThanOrEqual(0);
+        expect(min).toBeLessThanOrEqual(max);
+      }
+
+      const [minShots, maxShots] = preset.burstShots;
+
+      expect(Number.isInteger(minShots)).toBe(true);
+      expect(Number.isInteger(maxShots)).toBe(true);
+      expect(minShots).toBeGreaterThanOrEqual(1);
+      expect(minShots).toBeLessThanOrEqual(maxShots);
+
+      for (const key of ['edgeRisk', 'panicFire', 'aggression']) {
+        expect(preset[key]).toBeGreaterThanOrEqual(0);
+        expect(preset[key]).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('сложность монотонна: hard реагирует и целится лучше normal, normal — лучше easy', () => {
+    const { easy, normal, hard } = bots.presets;
+
+    for (const key of ['reactionTime', 'aimError']) {
+      expect(hard[key]).toBeLessThan(normal[key]);
+      expect(normal[key]).toBeLessThan(easy[key]);
+    }
+  });
+});
+
 // Правила карт живут в движке (контрактный чекер, `npx vimp-contract`), и
 // ровно они же — в ядре (`MapConfig::validate`). Гонять их здесь, а не
 // повторять руками: ручная копия проверяет меньше и расходится молча.

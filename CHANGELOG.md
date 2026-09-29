@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `coreParams.bots`: bot skill presets (`easy`/`normal`/`hard`) and a per-bot
+  variance of reaction, aim, aggression and retreat thresholds.
+- Bots play as a team: they know where their teammates (humans included) are,
+  focus the same enemy, one of three flanks, the wounded hang back, and a bot
+  that has run ahead waits for the team.
+- Bots retreat when badly damaged, outnumbered or out of ammo — to teammates,
+  into cover or down from a bridge — backing away while firing back, then hold
+  the position until the team pushes again.
+
+### Changed
+
+- Bots know where enemies are the way a player does from the radar — with a
+  delay and an error — instead of only seeing enemies within about 600 units;
+  they pick a target by route distance, visibility and threat.
+- Requires `vimp-engine-core` 0.23.0 (hull-aware bot routes); rebuilt against
+  `vimp-engine` 0.35.5.
+- Bots aim like a player: a reaction delay, an aim error that settles while
+  tracking, a tremor, a flinch after each shot, worse accuracy on the move;
+  they fire in bursts, keep their preferred range, weave within the turret's
+  arc and back off from an enemy that is too close.
+
+### Fixed
+
+- Bots no longer drive straight at an enemy behind a wall or under a bridge:
+  chasing, searching and patrolling follow a route that fits the hull, over
+  ramps (entered head-on) and ledges.
+- A bot stuck against a wall backs off, turns and re-plans (shooting a fence or
+  crate in its way) instead of freezing; a watchdog re-plans a bot that has not
+  moved for 5 s.
+- The turret of a bot no longer keeps spinning after its target goes out of
+  sight.
+- Bots no longer fire into a teammate or a crate standing in the line of fire.
+- Bots drop a bomb only when the enemy is inside its blast radius and drive
+  away from it (before, they dropped it at up to 100 units, where it could not
+  reach).
+- Restoring a state dump (Worker handoff) on a layered map no longer
+  re-levels every tank by geometry: a tank flying off a ramp or standing under
+  a bridge keeps its level, and the simulation continues exactly as before the
+  dump.
+
 ## [0.22.12] - 2026-09-29
 
 ### Fixed
