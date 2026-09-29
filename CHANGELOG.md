@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.13] - 2026-09-29
+
 ### Added
 
 - `coreParams.bots`: bot skill presets (`easy`/`normal`/`hard`) and a per-bot
