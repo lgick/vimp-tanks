@@ -1,9 +1,10 @@
 import { Container, Sprite, Ticker } from 'pixi.js';
 import { lerp, clamp, randomRange } from 'vimp-engine/lib/math.js';
 import ParticleChannel from './ParticleChannel.js';
+import WreckScorch from './WreckScorch.js';
 import { levelZ, renderLevel } from '../levelZ.js';
 import { cameraCenter } from '../camera.js';
-import { applyParallax, offsetPoint, reproject } from '../parallax.js';
+import { applyParallax, reproject } from '../parallax.js';
 import { flicker, lightLevels } from '../lighting/lightMath.js';
 import { colorRamp, lerpColor } from '../colorRamp.js';
 import {
@@ -25,20 +26,63 @@ import {
   M1_SIZE,
   M1_Z,
   M1_LEVEL,
+  M1_VZ,
 } from '../snapshotFields.js';
 
 // как дым (Smoke): над корпусом (3), под перекрывателем объёма (5)
 const WRECK_FIRE_BASE_Z = 4;
-// как воронка (FunnelEffect): над следами (1), под танком (3)
-const SCORCH_BASE_Z = 2;
 // отступ boundsArea вокруг эмиттера — как у Smoke
 const BOUNDS_PADDING = 400;
 // потолок шага симуляции: после сна вкладки не рождается тысяча частиц
 const MAX_TICK_MS = 100;
 const TAU = Math.PI * 2;
+// разброс формы клуба: растяжение по осям (доли) и скорость вращения, рад/с
+const FIRE_ASPECT = { min: 0.8, max: 1.2 };
+const FIRE_SPIN = 1;
+const SMOKE_ASPECT = { min: 0.7, max: 1.3 };
+const SMOKE_SPIN = 0.3;
+// стихающий пожар мельчит языки: размер на нулевой силе — доля полного
+const FLAME_MIN_SCALE = 0.6;
+// языки сносит ветром вполсилы: живут меньше секунды
+const FLAME_WIND_SHARE = 0.5;
+// огненный шар рождается у центра корпуса с этим разбросом (доли корпуса)
+const FIREBALL_SPREAD = 0.8;
+const CENTER = [[0, 0]];
+// клубы облака взрыва живут короче и крупнее обычных
+const BURST_LIFE_SCALE = 0.8;
+const BURST_SIZE_SCALE = 1.3;
+// искра к концу жизни укорачивается на эту долю
+const SPARK_SHRINK = 0.5;
 
 // случайное значение из диапазона конфига `{ min, max }`
 const pick = range => randomRange(range.min, range.max);
+
+// состояние частицы: у всех видов один набор полей — одна форма объекта
+// для JIT; поля, которых у вида нет, нейтральные
+const particleSim = fields => ({
+  kind: 'flame',
+  x: 0,
+  y: 0,
+  vx: 0,
+  vy: 0,
+  windX: 0,
+  windY: 0,
+  drag: 0,
+  h: 0,
+  rise: 0,
+  age: 0,
+  life: 1,
+  size0: 0,
+  width: 0,
+  grow: 1,
+  aspectX: 1,
+  aspectY: 1,
+  spin: 0,
+  alpha: 1,
+  scaleX: 0,
+  scaleY: 0,
+  ...fields,
+});
 
 // Гибель танка: взрыв, пожар и дым над остовом (конфиг — `wreckFx` в
 // src/config/render.js). Парт сам ловит переход `condition: >0 → 0` в ряду
@@ -82,7 +126,10 @@ export default class WreckFire extends Container {
     this._tickListener = null;
     this._light = null;
     this._soundId = null;
+    // копоть (`_addScorch`) — WreckScorch
     this._scorch = null;
+    // копоть ждёт приземления остова (погиб в полёте)
+    this._scorchPending = false;
 
     // каналы и спрайты заводятся лениво при первой гибели (`_ensureViews`)
     this._fire = null;
@@ -95,7 +142,7 @@ export default class WreckFire extends Container {
     // Первый ряд уже с condition 0 — танк погиб до нас, взрыва нет
   }
 
-  // x, y, курс, высота, уровень и размер из ряда m1. Курс и масштаб
+  // x, y, курс, высота, уровень, полёт и размер из ряда m1. Курс и масштаб
   // размера — `_heading`/`_sizeScale`: `_rotation` и `_scale` — внутренние
   // поля Container, их перезапись ломает трансформ
   _readRow(data) {
@@ -104,6 +151,8 @@ export default class WreckFire extends Container {
     this._heading = data[M1_ANGLE];
     this._z = data[M1_Z] || 0;
     this._physLevel = data[M1_LEVEL] || 0;
+    // полёт: 0 на земле и на склоне рампы (как Tank/Dust)
+    this._vz = data[M1_VZ] || 0;
     this._level = renderLevel(data[M1_LEVEL], this._z);
 
     const size = data[M1_SIZE] || wreckFx.referenceSize;
@@ -132,18 +181,22 @@ export default class WreckFire extends Container {
     const condition = data[M1_CONDITION];
 
     // короткий ряд без condition состояние не меняет (как в Tank.update)
-    if (condition === undefined || condition === prev) {
-      return;
+    if (condition !== undefined && condition !== prev) {
+      this._condition = condition;
+
+      if (condition === 0 && prev > 0) {
+        // погиб на глазах
+        this._ignite();
+      } else if (condition > 0 && prev === 0) {
+        // респаун: новый раунд восстанавливает карту — гасим сразу
+        this._reset();
+      }
     }
 
-    this._condition = condition;
-
-    if (condition === 0 && prev > 0) {
-      // погиб на глазах
-      this._ignite();
-    } else if (condition > 0 && prev === 0) {
-      // респаун: новый раунд восстанавливает карту — гасим сразу
-      this._reset();
+    // погиб в полёте: копоть — в первом ряду на земле. После condition:
+    // ряд респауна уже снял ожидание (`_reset`), живой танк копоть не кладёт
+    if (this._scorchPending && this._vz === 0) {
+      this._addScorch();
     }
   }
 
@@ -238,7 +291,7 @@ export default class WreckFire extends Container {
     }
 
     for (let i = 0; i < wreckFx.smoke.burst.count; i += 1) {
-      this._spawnSmoke(1, true);
+      this._spawnBurstSmoke();
     }
   }
 
@@ -285,8 +338,8 @@ export default class WreckFire extends Container {
     });
   }
 
-  // копоть — сиблинг на сцене в точке гибели: не едет за остовом, если его
-  // потом столкнут
+  // копоть — сиблинг на сцене в точке гибели (погиб в полёте — в точке
+  // приземления): не едет за остовом, если его потом столкнут
   _addScorch() {
     const asset = this._scorchAsset;
 
@@ -294,29 +347,21 @@ export default class WreckFire extends Container {
       return;
     }
 
-    const { textures } = asset;
-    const sprite = new Sprite(
-      textures[Math.floor(Math.random() * textures.length)],
-    );
+    // в полёте земли под остовом ещё нет: копоть ляжет там, где он
+    // приземлится (update), а не повиснет в воздухе на высоте гибели
+    if (this._vz !== 0) {
+      this._scorchPending = true;
+      return;
+    }
 
-    sprite.anchor.set(0.5);
-    sprite.rotation = Math.random() * TAU;
-    sprite.alpha = 0;
-    sprite.zIndex = levelZ(SCORCH_BASE_Z, this._level);
-
-    this._scorch = sprite;
-    this._scorchX = this._x;
-    this._scorchY = this._y;
-    this._scorchZ = this._z;
-    this._scorchLevel = this._level;
-    this._scorchScale =
-      (wreckFx.scorch.size * this._sizeScale) / asset.contentSize;
-    this._scorchAge = 0;
-    this._scorchAlpha = 0;
-
-    // сиблинг добавлен мимо GameView.add (как ExplosionEffectController.run)
-    this.parent.addChild(sprite);
-    this.parent.sortChildren();
+    this._scorchPending = false;
+    this._scorch = new WreckScorch(this.parent, asset, {
+      x: this._x,
+      y: this._y,
+      z: this._z,
+      level: this._level,
+      sizeScale: this._sizeScale,
+    });
   }
 
   // точка на корпусе: `points` — доли [вдоль курса, поперёк], `spread` — разброс
@@ -334,36 +379,34 @@ export default class WreckFire extends Container {
   _spawnFlame(intensity) {
     const { fire, wind } = wreckFx;
     const point = this._hullPoint(fire.points, fire.spread);
-    const p = this._fire.spawn({
-      kind: 'flame',
-      x: point.x,
-      y: point.y,
-      vx:
-        wind.x * 0.5 + randomRange(-fire.jitter, fire.jitter) * this._sizeScale,
-      vy:
-        wind.y * 0.5 + randomRange(-fire.jitter, fire.jitter) * this._sizeScale,
-      windX: wind.x,
-      windY: wind.y,
-      // живёт полсекунды — сопротивление не нужно
-      drag: 0,
-      h: 0,
-      rise: fire.rise,
-      age: 0,
-      life: pick(fire.lifetime),
-      size0:
-        pick(fire.size) *
-        this._sizeScale *
-        (0.6 + 0.4 * intensity) *
-        this._fireUnit,
-      grow: fire.grow,
-      aspectX: randomRange(0.8, 1.2),
-      aspectY: randomRange(0.8, 1.2),
-      spin: randomRange(-1, 1),
-      alpha: fire.alpha,
-      tint: 0xffffff,
-      scaleX: 0,
-      scaleY: 0,
-    });
+    // живёт полсекунды — сопротивление не нужно (drag нейтральный)
+    const p = this._fire.spawn(
+      particleSim({
+        kind: 'flame',
+        x: point.x,
+        y: point.y,
+        vx:
+          wind.x * FLAME_WIND_SHARE +
+          randomRange(-fire.jitter, fire.jitter) * this._sizeScale,
+        vy:
+          wind.y * FLAME_WIND_SHARE +
+          randomRange(-fire.jitter, fire.jitter) * this._sizeScale,
+        windX: wind.x,
+        windY: wind.y,
+        rise: fire.rise,
+        life: pick(fire.lifetime),
+        size0:
+          pick(fire.size) *
+          this._sizeScale *
+          lerp(FLAME_MIN_SCALE, 1, intensity) *
+          this._fireUnit,
+        grow: fire.grow,
+        aspectX: pick(FIRE_ASPECT),
+        aspectY: pick(FIRE_ASPECT),
+        spin: randomRange(-FIRE_SPIN, FIRE_SPIN),
+        alpha: fire.alpha,
+      }),
+    );
 
     if (p) {
       p.view.rotation = Math.random() * TAU;
@@ -374,32 +417,29 @@ export default class WreckFire extends Container {
   // горящие клубы разлетаются из корпуса и тормозят
   _spawnFireball() {
     const { fireball, wind } = wreckFx;
-    const point = this._hullPoint([[0, 0]], 0.8);
+    const point = this._hullPoint(CENTER, FIREBALL_SPREAD);
     const angle = Math.random() * TAU;
     const speed = pick(fireball.speed) * this._sizeScale;
-    const p = this._fire.spawn({
-      kind: 'fireball',
-      x: point.x,
-      y: point.y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      windX: wind.x,
-      windY: wind.y,
-      drag: fireball.drag,
-      h: 0,
-      rise: fireball.rise,
-      age: 0,
-      life: pick(fireball.lifetime),
-      size0: pick(fireball.size) * this._sizeScale * this._fireUnit,
-      grow: fireball.grow,
-      aspectX: randomRange(0.8, 1.2),
-      aspectY: randomRange(0.8, 1.2),
-      spin: randomRange(-1, 1),
-      alpha: fireball.alpha,
-      tint: 0xffffff,
-      scaleX: 0,
-      scaleY: 0,
-    });
+    const p = this._fire.spawn(
+      particleSim({
+        kind: 'fireball',
+        x: point.x,
+        y: point.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        windX: wind.x,
+        windY: wind.y,
+        drag: fireball.drag,
+        rise: fireball.rise,
+        life: pick(fireball.lifetime),
+        size0: pick(fireball.size) * this._sizeScale * this._fireUnit,
+        grow: fireball.grow,
+        aspectX: pick(FIRE_ASPECT),
+        aspectY: pick(FIRE_ASPECT),
+        spin: randomRange(-FIRE_SPIN, FIRE_SPIN),
+        alpha: fireball.alpha,
+      }),
+    );
 
     if (p) {
       p.view.rotation = Math.random() * TAU;
@@ -412,31 +452,20 @@ export default class WreckFire extends Container {
     const { sparks } = wreckFx;
     const angle = Math.random() * TAU;
     const speed = pick(sparks.speed) * this._sizeScale;
-    const p = this._fire.spawn({
-      kind: 'spark',
-      x: this._x,
-      y: this._y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      windX: 0,
-      windY: 0,
-      drag: sparks.drag,
-      h: 0,
-      rise: 0,
-      age: 0,
-      life: pick(sparks.lifetime),
-      // длина штриха; ширина — отдельно
-      size0: sparks.length * this._sizeScale * this._fireUnit,
-      width: sparks.width * this._sizeScale * this._fireUnit,
-      grow: 1,
-      aspectX: 1,
-      aspectY: 1,
-      spin: 0,
-      alpha: 1,
-      tint: 0xffffff,
-      scaleX: 0,
-      scaleY: 0,
-    });
+    const p = this._fire.spawn(
+      particleSim({
+        kind: 'spark',
+        x: this._x,
+        y: this._y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        drag: sparks.drag,
+        life: pick(sparks.lifetime),
+        // длина штриха; ширина — отдельно
+        size0: sparks.length * this._sizeScale * this._fireUnit,
+        width: sparks.width * this._sizeScale * this._fireUnit,
+      }),
+    );
 
     if (p) {
       p.view.rotation = angle;
@@ -444,49 +473,67 @@ export default class WreckFire extends Container {
     }
   }
 
-  // клуб дыма: `heat` 1 — чёрный густой (пожар), 0 — светлый редкий (после)
-  _spawnSmoke(heat, burst) {
+  // клуб дыма пожара: `heat` 1 — чёрный густой, 0 — светлый редкий (после)
+  _spawnSmoke(heat) {
+    const { smoke } = wreckFx;
+
+    this._emitSmoke({
+      heat,
+      speed: randomRange(0, smoke.speed),
+      lifeFactor: 1,
+      sizeFactor: 1,
+      alpha: lerp(smoke.tailAlpha, smoke.alpha, heat),
+    });
+  }
+
+  // клуб облака взрыва: быстрее, крупнее и короче обычного
+  _spawnBurstSmoke() {
+    const { smoke } = wreckFx;
+
+    this._emitSmoke({
+      heat: 1,
+      speed: pick(smoke.burst.speed),
+      lifeFactor: BURST_LIFE_SCALE,
+      sizeFactor: BURST_SIZE_SCALE,
+      alpha: smoke.burst.alpha,
+    });
+  }
+
+  // общий клуб дыма: `speed` — скорость из конфига (без масштаба корпуса),
+  // `lifeFactor`/`sizeFactor` — множители жизни и размера клуба (масштаб
+  // корпуса `_sizeScale` применяется отдельно)
+  _emitSmoke({ heat, speed, lifeFactor, sizeFactor, alpha }) {
     const { fire, smoke, wind } = wreckFx;
     const point = this._hullPoint(fire.points, fire.spread);
     const angle = Math.random() * TAU;
-    const speed =
-      (burst ? pick(smoke.burst.speed) : randomRange(0, smoke.speed)) *
-      this._sizeScale;
+    const scaledSpeed = speed * this._sizeScale;
     const r = Math.random();
     const tint = lerpColor(
       lerpColor(smoke.cooling[0], smoke.cooling[1], r),
       lerpColor(smoke.burning[0], smoke.burning[1], r),
       heat,
     );
-    const p = this._smoke.spawn({
-      kind: 'smoke',
-      x: point.x,
-      y: point.y,
-      vx: Math.cos(angle) * speed + wind.x,
-      vy: Math.sin(angle) * speed + wind.y,
-      windX: wind.x,
-      windY: wind.y,
-      drag: smoke.drag,
-      h: 0,
-      rise: smoke.rise,
-      age: 0,
-      life: pick(smoke.lifetime) * (burst ? 0.8 : 1),
-      size0:
-        pick(smoke.size) *
-        this._sizeScale *
-        (burst ? 1.3 : 1) *
-        this._smokeUnit,
-      grow: smoke.grow,
-      aspectX: randomRange(0.7, 1.3),
-      aspectY: randomRange(0.7, 1.3),
-      spin: randomRange(-0.3, 0.3),
-      alpha: burst
-        ? smoke.burst.alpha
-        : lerp(smoke.tailAlpha, smoke.alpha, heat),
-      tint,
-      scaleX: 0,
-      scaleY: 0,
-    });
+    const p = this._smoke.spawn(
+      particleSim({
+        kind: 'smoke',
+        x: point.x,
+        y: point.y,
+        vx: Math.cos(angle) * scaledSpeed + wind.x,
+        vy: Math.sin(angle) * scaledSpeed + wind.y,
+        windX: wind.x,
+        windY: wind.y,
+        drag: smoke.drag,
+        rise: smoke.rise,
+        life: pick(smoke.lifetime) * lifeFactor,
+        size0:
+          pick(smoke.size) * this._sizeScale * sizeFactor * this._smokeUnit,
+        grow: smoke.grow,
+        aspectX: pick(SMOKE_ASPECT),
+        aspectY: pick(SMOKE_ASPECT),
+        spin: randomRange(-SMOKE_SPIN, SMOKE_SPIN),
+        alpha,
+      }),
+    );
 
     if (p) {
       p.view.tint = tint;
@@ -519,7 +566,7 @@ export default class WreckFire extends Container {
 
     while (this._smokeAcc >= 1) {
       this._smokeAcc -= 1;
-      this._spawnSmoke(intensity, false);
+      this._spawnSmoke(intensity);
     }
 
     this._stepChannel(this._fire, dt, p => this._applyFire(p, dt));
@@ -533,7 +580,8 @@ export default class WreckFire extends Container {
       this._elapsed >= emissionEnd(wreckFx.fire, wreckFx.smoke) &&
       this._fire.size === 0 &&
       this._smoke.size === 0 &&
-      !this._flash.visible
+      !this._flash.visible &&
+      this._scorchSettled()
     ) {
       this._finish();
     }
@@ -568,17 +616,6 @@ export default class WreckFire extends Container {
     return p.age / p.life;
   }
 
-  // непроецированный вид: проекцию наложит `_render`; без камеры (например,
-  // в тестах) вид остаётся мировым
-  _writeView(p) {
-    const view = p.view;
-
-    view.x = p.x;
-    view.y = p.y;
-    view.scaleX = p.scaleX;
-    view.scaleY = p.scaleY;
-  }
-
   // пламя, огненный шар, искры
   _applyFire(p, dt) {
     const sec = dt / 1000;
@@ -588,7 +625,7 @@ export default class WreckFire extends Container {
     if (p.kind === 'spark') {
       const { colors } = wreckFx.sparks;
 
-      p.scaleX = p.size0 * (1 - 0.5 * t);
+      p.scaleX = p.size0 * (1 - SPARK_SHRINK * t);
       p.scaleY = p.width;
       view.rotation = Math.atan2(p.vy, p.vx);
       view.tint = lerpColor(colors[0], colors[1], t);
@@ -604,8 +641,6 @@ export default class WreckFire extends Container {
       view.tint = colorRamp(wreckFx.fire.ramp, t);
       view.alpha = p.alpha * (1 - t * t);
     }
-
-    this._writeView(p);
   }
 
   _applySmoke(p, dt) {
@@ -619,8 +654,6 @@ export default class WreckFire extends Container {
     p.h = p.rise * (1 - (1 - t) * (1 - t));
     view.rotation += p.spin * sec;
     view.alpha = smokeAlpha(t, p.alpha);
-
-    this._writeView(p);
   }
 
   _stepFlash(dt) {
@@ -685,7 +718,9 @@ export default class WreckFire extends Container {
       y: this._y,
       z: this._z,
       level: this._level,
-      levels: lightLevels(this._physLevel, this._z, false),
+      // на рампе (vz 0) свет идёт в оба соседних уровня, в полёте — в
+      // уровень отрисовки
+      levels: lightLevels(this._physLevel, this._z, this._vz !== 0),
       intensity:
         config.intensity *
         intensity *
@@ -694,15 +729,13 @@ export default class WreckFire extends Container {
   }
 
   _stepScorch(dt) {
-    if (!this._scorch) {
-      return;
-    }
+    this._scorch?.step(dt);
+  }
 
-    const { alpha, fadeIn } = wreckFx.scorch;
-
-    this._scorchAge += dt;
-    this._scorchAlpha =
-      alpha * (fadeIn > 0 ? clamp(this._scorchAge / fadeIn, 0, 1) : 1);
+  // копоть легла и проявилась (или её не будет): после _finish тикер снят,
+  // и _stepScorch больше не зовётся
+  _scorchSettled() {
+    return !this._scorchPending && (!this._scorch || this._scorch.settled);
   }
 
   // Позиции пишутся здесь, а не в тикере: камера (трансформ сцены) к этому
@@ -714,7 +747,12 @@ export default class WreckFire extends Container {
 
     if (this._active) {
       // как Smoke: контейнер в проекции высоты остова, частицы в мировых
-      // координатах
+      // координатах.
+      //
+      // Известное упрощение: контейнер стоит в проекции ТЕКУЩЕЙ высоты
+      // остова, поэтому уже выпущенный столб дыма едет вместе с ним — если
+      // остов столкнут с моста, столб опустится на новый слой целиком.
+      // Остов меняет высоту редко, а дым тогда и так тонет под плитой
       const kHost = this._z * shear;
 
       applyParallax(this, camera, kHost, 1);
@@ -729,7 +767,8 @@ export default class WreckFire extends Container {
         this.tint = this._levelView.tintFor(this._level);
       }
 
-      // своя высота частицы: столб дыма клонится от центра камеры и растёт
+      // своя высота частицы: столб дыма клонится от центра камеры и растёт.
+      // Единственное место, где пишутся позиция и масштаб вида частицы
       for (const channel of [this._fire, this._smoke]) {
         for (const p of channel.items) {
           const q = reproject(p.x, p.y, camera, kHost, kHost + p.h * shear);
@@ -742,30 +781,8 @@ export default class WreckFire extends Container {
       }
     }
 
-    if (this._scorch) {
-      // копоть — сиблинг в точке гибели: своя проекция, как у воронки
-      // (ExplosionEffectController._applyHeight)
-      const k = this._scorchZ * shear;
-      const view = offsetPoint(this._scorchX, this._scorchY, camera, k);
-
-      this._scorch.position.set(view.x, view.y);
-      this._scorch.scale.set(this._scorchScale * (1 + k));
-
-      const see = this._levelView
-        ? this._levelView.alphaFor(
-            this._scorchLevel,
-            this._scorchX,
-            this._scorchY,
-            this._scorchZ,
-          )
-        : 1;
-
-      this._scorch.alpha = this._scorchAlpha * see;
-
-      if (this._levelView) {
-        this._scorch.tint = this._levelView.tintFor(this._scorchLevel);
-      }
-    }
+    // копоть — сиблинг в точке гибели со своей проекцией
+    this._scorch?.render(camera, this._levelView);
   }
 
   // дым прошёл: тикер снят; копоть продолжает проецироваться своим
@@ -802,12 +819,12 @@ export default class WreckFire extends Container {
       this._soundId = null;
     }
 
-    if (this._scorch) {
-      // в PixiJS 8 destroy снимает спрайт с родителя; текстура общая
-      this._scorch.destroy({ texture: false, textureSource: false });
-      this._scorch = null;
-    }
+    this._scorch?.destroy();
+    this._scorch = null;
 
+    // погибший в полёте и воскрешённый до приземления не кладёт копоть
+    // живым танком — ни в ряду респауна, ни при касании земли после него
+    this._scorchPending = false;
     this._active = false;
     this.visible = false;
     this.onRender = null;

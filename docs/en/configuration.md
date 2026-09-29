@@ -392,7 +392,7 @@ until round  the scorch on the ground
 | `fire` | Continuous flame tongues: `duration` (full strength), `fadeOut` (down to zero), `rate` (particles/s at full strength), `points` (fire points as `[along the heading, across]` shares of the hull — the engine bay and the turret ring), `spread` (scatter in the same shares), `size`, `grow`, `lifetime`, `jitter` (random side drift), `rise`, `alpha`, `ramp` (`[share of life, colour]` pairs from a near-white core through orange to dark red, shared with the fireball) |
 | `glow` | The fire's glow, one additive sprite over the wreck breathing with the flame: `size`, `alpha`, `color`, `flicker` |
 | `smoke` | Black and dense while burning, lighter and sparser after: `rate` (particles/s at full fire), `tailRate` (right after the fire, then down to 0), `tail` (how long it keeps smoking after the fire), `burst` (the explosion's cloud: `count`, `speed`, `alpha`), `size`, `grow`, `lifetime`, `speed` (initial scatter), `drag` (the velocity converges to the wind), `rise`, `alpha` / `tailAlpha` (peak opacity while burning / after), `burning` / `cooling` (colour ranges while burning / after) |
-| `scorch` | The mark on the ground at the point of death, lasting until the respawn: `enabled`, `size`, `alpha`, `fadeIn` |
+| `scorch` | The mark on the ground at the point of death (a tank killed in flight — where the wreck lands), lasting until the respawn: `enabled`, `size`, `alpha`, `fadeIn` |
 
 Particle budget per burning wreck: fire ≈ `36/s × ≤0.65 s ≈ 23` tongues plus
 14 fireball puffs and 12 sparks at once, within `maxFire = 64`; smoke

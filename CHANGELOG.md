@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A tank destroyed in mid-air (jumping off a ramp or falling off a bridge) no
+  longer leaves its scorch mark hanging in the air: the mark appears where the
+  wreck lands, and the fire's night glow no longer spills into two levels while
+  the wreck falls.
+
 ## [0.22.11] - 2026-09-28
 
 ### Added

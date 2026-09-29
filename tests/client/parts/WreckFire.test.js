@@ -2,8 +2,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { Container, Texture } from 'pixi.js';
 import WreckFire from '../../../src/client/parts/WreckFire.js';
 import { levelZ } from '../../../src/client/levelZ.js';
-import { fireEnd, emissionEnd } from '../../../src/client/wreckTimeline.js';
-import { parallax, wreckFx } from '../../../src/config/render.js';
+import {
+  fireEnd,
+  emissionEnd,
+  fireIntensity,
+} from '../../../src/client/wreckTimeline.js';
+import { lighting, parallax, wreckFx } from '../../../src/config/render.js';
 
 // Гибель танка: парт ловит переход condition >0 → 0 и ведёт взрыв, пожар
 // и дым до их конца; живой танк не стоит ни кадра
@@ -26,7 +30,8 @@ const row = ({
   z = 0,
   level = 0,
   size = 3,
-} = {}) => [x, y, 0, 0, 0, 0, 0, condition, size, 1, 0, z, level, 0, 0, 0];
+  vz = 0,
+} = {}) => [x, y, 0, 0, 0, 0, 0, condition, size, 1, 0, z, level, vz, 0, 0];
 
 const makeDeps = () => ({
   renderer: { screen: { width: 800, height: 600 } },
@@ -133,6 +138,43 @@ describe('WreckFire: взрыв', () => {
     expect(scorches).toHaveLength(1);
     expect(scorches[0].zIndex).toBe(levelZ(2, 0));
   });
+
+  it('размер корпуса масштабирует толчок, свет и копоть', () => {
+    // корпус вдвое больше опорного — масштаб 2
+    const { part, deps } = ignited({ size: wreckFx.referenceSize * 2 });
+
+    expect(deps.blasts.exploded).toHaveBeenCalledWith(
+      expect.objectContaining({ radius: wreckFx.joltRadius * 2 }),
+    );
+    expect(deps.lighting.addLight).toHaveBeenCalledWith(
+      expect.objectContaining({ radius: lighting.wreckFire.radius * 2 }),
+    );
+    expect(part._scorch.scale).toBeCloseTo(
+      (wreckFx.scorch.size * 2) / assets.wreckScorchTexture.contentSize,
+      6,
+    );
+  });
+
+  it('вспышка гаснет через flash.duration', () => {
+    const { part } = ignited();
+    const { duration } = wreckFx.flash;
+    // мелкими шагами: `_tick` режет шаг до MAX_TICK_MS
+    const advance = ms => {
+      for (let t = 0; t < ms; t += 10) {
+        part._tick(10);
+      }
+    };
+
+    expect(part._flash.visible).toBe(true);
+
+    advance(duration - 10);
+
+    expect(part._flash.visible).toBe(true);
+
+    advance(10);
+
+    expect(part._flash.visible).toBe(false);
+  });
 });
 
 describe('WreckFire: таймлайн', () => {
@@ -175,7 +217,7 @@ describe('WreckFire: таймлайн', () => {
   });
 
   it('без ассета копоти по окончании onRender снят', () => {
-    const { wreckScorchTexture, ...noScorch } = assets;
+    const noScorch = { ...assets, wreckScorchTexture: undefined };
     const { part } = ignited({}, makeDeps(), noScorch);
 
     run(
@@ -183,9 +225,53 @@ describe('WreckFire: таймлайн', () => {
       emissionEnd(wreckFx.fire, wreckFx.smoke) + wreckFx.smoke.lifetime.max,
     );
 
-    expect(wreckScorchTexture).toBeDefined();
     expect(part._active).toBe(false);
     expect(part._onRender).toBe(null);
+  });
+
+  it('свет пожара едет за остовом, сила в пределах мерцания', () => {
+    const { part, deps } = ignited();
+
+    part.update(row({ condition: 0, x: 150 }));
+    part._tick(100);
+
+    const { calls } = deps.lighting.updateLight.mock;
+    const [handle, patch] = calls[calls.length - 1];
+    const { intensity, flicker } = lighting.wreckFire;
+    // сила без мерцания через 100 мс после гибели
+    const steady = intensity * fireIntensity(100, wreckFx.fire);
+
+    expect(handle).toBe(part._light);
+    expect(patch).toMatchObject({
+      x: 150,
+      y: 100,
+      z: 0,
+      level: 0,
+      levels: [0],
+    });
+    expect(patch.intensity).toBeGreaterThanOrEqual(steady * (1 - flicker));
+    expect(patch.intensity).toBeLessThanOrEqual(steady);
+  });
+
+  it('копоть проявляется за fadeIn и видна через levelView', () => {
+    const deps = makeDeps();
+
+    deps.levelView.alphaFor = () => 0.5;
+
+    const { part } = ignited({}, deps);
+
+    expect(part._scorch.alpha).toBe(0);
+
+    run(part, wreckFx.scorch.fadeIn);
+
+    expect(part._scorch.alpha).toBeCloseTo(wreckFx.scorch.alpha, 6);
+
+    part.onRender();
+
+    expect(part._scorch.sprite.alpha).toBeCloseTo(
+      wreckFx.scorch.alpha * 0.5,
+      6,
+    );
   });
 
   it('потолки каналов не превышаются', () => {
@@ -260,6 +346,14 @@ describe('WreckFire: проекция 2.5D', () => {
     expect(part.scale.x).toBeCloseTo(1 + parallax.shear, 6);
   });
 
+  it('остов сменил уровень — эффект едет на его слой', () => {
+    const { part } = ignited();
+
+    part.update(row({ condition: 0, z: 1, level: 1 }));
+
+    expect(part.zIndex).toBe(levelZ(4, 1));
+  });
+
   it('эмиттер едет за остовом, копоть остаётся в точке гибели', () => {
     const { part } = ignited();
 
@@ -275,8 +369,86 @@ describe('WreckFire: проекция 2.5D', () => {
       expect(Math.abs(p.x - 300)).toBeLessThanOrEqual(part._length);
     }
 
-    expect(part._scorchX).toBe(100);
-    expect(part._scorch.position.x).toBeCloseTo(100, 6);
+    expect(part._scorch.x).toBe(100);
+    expect(part._scorch.sprite.position.x).toBeCloseTo(100, 6);
+  });
+});
+
+// прыжок с рампы или срыв с моста: в ряду vz ≠ 0, земли под остовом нет
+describe('WreckFire: гибель в полёте', () => {
+  it('копоть ждёт приземления и ложится в точке касания', () => {
+    const { part, stage } = ignited({ z: 0.6, vz: -2 });
+
+    expect(scorchesOf(stage, part)).toHaveLength(0);
+    expect(part._scorchPending).toBe(true);
+
+    part.update(row({ condition: 0, x: 130, z: 0, vz: 0 }));
+
+    const scorches = scorchesOf(stage, part);
+
+    expect(scorches).toHaveLength(1);
+    expect(part._scorchPending).toBe(false);
+    expect(part._scorch.x).toBe(130);
+    expect(part._scorch.z).toBe(0);
+    expect(scorches[0].zIndex).toBe(levelZ(2, 0));
+  });
+
+  it('тикер ждёт копоть', () => {
+    const { part } = ignited({ z: 0.6, vz: -2 });
+
+    run(
+      part,
+      emissionEnd(wreckFx.fire, wreckFx.smoke) + wreckFx.smoke.lifetime.max,
+    );
+
+    expect(part._tickListener).not.toBe(null);
+
+    part.update(row({ condition: 0, vz: 0 }));
+    run(part, wreckFx.scorch.fadeIn + 100);
+
+    expect(part._tickListener).toBe(null);
+    expect(typeof part._onRender).toBe('function');
+    expect(part._scorch.alpha).toBeCloseTo(wreckFx.scorch.alpha, 6);
+  });
+
+  // респаун приходит ещё в полёте: касание земли живым танком копоть не
+  // кладёт (`_reset` снимает ожидание)
+  it('респаун до приземления — копоти нет и после касания', () => {
+    const { part, stage } = ignited({ z: 0.6, vz: -2 });
+
+    part.update(row({ condition: 3, z: 0.6, vz: -2 }));
+    part.update(row({ condition: 3, vz: 0 }));
+
+    expect(part._scorchPending).toBe(false);
+    expect(scorchesOf(stage, part)).toHaveLength(0);
+  });
+
+  // танк ставится на землю в самом ряду респауна: копоть не создаётся
+  // даже на миг (condition разбирается раньше касания)
+  it('респаун в ряду с касанием — копоть не создаётся вовсе', () => {
+    const { part, stage } = ignited({ z: 0.6, vz: -2 });
+    const addChild = vi.spyOn(stage, 'addChild');
+
+    part.update(row({ condition: 3, x: 900, vz: 0 }));
+
+    expect(addChild).not.toHaveBeenCalled();
+    expect(part._scorchPending).toBe(false);
+    expect(part._scorch).toBe(null);
+  });
+
+  it('свет в полёте — только уровень отрисовки, на рампе — два уровня', () => {
+    const { part, deps } = ignited({ z: 0.5, vz: -1 });
+    const lastPatch = () => deps.lighting.updateLight.mock.calls.at(-1)[1];
+
+    part._tick(100);
+
+    expect(lastPatch().levels).toEqual([0]);
+
+    // склон рампы: z дробный, vz 0 — свет в оба соседних уровня
+    part.update(row({ condition: 0, z: 0.5, vz: 0 }));
+    part._tick(100);
+
+    expect(lastPatch().levels).toEqual([0, 1]);
   });
 });
 
@@ -295,6 +467,21 @@ describe('WreckFire: выключатели', () => {
     } finally {
       wreckFx.enabled = enabled;
     }
+  });
+
+  it('ночи нет — ни вспышки, ни света', () => {
+    const deps = makeDeps();
+
+    deps.lighting.enabled = false;
+
+    const { part } = ignited({}, deps);
+
+    run(part, 500);
+
+    expect(deps.lighting.flash).not.toHaveBeenCalled();
+    expect(deps.lighting.addLight).not.toHaveBeenCalled();
+    expect(deps.lighting.updateLight).not.toHaveBeenCalled();
+    expect(part._light).toBe(null);
   });
 
   it('без сервисов эффект идёт без исключений', () => {

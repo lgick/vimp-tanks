@@ -238,7 +238,9 @@ export const tankModel = {
   shadowBlur: 1,
 };
 
-// визуальная реакция танка на взрыв бомбы или бочки (`src/client/blastJolt.js`).
+// визуальная реакция танка на взрыв бомбы или бочки и на гибель танка
+// (`WreckFire`: радиус — `wreckFx.joltRadius` × `size / referenceSize`),
+// см. `src/client/blastJolt.js`.
 // Только рендер: физически танк толкает ядро. Задевает танки того же уровня
 // в радиусе взрыва, сила — `1 − d / radius`, как у урона
 export const blastJolt = {

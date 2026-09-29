@@ -1,6 +1,7 @@
-// Шина «взрыв»: эффект взрыва (`ExplosionEffectController` — бомба и
-// бочка) сообщает точку, радиус и уровень, а каждый танк сам решает, задел
-// ли его взрыв (`src/client/blastJolt.js`). Экземпляр на ядро, как `shots`
+// Шина «взрыв»: её будят эффект взрыва (`ExplosionEffectController` —
+// бомба и бочка) и гибель танка (`WreckFire` — толчок в точке остова). Они
+// сообщают точку, радиус и уровень, а каждый танк сам решает, задел ли его
+// взрыв (`src/client/blastJolt.js`). Экземпляр на ядро, как `shots`
 export function createBlastEvents() {
   const listeners = new Set();
 

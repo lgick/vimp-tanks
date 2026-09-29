@@ -220,9 +220,10 @@ strength `1 − d / radius` like the core's damage) and plays a visual jolt —
 the side facing the blast rises and the hull rocks, a blast right under the
 hull tosses it up over its shadow and lands it with the landing squash.
 Render only: the push itself stays the core's. `WreckFire` wakes the bus
-too when a tank dies: `{ x, y, radius: wreckFx.joltRadius, level }` at the
-wreck, so the wreck — right under the "blast" — is tossed up and the
-neighbours rock, with no change to `Tank.js`.
+too when a tank dies: `{ x, y, radius, level }` at the wreck, where
+`radius` is `wreckFx.joltRadius` scaled by `size / referenceSize` and `level`
+is the wreck's physical level, so the wreck — right under the "blast" — is
+tossed up and the neighbours rock, with no change to `Tank.js`.
 
 The same service names (`levelView`, `mapDynamics`, `rampRuns`, `surfaces`,
 `volumes`, `lighting`, `shots`, `blasts`)
@@ -244,9 +245,10 @@ zIndex = base zIndex + LEVEL_Z_STRIDE * level     // LEVEL_Z_STRIDE = 100
 
 Base values are the single-level ones (`Tracks` 1, `Bomb`/`TankRadar`/
 `MapRadar`/`ShotEffect`/funnel 2, `Tank` 3, `Smoke`/explosion 4, `WreckFire`
-4 (its scorch 2), map layers from `data.layer`), so a map without upper levels draws exactly as before.
-The stride is larger than any base value, hence every level-1 layer covers
-every level-0 one — the bridge slab hides what drives under it.
+4 (its scorch 2), map layers from `data.layer`), so a map without upper
+levels draws exactly as before. The stride is larger than any base value,
+hence every level-1 layer covers every level-0 one — the bridge slab hides
+what drives under it.
 
 The consequences the parts implement themselves:
 
@@ -724,6 +726,7 @@ knows nothing about them.
   has a single blend mode. Every particle carries a height `h` of its own (in
   levels) and is drawn through `reproject`, so a smoke column leans away from
   the camera centre and grows like everything tall in this projection.
+  The scorch mark is `parts/WreckScorch.js`, a sibling on the stage.
 
 ## Key invariants
 
