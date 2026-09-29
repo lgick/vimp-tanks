@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.12] - 2026-09-29
+
 ### Fixed
 
 - A tank destroyed in mid-air (jumping off a ramp or falling off a bridge) no
