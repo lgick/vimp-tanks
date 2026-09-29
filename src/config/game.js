@@ -186,12 +186,12 @@ export default {
     // боты: пресет сложности + разброс «характера» между ботами. Числа —
     // стартовые, подбираются руками (docs/*/configuration.md → Bots)
     bots: {
-      skill: 'normal', // 'easy' | 'normal' | 'hard'
+      skill: 'easy', // 'easy' | 'normal' | 'hard'
       variance: 0.3, // 0 — все боты одинаковые, 1 — ±50 % от пресета
       presets: {
         easy: {
           reactionTime: 0.55, // реакция на новую цель, с
-          aimError: 0.3, // начальная ошибка прицела, рад
+          aimError: 0.34, // начальная ошибка прицела, рад
           aimSettleTime: 1.1, // за сколько ошибка прицела сходит на нет, с
           aimTremor: 0.05, // дрожание прицела, рад
           fireTolerance: 1.8, // множитель допуска «ствол в цели»
@@ -200,7 +200,7 @@ export default {
           shotInterval: 0.4, // интервал выстрелов в очереди, с
           radarInterval: 2.0, // как часто «смотрит на радар», с
           radarNoise: 40, // шум позиции врага с радара, ед.
-          preferredRange: [140, 340], // дистанция боя [min, max], ед.
+          preferredRange: [100, 240], // дистанция боя [min, max], ед.
           aggression: 0.35, // агрессивность, 0..1
           retreatHealth: 45, // порог HP для отступления
           retreatAdvantage: 0.6, // отношение сил, ниже которого отступает
@@ -210,17 +210,17 @@ export default {
           panicFire: 0.3, // вероятность выстрела наугад под давлением
         },
         normal: {
-          reactionTime: 0.35,
-          aimError: 0.18,
-          aimSettleTime: 0.7,
-          aimTremor: 0.03,
+          reactionTime: 0.45,
+          aimError: 0.3,
+          aimSettleTime: 1.0,
+          aimTremor: 0.04,
           fireTolerance: 1.25,
-          burstShots: [1, 3],
-          burstPause: [0.55, 1.1],
-          shotInterval: 0.3,
+          burstShots: [1, 2],
+          burstPause: [0.8, 1.4],
+          shotInterval: 0.35,
           radarInterval: 1.4,
           radarNoise: 25,
-          preferredRange: [170, 420],
+          preferredRange: [120, 300],
           aggression: 0.5,
           retreatHealth: 35,
           retreatAdvantage: 0.5,
@@ -230,17 +230,17 @@ export default {
           panicFire: 0.15,
         },
         hard: {
-          reactionTime: 0.2,
-          aimError: 0.09,
-          aimSettleTime: 0.4,
-          aimTremor: 0.012,
+          reactionTime: 0.28,
+          aimError: 0.18,
+          aimSettleTime: 0.7,
+          aimTremor: 0.025,
           fireTolerance: 0.9,
-          burstShots: [2, 3],
-          burstPause: [0.35, 0.7],
-          shotInterval: 0.22,
+          burstShots: [1, 3],
+          burstPause: [0.7, 1.2],
+          shotInterval: 0.3,
           radarInterval: 0.9,
           radarNoise: 12,
-          preferredRange: [200, 480],
+          preferredRange: [140, 340],
           aggression: 0.65,
           retreatHealth: 25,
           retreatAdvantage: 0.4,

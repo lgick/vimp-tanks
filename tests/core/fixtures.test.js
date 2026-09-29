@@ -15,4 +15,14 @@ describe('tests/core/fixtures/*.json', () => {
 
     expect(fixture).toEqual(JSON.parse(JSON.stringify(gameConfig.maps[name])));
   });
+
+  // пресеты ботов продублированы в core/src/config.rs (default_bot_presets):
+  // Rust-тест bot_rules_default_matches_game_js сверяет их с этой фикстурой
+  it('bots.json совпадает с coreParams.bots', () => {
+    const fixture = JSON.parse(
+      readFileSync(new URL('./fixtures/bots.json', import.meta.url), 'utf8'),
+    );
+
+    expect(fixture).toEqual(JSON.parse(JSON.stringify(gameConfig.coreParams.bots)));
+  });
 });

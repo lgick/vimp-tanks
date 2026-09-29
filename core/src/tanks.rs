@@ -144,12 +144,8 @@ impl GameDef for TanksGame {
 /// импортирует конкретную игру, см. `vimp_engine_core::game::EngineSim`).
 pub type GameState = vimp_engine_core::game::EngineSim<TanksGame>;
 
-/// Вид движковых+игровых ресурсов, которым пользуется ИИ бота
-/// (core/src/bots/) — имена полей/методов совпадают с
-/// прежним монолитным `GameState`, чтобы тело `BotBrain` осталось
-/// нетронутым.
-// поля и методы для ИИ этапов 3–6 (plan/bots-ai) пока не все используются
-#[allow(dead_code)]
+/// Вид движковых и игровых ресурсов, которыми пользуется ИИ бота
+/// (`core/src/bots/`).
 pub(crate) struct BotView<'a> {
     pub world: &'a mut PhysicsWorld,
     pub nav: &'a Option<NavigationSystem>,
@@ -164,8 +160,6 @@ pub(crate) struct BotView<'a> {
     pub friendly_fire: bool,
     /// Модели танков (лимит башни `max_gun_angle`, размеры).
     pub models: &'a IndexMap<String, ModelConfig>,
-    /// Правила ботов (`coreParams.bots`).
-    pub rules: &'a BotRules,
     /// Правила уровней (урон падения — цена прыжка с обрыва).
     pub level_rules: &'a LevelRules,
     /// Сколько поисков маршрута ещё можно сделать на этом тике ИИ (общий на всех ботов).
@@ -179,7 +173,6 @@ const BOT_ROUTE_BUDGET_PER_TICK: u32 = 2;
 /// Период пересборки досок команд, с.
 const TEAM_BOARD_INTERVAL: f32 = 0.1;
 
-#[allow(dead_code)]
 impl BotView<'_> {
     pub fn tank_alive(&self, game_id: u32) -> bool {
         self.tanks.get(&game_id).is_some_and(|tank| tank.is_alive())
@@ -264,6 +257,14 @@ impl BotView<'_> {
             .map_or(1.4, |model| model.max_gun_angle)
     }
 
+    /// `maxForwardSpeed` модели танка, ед./с (260 — если модели нет).
+    pub fn max_forward_speed(&self, game_id: u32) -> f32 {
+        self.tanks
+            .get(&game_id)
+            .and_then(|tank| self.models.get(&tank.model))
+            .map_or(260.0, |model| model.max_forward_speed)
+    }
+
     pub fn tank_health(&self, game_id: u32) -> f64 {
         self.tanks.get(&game_id).map_or(0.0, |tank| tank.health)
     }
@@ -282,13 +283,6 @@ impl BotView<'_> {
             .get(&game_id)
             .and_then(|tank| tank.ammo.get(weapon_index).copied())
             .unwrap_or(0.0)
-    }
-
-    /// Танк в полёте (падение с обрыва).
-    pub fn tank_airborne(&self, game_id: u32) -> bool {
-        self.tanks
-            .get(&game_id)
-            .is_some_and(|tank| tank.level_state.airborne())
     }
 
     /// Танк на рампе.
@@ -831,7 +825,6 @@ impl GameSim<TanksGame> for TanksSim {
                     levels: self.levels.as_ref(),
                     friendly_fire: self.friendly_fire,
                     models: &self.models,
-                    rules: &self.bot_rules,
                     level_rules: &self.level_rules,
                     route_budget: &mut route_budget,
                     team,

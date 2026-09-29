@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bots kill more slowly: the `normal` and `hard` presets react later, aim
+  worse and fire shorter, rarer bursts (`coreParams.bots.presets`).
+- Bots no longer open fire from across the map: an attacking bot shoots only
+  within its combat distance (`preferredRange` max × 1.3) and drives closer
+  first, while one in an ambush or retreating still returns fire at any
+  distance; the presets' `preferredRange` is shorter.
+
 ## [0.22.13] - 2026-09-29
 
 ### Added
@@ -14,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `coreParams.bots`: bot skill presets (`easy`/`normal`/`hard`) and a per-bot
   variance of reaction, aim, aggression and retreat thresholds.
 - Bots play as a team: they know where their teammates (humans included) are,
-  focus the same enemy, one of three flanks, the wounded hang back, and a bot
+  focus the same enemy, one bot in three flanks, the wounded hang back, and a bot
   that has run ahead waits for the team.
 - Bots retreat when badly damaged, outnumbered or out of ammo — to teammates,
   into cover or down from a bridge — backing away while firing back, then hold

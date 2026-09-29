@@ -40,8 +40,6 @@ pub(crate) struct AvoidMark {
 pub(crate) enum NavStatus {
     Idle,
     Moving,
-    #[allow(dead_code)] // статус есть в контракте навигатора, мозг проверяет `arrived()`
-    Arrived,
     Waiting,
     Unreachable,
 }
@@ -62,8 +60,6 @@ pub(crate) struct NavParams {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Waypoint {
     pub pos: [f32; 2],
-    #[allow(dead_code)] // уровень точки — для отладки и этапов 4–6
-    pub level: u8,
     pub kind: LegKind,
     /// Точка, откуда бот въезжает в этот участок (для рамп).
     pub from: [f32; 2],
@@ -84,7 +80,6 @@ pub(crate) struct Navigator {
     best_dist: f32,
     stall_time: f32,
     lookahead_timer: f32,
-    failures: u8,
     retry_timer: f32,
     pending: bool,
     avoid: Vec<AvoidMark>,
@@ -120,7 +115,6 @@ impl Navigator {
         if replan {
             self.pending = true;
             self.attempt = 0;
-            self.failures = 0;
             return;
         }
 
@@ -274,13 +268,7 @@ impl Navigator {
 
         let me = on_ramp_end(game, me);
         let zones = self.zones(extra);
-        let query = PathQuery {
-            min_width: params.hull_width,
-            comfort_clearance: params.hull_half_length + 0.5 * params.tile,
-            narrow_cost: 1.5,
-            ledge_cost_scale: params.ledge_cost_scale,
-            penalties: &zones,
-        };
+        let query = path_query(params, &zones);
         let snap_radius = 4.0 * params.tile;
         let snapped_goal = |nav: &vimp_engine_core::nav::navigation::NavigationSystem| {
             nav.nearest_walkable_on(goal.level, goal.pos, params.hull_width, snap_radius)
@@ -335,7 +323,6 @@ impl Navigator {
                 self.legs = route.legs;
                 self.index = 0;
                 self.route_age = 0.0;
-                self.failures = 0;
                 self.pending = false;
                 self.attempt = 0;
                 self.origin = me.pos;
@@ -391,13 +378,7 @@ impl Navigator {
         let start = on_ramp_end(game, start);
         let nav = game.nav.as_ref()?;
         let zones = self.zones(extra);
-        let query = PathQuery {
-            min_width: params.hull_width,
-            comfort_clearance: params.hull_half_length + 0.5 * params.tile,
-            narrow_cost: 1.5,
-            ledge_cost_scale: params.ledge_cost_scale,
-            penalties: &zones,
-        };
+        let query = path_query(params, &zones);
 
         Some(nav.find_route(start, end, &query).map(|route| route.cost))
     }
@@ -407,7 +388,6 @@ impl Navigator {
     fn fail(&mut self, stats: &mut BotStats) -> NavStatus {
         self.legs.clear();
         self.index = 0;
-        self.failures = self.failures.saturating_add(1);
         self.retry_timer = RETRY_DELAY;
         self.pending = false;
         self.attempt = 0;
@@ -499,7 +479,6 @@ impl Navigator {
 
         Some(Waypoint {
             pos: leg.point.pos,
-            level: leg.point.level,
             kind: leg.kind,
             from: self.previous_point().0,
             is_last: self.index + 1 == self.legs.len(),
@@ -541,6 +520,17 @@ impl Navigator {
                 return;
             }
         }
+    }
+}
+
+/// Запрос маршрута бота: корпус, запас от стен, цена обрывов, зоны.
+fn path_query<'a>(params: &NavParams, zones: &'a [PenaltyZone]) -> PathQuery<'a> {
+    PathQuery {
+        min_width: params.hull_width,
+        comfort_clearance: params.hull_half_length + 0.5 * params.tile,
+        narrow_cost: 1.5,
+        ledge_cost_scale: params.ledge_cost_scale,
+        penalties: zones,
     }
 }
 

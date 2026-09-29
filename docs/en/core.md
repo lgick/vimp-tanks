@@ -1276,12 +1276,15 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   beyond `maxGunAngle − 0.1` `hull_request` asks the hull to turn. Turret
   keys stay released until the reaction is over and within a 0.03 rad
   deadband. A shot needs the reaction and the burst pause over,
-  `FireLine::Clear`, `w1` in hand with ammo and the barrel within
+  `FireLine::Clear`, the target no farther than `1.3 · preferredRange[1]`
+  (`ENGAGE_RANGE_SHARE`; beyond it the bot closes in with the gun already
+  laid; in `Hold` and `Retreat` the distance is not limited), `w1` in hand with ammo and the barrel within
   `max(0.01, atan(target half-length / d) · fireTolerance)` of the true
   target; then the next shot comes after `shotInterval` · 0.9–1.2 inside a
   burst, or after a `burstPause` roll. One blind shot per disappearance
   (the `panicFire` roll) goes at a target lost from sight under 0.4 s ago
-  behind a `Wall`, if the barrel is within twice the tolerance. The bomb
+  behind a `Wall` within the same range, if the barrel is within twice the
+  tolerance. The bomb
   (`w2`: `radius` and `damage` from the weapon config) is dropped when a
   visible enemy on the bot's level is closer than `0.8 · radius`, there is
   bomb ammo, the previous bomb's evade is over and `friendlyFire` is off

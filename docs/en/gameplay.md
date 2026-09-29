@@ -412,7 +412,10 @@ A bot aims and shoots like a player, with the same keys:
   beside the target, so it misses);
 - it fires in bursts (`burstShots`, `shotInterval`) with pauses between them
   (`burstPause`); it fires on the move too, at a visible target in its line
-  of fire; sometimes it fires one blind shot at a target that has just
+  of fire, but when attacking only within its combat distance
+  (`preferredRange` max × 1.3): a target seen farther away it drives up to
+  first; in an ambush or on a retreat it returns fire at any distance;
+  sometimes it fires one blind shot at a target that has just
   ducked behind a wall (`panicFire`);
 - the turret turns at most `maxGunAngle` from the hull: a target beyond it
   makes the bot turn its hull first.

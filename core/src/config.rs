@@ -767,7 +767,7 @@ pub struct BotPresets {
 }
 
 /// Правила ботов (game.js coreParams.bots). Секция необязательна: без неё — `normal`.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BotRules {
     #[serde(default)]
@@ -783,12 +783,13 @@ fn default_bot_variance() -> f32 {
     0.3
 }
 
-/// Те же числа, что в `src/config/game.js` (coreParams.bots.presets).
+/// Те же числа, что в `src/config/game.js` (coreParams.bots.presets);
+/// синхронность с game.js проверяет `bot_rules_default_matches_game_js`.
 fn default_bot_presets() -> BotPresets {
     BotPresets {
         easy: BotSkillParams {
             reaction_time: 0.55,
-            aim_error: 0.3,
+            aim_error: 0.34,
             aim_settle_time: 1.1,
             aim_tremor: 0.05,
             fire_tolerance: 1.8,
@@ -797,7 +798,7 @@ fn default_bot_presets() -> BotPresets {
             shot_interval: 0.4,
             radar_interval: 2.0,
             radar_noise: 40.0,
-            preferred_range: [140.0, 340.0],
+            preferred_range: [100.0, 240.0],
             aggression: 0.35,
             retreat_health: 45.0,
             retreat_advantage: 0.6,
@@ -807,17 +808,17 @@ fn default_bot_presets() -> BotPresets {
             panic_fire: 0.3,
         },
         normal: BotSkillParams {
-            reaction_time: 0.35,
-            aim_error: 0.18,
-            aim_settle_time: 0.7,
-            aim_tremor: 0.03,
+            reaction_time: 0.45,
+            aim_error: 0.3,
+            aim_settle_time: 1.0,
+            aim_tremor: 0.04,
             fire_tolerance: 1.25,
-            burst_shots: [1, 3],
-            burst_pause: [0.55, 1.1],
-            shot_interval: 0.3,
+            burst_shots: [1, 2],
+            burst_pause: [0.8, 1.4],
+            shot_interval: 0.35,
             radar_interval: 1.4,
             radar_noise: 25.0,
-            preferred_range: [170.0, 420.0],
+            preferred_range: [120.0, 300.0],
             aggression: 0.5,
             retreat_health: 35.0,
             retreat_advantage: 0.5,
@@ -827,17 +828,17 @@ fn default_bot_presets() -> BotPresets {
             panic_fire: 0.15,
         },
         hard: BotSkillParams {
-            reaction_time: 0.2,
-            aim_error: 0.09,
-            aim_settle_time: 0.4,
-            aim_tremor: 0.012,
+            reaction_time: 0.28,
+            aim_error: 0.18,
+            aim_settle_time: 0.7,
+            aim_tremor: 0.025,
             fire_tolerance: 0.9,
-            burst_shots: [2, 3],
-            burst_pause: [0.35, 0.7],
-            shot_interval: 0.22,
+            burst_shots: [1, 3],
+            burst_pause: [0.7, 1.2],
+            shot_interval: 0.3,
             radar_interval: 0.9,
             radar_noise: 12.0,
-            preferred_range: [200.0, 480.0],
+            preferred_range: [140.0, 340.0],
             aggression: 0.65,
             retreat_health: 25.0,
             retreat_advantage: 0.4,
@@ -1205,6 +1206,18 @@ fn default_seed() -> u64 {
 #[cfg(test)]
 mod validate_tests {
     use super::*;
+
+    #[test]
+    fn bot_rules_default_matches_game_js() {
+        // фикстура — копия coreParams.bots, её сверяет с game.js tests/core/fixtures.test.js.
+        // `skill` не сверяется: game.js выбирает сложность, дефолт ядра — `normal`
+        let rules: BotRules =
+            serde_json::from_str(include_str!("../../tests/core/fixtures/bots.json")).unwrap();
+        let defaults = BotRules::default();
+
+        assert_eq!(rules.presets, defaults.presets);
+        assert_eq!(rules.variance, defaults.variance);
+    }
 
     fn weapon() -> WeaponConfig {
         WeaponConfig {

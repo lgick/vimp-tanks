@@ -9,7 +9,6 @@ pub(crate) fn dist_sq(a: [f32; 2], b: [f32; 2]) -> f32 {
     dx * dx + dy * dy
 }
 
-#[allow(dead_code)] // навигатор и прицел этапов 3–5
 pub(crate) fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
     dist_sq(a, b).sqrt()
 }
@@ -24,7 +23,6 @@ pub(crate) fn normalize_angle(angle: f32) -> f32 {
 }
 
 /// Направление вектора, рад (`atan2(y, x)`).
-#[allow(dead_code)] // навигатор и прицел этапов 3–5
 pub(crate) fn angle_of(v: [f32; 2]) -> f32 {
     v[1].atan2(v[0])
 }

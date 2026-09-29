@@ -16,7 +16,7 @@ use crate::config::{BotRules, BotSkill};
 use crate::tanks::BotView;
 use vimp_engine_core::nav::navigation::{LegKind, NavigationSystem, PathPoint, PenaltyZone};
 
-// константы поведения бота (из src/server/modules/bots/BotController.js)
+// константы поведения бота
 const AI_UPDATE_INTERVAL: f32 = 0.1;
 
 /// Период выбора цели, с.
@@ -31,6 +31,11 @@ const ROUTE_COST_CANDIDATES: usize = 3;
 const STRAIGHT_FACTOR: f32 = 1.3;
 /// Минимальная выдержка режима, с (кроме переходов в `Dead` и из него).
 const MODE_MIN_TIME: f32 = 0.5;
+/// Дистанция боя: `Hunt` → `Engage` и огонь из пушки в атаке — не дальше
+/// этой доли `preferred_range[1]`. Дальше видимую цель атакующий бот не
+/// обстреливает, а подъезжает к ней; в обороне (`Hold`, `Retreat`) бот
+/// отстреливается на любой дистанции.
+const ENGAGE_RANGE_SHARE: f32 = 1.3;
 /// `Engage` → `Hunt`: цель не видна дольше, с.
 const LOST_SIGHT_TIME: f32 = 1.0;
 /// `Engage` → `Hunt`: линия огня не чиста дольше, с.
@@ -211,7 +216,7 @@ pub(crate) fn next_mode(i: &ModeInputs) -> BotMode {
     }
 
     let [_, far] = i.preferred_range;
-    let engage = i.target_visible && i.target_fire_clear && i.target_dist <= far * 1.3;
+    let engage = i.target_visible && i.target_fire_clear && i.target_dist <= far * ENGAGE_RANGE_SHARE;
 
     match i.mode {
         Retreat if i.retreat_arrived || (i.safe_for > 2.0 && i.ally_near) => Hold,
@@ -262,9 +267,8 @@ struct DriveOpts {
     avoid: bool,
 }
 
-/// ИИ одного бота (порт BotController): навигация, прицеливание,
-/// стрельба. Ввод генерируется внутри ядра — бот дёргает те же клавиши,
-/// что и игрок.
+/// ИИ одного бота: восприятие, режимы, навигация, прицел и огонь. Ввод
+/// генерируется внутри ядра — бот дёргает те же клавиши, что и игрок.
 #[derive(Serialize, Deserialize)]
 pub struct BotBrain {
     pub game_id: u32,
@@ -1147,7 +1151,8 @@ impl BotBrain {
             match team.role(self.game_id) {
                 Role::Flanker => {
                     let far =
-                        dist(me.pos_array(), contact.pos) > 1.3 * self.profile.preferred_range[1];
+                        dist(me.pos_array(), contact.pos)
+                        > ENGAGE_RANGE_SHARE * self.profile.preferred_range[1];
                     let focus = team
                         .focus
                         .and_then(|focus| self.perception.contact(focus))
@@ -1509,14 +1514,7 @@ impl BotBrain {
             let angle = me.angle_to(dir);
 
             if dir != Vector::ZERO && angle.abs() > game.max_gun_angle(me.id) - HULL_TURN_MARGIN {
-                self.apply_drive(
-                    game,
-                    DriveCommand {
-                        right: angle > 0.0,
-                        left: angle < 0.0,
-                        ..DriveCommand::default()
-                    },
-                );
+                self.turn_in_place(game, angle);
                 self.stuck.reset();
                 return;
             }
@@ -1629,14 +1627,7 @@ impl BotBrain {
             let angle = me.angle_to(dir);
 
             if angle.abs() > game.max_gun_angle(me.id) - HULL_TURN_MARGIN {
-                self.apply_drive(
-                    game,
-                    DriveCommand {
-                        right: angle > 0.0,
-                        left: angle < 0.0,
-                        ..DriveCommand::default()
-                    },
-                );
+                self.turn_in_place(game, angle);
                 self.stuck.reset();
                 return;
             }
@@ -2031,13 +2022,7 @@ impl BotBrain {
         if dist(me.pos_array(), approach) < 0.5 * tile {
             // в точке захода: разворот на месте по оси прогона
             if heading_error.abs() > 0.12 {
-                let turn = DriveCommand {
-                    right: heading_error > 0.0,
-                    left: heading_error < 0.0,
-                    ..DriveCommand::default()
-                };
-
-                self.apply_drive(game, turn);
+                self.turn_in_place(game, heading_error);
                 self.stuck.reset();
             } else {
                 self.ramp_lock = true;
@@ -2117,11 +2102,7 @@ impl BotBrain {
             angle += self.steer_bias;
         }
 
-        let max_speed = game
-            .tanks
-            .get(&me.id)
-            .and_then(|tank| game.models.get(&tank.model))
-            .map_or(260.0, |model| model.max_forward_speed);
+        let max_speed = game.max_forward_speed(me.id);
         let cmd = decide_drive(
             &DriveInput {
                 angle,
@@ -2164,6 +2145,18 @@ impl BotBrain {
             left: self.keys.is_down(HeldKey::Left),
             right: self.keys.is_down(HeldKey::Right),
         }
+    }
+
+    /// Разворот на месте: руль в сторону знака `angle`, газ отпущен.
+    fn turn_in_place(&mut self, game: &mut BotView<'_>, angle: f32) {
+        self.apply_drive(
+            game,
+            DriveCommand {
+                right: angle > 0.0,
+                left: angle < 0.0,
+                ..DriveCommand::default()
+            },
+        );
     }
 
     fn apply_drive(&mut self, game: &mut BotView<'_>, cmd: DriveCommand) {
@@ -2309,14 +2302,7 @@ impl BotBrain {
 
                 match angle {
                     Some(angle) if angle.abs() >= 0.3 && left > 0.0 => {
-                        self.apply_drive(
-                            game,
-                            DriveCommand {
-                                right: angle > 0.0,
-                                left: angle < 0.0,
-                                ..DriveCommand::default()
-                            },
-                        );
+                        self.turn_in_place(game, angle);
 
                         Some(UnstuckPhase::Turn { left })
                     }
@@ -2532,11 +2518,7 @@ impl BotBrain {
         self.aim
             .note_sight(visible, self.clock, &self.profile, game.rng);
 
-        let max_speed = game
-            .tanks
-            .get(&me.id)
-            .and_then(|tank| game.models.get(&tank.model))
-            .map_or(260.0, |model| model.max_forward_speed);
+        let max_speed = game.max_forward_speed(me.id);
         let error = self.aim.error(
             self.clock,
             &self.profile,
@@ -2579,9 +2561,14 @@ impl BotBrain {
         let (target_half_length, _) = game.tank_half_extents(contact.id);
         let tol = fire_tolerance(target_half_length, distance, &self.profile);
         let off = normalize_angle(gun_angle - target_angle).abs();
-        let aimed = visible && line == Some(FireLine::Clear) && off < tol;
+        // в атаке дальше дистанции боя не стреляет: подъезжает, ствол уже
+        // наведён; в обороне отстреливается на любой дистанции
+        let in_range = matches!(self.mode, BotMode::Hold | BotMode::Retreat)
+            || distance <= ENGAGE_RANGE_SHARE * self.profile.preferred_range[1];
+        let aimed = in_range && visible && line == Some(FireLine::Clear) && off < tol;
         // «в молоко»: цель только что скрылась за стеной, ствол смотрит туда
-        let panic = !visible
+        let panic = in_range
+            && !visible
             && line == Some(FireLine::Wall)
             && self.aim.panic_pending(self.clock)
             && off < 2.0 * tol;
@@ -2947,6 +2934,44 @@ mod tests {
             fires_within(&mut fixture, &mut brain, 100),
             "наземная цель под кромкой должна обстреливаться"
         );
+    }
+
+    #[test]
+    fn attack_fire_waits_for_the_combat_distance() {
+        // цель в 136 ед. с чистой линией огня, дистанция боя — 80 · 1.3 = 104
+        let setup = |mode| {
+            let mut fixture = Fixture::new();
+
+            fixture.add_tank(1, 1, 200.0, 208.0, 0);
+            fixture.add_tank(2, 2, 336.0, 208.0, 0);
+
+            let mut brain = brain_at(1, [200.0, 208.0], 0);
+
+            brain.mode = mode;
+            brain.target = Some(2);
+            brain.profile.preferred_range = [40.0, 80.0];
+
+            (fixture, brain)
+        };
+
+        for mode in [BotMode::Hunt, BotMode::Engage] {
+            let (mut fixture, mut brain) = setup(mode);
+
+            assert_eq!(line_of(&mut fixture, &brain), FireLine::Clear);
+            assert!(
+                !fires_within(&mut fixture, &mut brain, 100),
+                "{mode:?}: дальше дистанции боя атакующий не стреляет"
+            );
+        }
+
+        for mode in [BotMode::Hold, BotMode::Retreat] {
+            let (mut fixture, mut brain) = setup(mode);
+
+            assert!(
+                fires_within(&mut fixture, &mut brain, 100),
+                "{mode:?}: в обороне бот отстреливается на любой дистанции"
+            );
+        }
     }
 
     #[test]

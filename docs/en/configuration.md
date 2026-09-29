@@ -46,7 +46,8 @@ Bot difficulty. `skill` picks a preset (`'easy'`, `'normal'` — the default, `'
 the three presets, and `variance` (`[0, 1]`, default `0.3`) spreads the "character" between bots. The
 section is optional: without it the core uses `normal` with the numbers below. The values are starting
 ones and are tuned by hand; the same numbers are the core's defaults (`config.rs`,
-`default_bot_presets`).
+`default_bot_presets`). When editing the presets, update `tests/core/fixtures/bots.json` too: the tests
+(`fixtures.test.js` and the Rust `bot_rules_default_matches_game_js`) point out any mismatch.
 
 Each bot rolls its own profile (`BotProfile`) once, when it is created, through the game's seeded
 `Rng` (the profile goes into the handoff dump):
@@ -62,17 +63,17 @@ So `variance: 0` makes every bot identical to the preset, and `variance: 1` give
 
 | Field | Unit | easy | normal | hard | Meaning |
 | --- | --- | --- | --- | --- | --- |
-| `reactionTime` | s | `0.55` | `0.35` | `0.2` | Delay before reacting to a new target |
-| `aimError` | rad | `0.3` | `0.18` | `0.09` | Initial aim error on a target |
-| `aimSettleTime` | s | `1.1` | `0.7` | `0.4` | How long the aim error takes to fade |
-| `aimTremor` | rad | `0.05` | `0.03` | `0.012` | Constant aim tremor |
+| `reactionTime` | s | `0.55` | `0.45` | `0.28` | Delay before reacting to a new target |
+| `aimError` | rad | `0.34` | `0.3` | `0.18` | Initial aim error on a target |
+| `aimSettleTime` | s | `1.1` | `1.0` | `0.7` | How long the aim error takes to fade |
+| `aimTremor` | rad | `0.05` | `0.04` | `0.025` | Constant aim tremor |
 | `fireTolerance` | × | `1.8` | `1.25` | `0.9` | Multiplier of the "barrel is on target" tolerance (the target's angular half-length); above 1 the bot also fires when just beside the target |
-| `burstShots` | shots | `[1, 2]` | `[1, 3]` | `[2, 3]` | Shots in a burst `[min, max]` (integers ≥ 1), rolled anew for each burst |
-| `burstPause` | s | `[0.9, 1.6]` | `[0.55, 1.1]` | `[0.35, 0.7]` | Pause between bursts `[min, max]`, rolled for each pause |
-| `shotInterval` | s | `0.4` | `0.3` | `0.22` | Interval between shots inside a burst (× 0.9–1.2) |
+| `burstShots` | shots | `[1, 2]` | `[1, 2]` | `[1, 3]` | Shots in a burst `[min, max]` (integers ≥ 1), rolled anew for each burst |
+| `burstPause` | s | `[0.9, 1.6]` | `[0.8, 1.4]` | `[0.7, 1.2]` | Pause between bursts `[min, max]`, rolled for each pause |
+| `shotInterval` | s | `0.4` | `0.35` | `0.3` | Interval between shots inside a burst (× 0.9–1.2) |
 | `radarInterval` | s | `2.0` | `1.4` | `0.9` | How often the bot "glances at the radar" |
 | `radarNoise` | u | `40` | `25` | `12` | Noise of an enemy position read off the radar |
-| `preferredRange` | u | `[140, 340]` | `[170, 420]` | `[200, 480]` | Combat distance `[min, max]`: farther — close in, closer — back off, inside — weave |
+| `preferredRange` | u | `[100, 240]` | `[120, 300]` | `[140, 340]` | Combat distance `[min, max]`: farther — close in, closer — back off, inside — weave; an attacking bot fires only within `max` × 1.3 |
 | `aggression` | 0..1 | `0.35` | `0.5` | `0.65` | Aggressiveness: above 0.7 closes in point-blank instead of backing off, above 0.8 bombs with `friendlyFire` on and retreats later (`retreatHealth` × 0.6); jumps ledges more readily in a chase, holds a position shorter; the most aggressive of three or more bots flanks |
 | `retreatHealth` | HP | `45` | `35` | `25` | At or below this health a bot under fire (wounded within 4 s or a visible enemy within 450 u) retreats |
 | `retreatAdvantage` | ratio | `0.6` | `0.5` | `0.4` | Strength ratio within 350 u — own health / 100 plus teammates' hull strength (1 / 0.6 / 0.3 by condition) to the enemies' — below which a bot with health under 70 retreats |
