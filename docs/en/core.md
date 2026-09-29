@@ -1101,9 +1101,18 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   penalty zones. A failed query falls back to no width limit, then to a goal
   and a start snapped to the nearest walkable cell. Every query spends one
   unit of a per-tick budget shared by all bots (`BotView::route_budget`).
+  Each tick the next bot in turn spends the budget first
+  (`TanksSim::ai_turn`, carried in the dump), so the bots updated last do
+  not always wait; the waits are counted in `BotStats::route_waits`.
   The route is re-planned when the goal moves far or changes level, every
   2 s for a moving target, when the bot leaves the route or the expected
-  level, and when it makes no progress for 1.5 s. Each leg keeps its kind
+  level, and when it makes no progress for 1.5 s. Mid-way along a run that
+  crosses a level (`0 → 2`) the tank's level flips to the intermediate one,
+  which the route does not have, so on a ramp the level check compares the
+  run's ends instead, and a start or a goal on such a run is snapped to its
+  nearest end before the query. Re-plans are counted per cause in
+  `BotStats::replan_causes` and printed by the `replan_causes_report`
+  test. Each leg keeps its kind
   (`Walk`/`Ramp`/`Ledge`): a ramp top counts as reached within a tile, a
   ledge once the bot has landed on its level; smoothing skips up to four
   walk points through a hull-wide corridor but never a ramp, its foot or a
@@ -1129,11 +1138,14 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   on each axis, with zero speed. A dead enemy's contact is dropped at once.
   The same pass tracks damage: `damage_recent` (decays with a 3 s time
   constant), `last_damage_at` and `last_attacker` (the nearest visible enemy
-  aiming at the bot, else the nearest visible, else the nearest).
-  Self-inflicted damage — within 0.3 s of a fall, or from the bot's own bomb
-  with friendly fire on — counts towards `damage_recent`/`last_damage_at`
-  but leaves `last_attacker` as it was. The RNG
-  is drawn only on a radar tick, contact by contact in id order.
+  aiming at the bot, else the nearest visible, else the nearest) with
+  `last_attacked_at`, when it was named. Self-inflicted damage — within
+  0.3 s (`SELF_DAMAGE_WINDOW`) of a fall, or of the blast of the bot's own
+  bomb with friendly fire on (the weapon's `time` after the drop) — counts
+  towards `damage_recent`/`last_damage_at` but changes neither
+  `last_attacker` nor `last_attacked_at`: an old attacker does not become a
+  fresh one. The RNG is drawn only on a radar tick, contact by contact in id
+  order.
 - `FireLine` — what stands in the line of fire: `OutOfRange` (farther than
   the `w1` range), `Wall`, `OutOfReach` and `Embankment` (the level rules
   above), and for a target on the bot's own level a physical ray from the
@@ -1216,7 +1228,8 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   route, and a `Support` drives to a point 200 units behind the nearest
   `Assault` teammate on the line to the target. In `Engage` the weaving
   side leads away from a teammate within 120.
-- `Retreat`: the point is picked on entry and every 1 s. Threats — visible
+- `Retreat`: the point is picked on entry and every 1 s (`RETREAT_REPICK`),
+  a pick that found no point included. Threats — visible
   contacts within 600 plus `last_attacker`. Candidates (up to 12): behind
   the nearest teammate farther from the threats than the bot; `home`; with
   the bot above level 0 and health above the one-level fall cost + 10, up
@@ -1229,9 +1242,12 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   threat penalty zones (radius 220, 4 per unit) and a ledge price of 0.3
   (one route budget unit each), `− 200` per teammate within 250 of the
   point, `+ 300` if a threat sees it. Candidates are compared by route cost
-  only: if the tick's budget runs out before at least one is costed, the
-  pick is repeated on the next tick while the bot drives to the fallback
-  point. Fallback: `home`, then 6 tiles away from the nearest threat. The
+  only, as many as the tick's budget allows; with no budget left at all the
+  candidates are not even collected: the pick waits for the next tick while
+  the bot heads for the fallback point. A costed candidate without a route
+  spends its budget unit too, so the pick is then settled until the next
+  `RETREAT_REPICK` — unreachable points do not drain the shared budget every
+  tick. Fallback: `home`, then 6 tiles away from the nearest threat. The
   route avoids the threat zones; with a visible threat more than 2 rad off
   the retreat direction the bot reverses up to 8 tiles, facing it. The
   turret holds the nearest visible threat and fires back with the aim error
@@ -1277,20 +1293,23 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   keys stay released until the reaction is over and within a 0.03 rad
   deadband. A shot needs the reaction and the burst pause over,
   `FireLine::Clear`, the target no farther than `1.3 · preferredRange[1]`
-  (`ENGAGE_RANGE_SHARE`; beyond it the bot closes in with the gun already
-  laid; in `Hold` and `Retreat` the distance is not limited), `w1` in hand with ammo and the barrel within
+  (`ENGAGE_RANGE_FACTOR`; beyond it the bot closes in with the gun already
+  laid; the distance is not limited in `Hold` and `Retreat` and for the
+  attacker named within the last 3 s, `RETALIATE_TIME`), `w1` in hand with
+  ammo and the barrel within
   `max(0.01, atan(target half-length / d) · fireTolerance)` of the true
   target; then the next shot comes after `shotInterval` · 0.9–1.2 inside a
   burst, or after a `burstPause` roll. One blind shot per disappearance
   (the `panicFire` roll) goes at a target lost from sight under 0.4 s ago
   behind a `Wall` within the same range, if the barrel is within twice the
-  tolerance. The bomb
-  (`w2`: `radius` and `damage` from the weapon config) is dropped when a
-  visible enemy on the bot's level is closer than `0.8 · radius`, there is
-  bomb ammo, the previous bomb's evade is over and `friendlyFire` is off
-  (on: `aggression` > 0.8 and health > `damage` + 10, and no teammate on
-  the bot's level within `1.5 · radius`). Weapons are switched
-  with `nextWeapon`, at most one press per 0.15 s.
+  tolerance. The bomb (`w2`: `radius`, `damage` and the fuse `time` from the
+  weapon config) is dropped when a visible enemy on the bot's level is
+  closer than `0.8 · radius`, there is bomb ammo, the previous bomb's evade
+  is over and `friendlyFire` is off (on: `aggression` > 0.8 and health >
+  `damage` + 10, and no teammate on the bot's level closer than `radius` +
+  its `maxForwardSpeed` × the fuse — one that could reach the blast before
+  it goes off). Weapons are switched with `nextWeapon`, at most one press
+  per 0.15 s.
 - The line of sight, the weaving point and the obstacle
   avoidance rays all run on the bot's own level
   (`has_obstacle_between_on`, `is_walkable_on`,

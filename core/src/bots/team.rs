@@ -240,11 +240,9 @@ impl TeamBoard {
             .filter(move |m| m.id != exclude && dist(m.pos, pos) < radius)
     }
 
-    /// Суммарная «сила» членов команды ближе `radius` к `pos`.
-    pub fn strength_near(&self, pos: [f32; 2], radius: f32) -> f32 {
-        self.members
-            .iter()
-            .filter(|m| dist(m.pos, pos) < radius)
+    /// Суммарная «сила» членов команды, кроме `exclude`, ближе `radius` к `pos`.
+    pub fn strength_near(&self, pos: [f32; 2], radius: f32, exclude: u32) -> f32 {
+        self.allies_near(pos, radius, exclude)
             .map(|m| m.strength)
             .sum()
     }
@@ -385,7 +383,8 @@ mod tests {
         human.strength = 0.6;
         board.update(1, vec![member(1, 0.0, 0.0), human], &[], &[], 0.0);
 
-        assert!((board.strength_near([0.0, 0.0], 350.0) - 1.6).abs() < 1e-6);
+        assert!((board.strength_near([0.0, 0.0], 350.0, 0) - 1.6).abs() < 1e-6);
+        assert!((board.strength_near([0.0, 0.0], 350.0, 1) - 0.6).abs() < 1e-6);
         assert_eq!(board.allies_near([0.0, 0.0], 350.0, 1).count(), 1);
     }
 }

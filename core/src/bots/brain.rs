@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use super::aim::{fire_tolerance, Aim, PRE_AIMED_ANGLE};
 use super::geom::{angle_of, dist, dist_sq, normalize_angle, rotate};
 use super::keys::{HeldKey, KeyPad};
-use super::navigator::{AvoidMark, NavParams, NavStatus, Navigator, Waypoint, flank_zone};
+use super::navigator::{
+    AvoidMark, NavParams, NavStatus, Navigator, REPLAN_CAUSES, Waypoint, flank_zone,
+};
 use super::perception::{Contact, FireLine, Perception, fire_line};
 use super::profile::BotProfile;
 use super::steering::{
@@ -31,11 +33,14 @@ const ROUTE_COST_CANDIDATES: usize = 3;
 const STRAIGHT_FACTOR: f32 = 1.3;
 /// Минимальная выдержка режима, с (кроме переходов в `Dead` и из него).
 const MODE_MIN_TIME: f32 = 0.5;
-/// Дистанция боя: `Hunt` → `Engage` и огонь из пушки в атаке — не дальше
-/// этой доли `preferred_range[1]`. Дальше видимую цель атакующий бот не
-/// обстреливает, а подъезжает к ней; в обороне (`Hold`, `Retreat`) бот
-/// отстреливается на любой дистанции.
-const ENGAGE_RANGE_SHARE: f32 = 1.3;
+/// Дистанция боя (`engage_range`): `Hunt` → `Engage` и огонь из пушки в
+/// атаке — не дальше `preferred_range[1]`, умноженного на это. Дальше видимую
+/// цель атакующий бот не обстреливает, а подъезжает к ней; в обороне (`Hold`,
+/// `Retreat`) и по свежему обидчику стреляет на любой дистанции.
+const ENGAGE_RANGE_FACTOR: f32 = 1.3;
+/// Обидчик «свежий» (ему бот отвечает огнём за дистанцией боя), пока ранил
+/// бота не дольше стольких секунд назад.
+const RETALIATE_TIME: f32 = 3.0;
 /// `Engage` → `Hunt`: цель не видна дольше, с.
 const LOST_SIGHT_TIME: f32 = 1.0;
 /// `Engage` → `Hunt`: линия огня не чиста дольше, с.
@@ -55,9 +60,9 @@ const WEAVE_ANGLE: f32 = std::f32::consts::FRAC_PI_2 - 0.5;
 const BACK_OFF_AGGRESSION: f32 = 0.7;
 /// Своя бомба при огне по своим — только у такого «драчуна».
 const BOMB_FF_AGGRESSION: f32 = 0.8;
-/// При огне по своим бомба не кладётся, если союзник своего уровня ближе
-/// стольких радиусов взрыва: за 300 мс до взрыва он успеет подъехать.
-const BOMB_ALLY_CLEARANCE: f32 = 1.5;
+/// Урон от себя (приземление, своя бомба) бот замечает на ближайшем тике
+/// решений: столько секунд после падения или взрыва обидчик не ищется.
+const SELF_DAMAGE_WINDOW: f32 = 0.3;
 /// Корпус доворачивается, пока цель не войдёт в сектор башни с таким
 /// запасом, рад.
 const HULL_TURN_MARGIN: f32 = 0.3;
@@ -182,6 +187,11 @@ pub(crate) struct ModeInputs {
     pub enemy_close: bool,
 }
 
+/// Дистанция боя по `preferred_range` бота, ед.
+fn engage_range(preferred_range: [f32; 2]) -> f32 {
+    ENGAGE_RANGE_FACTOR * preferred_range[1]
+}
+
 /// Переходы режимов — чистая функция, правила по приоритету (первое
 /// сработавшее побеждает). Выдержка `MODE_MIN_TIME` действует для всех
 /// правил, кроме гибели, респауна и ухода в отступление.
@@ -215,8 +225,8 @@ pub(crate) fn next_mode(i: &ModeInputs) -> BotMode {
         return i.mode;
     }
 
-    let [_, far] = i.preferred_range;
-    let engage = i.target_visible && i.target_fire_clear && i.target_dist <= far * ENGAGE_RANGE_SHARE;
+    let engage =
+        i.target_visible && i.target_fire_clear && i.target_dist <= engage_range(i.preferred_range);
 
     match i.mode {
         Retreat if i.retreat_arrived || (i.safe_for > 2.0 && i.ally_near) => Hold,
@@ -242,6 +252,12 @@ pub struct BotStats {
     pub shots_fired: u32,
     pub watchdog_resets: u32,
     pub mode_changes: u32,
+    /// Перестроения маршрута по причинам (`ReplanCause as usize`).
+    #[serde(default)]
+    pub replan_causes: [u32; REPLAN_CAUSES],
+    /// Сколько раз поиск маршрута ждал общего бюджета (`plan` → `Waiting`).
+    #[serde(default)]
+    pub route_waits: u32,
 }
 
 /// Снимок мозга бота для тестов и отладки.
@@ -332,6 +348,9 @@ pub struct BotBrain {
     evade_until: f32,
     #[serde(default)]
     bomb_pos: Option<[f32; 2]>,
+    /// Когда положена последняя бомба: урон при её взрыве — от себя.
+    #[serde(default)]
+    bomb_dropped_at: Option<f32>,
     /// Последний тик падения (ввод заблокирован): урон сразу после него —
     /// от падения, а не от врага.
     #[serde(default)]
@@ -442,6 +461,7 @@ impl BotBrain {
             hull_turn: false,
             evade_until: 0.0,
             bomb_pos: None,
+            bomb_dropped_at: None,
             fell_at: None,
             weapon_switch_at: 0.0,
             switch_presses: 0,
@@ -555,6 +575,7 @@ impl BotBrain {
                 self.weave_point = None;
                 self.evade_until = 0.0;
                 self.bomb_pos = None;
+                self.bomb_dropped_at = None;
                 self.retreat_point = None;
                 self.retreat_exclude = None;
                 self.hold_point = None;
@@ -723,13 +744,7 @@ impl BotBrain {
     /// Тик решений: восприятие → выбор цели → переходы режимов.
     fn think(&mut self, game: &mut BotView<'_>, me: &SelfState) {
         let dt = self.clock - self.perceived_at;
-
-        // урон от себя: приземление после падения или своя бомба при огне по
-        // своим — обидчика у него нет
-        let self_inflicted = self.fell_at.is_some_and(|at| self.clock - at < 0.3)
-            || (game.friendly_fire
-                && self.bomb_pos.is_some()
-                && self.clock < self.evade_until + 0.2);
+        let self_inflicted = self.self_inflicted_damage(game);
 
         self.perceived_at = self.clock;
         self.perception
@@ -752,6 +767,18 @@ impl BotBrain {
         self.update_mode(game, me, damaged_now, self_inflicted);
     }
 
+    /// Свежий урон — от себя: приземление после падения или своя бомба при
+    /// огне по своим (взрыв через `fuse` после закладки). Обидчика у такого
+    /// урона нет.
+    fn self_inflicted_damage(&self, game: &BotView<'_>) -> bool {
+        let within = |at: Option<f32>, delay: f32| {
+            at.is_some_and(|at| self.clock - at < delay + SELF_DAMAGE_WINDOW)
+        };
+        let fuse = bomb_weapon(game).map_or(0.0, |bomb| bomb.fuse);
+
+        within(self.fell_at, 0.0) || (game.friendly_fire && within(self.bomb_dropped_at, fuse))
+    }
+
     /// Выбор цели по дистанции маршрута, видимости, угрозе, повреждённости
     /// и уровню (меньше оценка — лучше).
     fn choose_target(&mut self, game: &mut BotView<'_>, me: &SelfState) {
@@ -770,12 +797,8 @@ impl BotBrain {
         let clock = self.clock;
         let perception = &self.perception;
         // обидчик: ранил бота не дольше `window` с назад
-        let recent_attacker = |id: u32, window: f32| {
-            perception.last_attacker == Some(id)
-                && perception
-                    .last_damage_at
-                    .is_some_and(|at| clock - at < window)
-        };
+        let recent_attacker =
+            |id: u32, window: f32| perception.recent_attacker(clock, window) == Some(id);
         let focus = game.team.and_then(|team| team.focus);
         let mut best: Option<(u32, f32)> = None;
 
@@ -1029,9 +1052,7 @@ impl BotBrain {
     fn advantage(&self, game: &BotView<'_>, pos: [f32; 2], health: f32) -> f32 {
         let allies = health / 100.0
             + game.team.map_or(0.0, |team| {
-                team.allies_near(pos, ADVANTAGE_RADIUS, self.game_id)
-                    .map(|m| m.strength)
-                    .sum()
+                team.strength_near(pos, ADVANTAGE_RADIUS, self.game_id)
             });
         let enemies: f32 = self
             .perception
@@ -1053,13 +1074,13 @@ impl BotBrain {
             return false;
         }
 
-        let Some((w2, radius, _)) = bomb_weapon(game) else {
+        let Some(bomb) = bomb_weapon(game) else {
             return true;
         };
 
-        game.ammo(me.id, w2) < 1.0
+        game.ammo(me.id, bomb.index) < 1.0
             || !self.perception.visible_contacts().any(|contact| {
-                contact.level == me.level && dist(me.pos_array(), contact.pos) < radius
+                contact.level == me.level && dist(me.pos_array(), contact.pos) < bomb.radius
             })
     }
 
@@ -1150,9 +1171,8 @@ impl BotBrain {
         if let Some(team) = game.team {
             match team.role(self.game_id) {
                 Role::Flanker => {
-                    let far =
-                        dist(me.pos_array(), contact.pos)
-                        > ENGAGE_RANGE_SHARE * self.profile.preferred_range[1];
+                    let far = dist(me.pos_array(), contact.pos)
+                        > engage_range(self.profile.preferred_range);
                     let focus = team
                         .focus
                         .and_then(|focus| self.perception.contact(focus))
@@ -1224,7 +1244,7 @@ impl BotBrain {
     fn drive_retreat(&mut self, game: &mut BotView<'_>, me: &SelfState, dt: f32) {
         let tile = game.tile_size();
 
-        if self.retreat_point.is_none() || self.clock - self.retreat_picked_at >= RETREAT_REPICK {
+        if self.retreat_pick_due() {
             self.pick_retreat_point(game, me);
         }
 
@@ -1250,11 +1270,31 @@ impl BotBrain {
         self.drive_route_with(game, me, dt, &zones, reverse_distance);
     }
 
+    /// Пора выбрать точку отхода: при входе в `Retreat` (`enter_mode`
+    /// сдвигает `retreat_picked_at` назад) и раз в `RETREAT_REPICK`. Выбор без
+    /// точки тоже ждёт `RETREAT_REPICK`: иначе он повторялся бы каждый тик и
+    /// тратил общий бюджет маршрутов.
+    fn retreat_pick_due(&self) -> bool {
+        self.clock - self.retreat_picked_at >= RETREAT_REPICK
+    }
+
     /// Выбор точки отхода: кандидаты (союзник, дом, прыжок вниз, укрытия),
     /// предотбор по эвристике, оценка маршрутом с зонами угроз.
     fn pick_retreat_point(&mut self, game: &mut BotView<'_>, me: &SelfState) {
         let pos = me.pos_array();
         let threats = self.perception.retreat_threats(pos, THREAT_RADIUS);
+
+        if *game.route_budget == 0 {
+            // бюджета тика нет: кандидатов не собирать, выбор — на следующем
+            // тике (`retreat_picked_at` не трогается), а пока — запасная
+            // точка, чтобы бот не стоял
+            if self.retreat_point.is_none() {
+                self.retreat_point = self.fallback_retreat_point(game, me, &threats);
+            }
+
+            return;
+        }
+
         let candidates = self.retreat_candidates(game, me, &threats);
         let params = self.nav_params(game, me);
         let zones = threat_zones(&threats);
@@ -1263,21 +1303,18 @@ impl BotBrain {
             level: me.level,
         };
         let mut best: Option<(PathPoint, f32)> = None;
-        // бюджет тика кончился раньше, чем оценены все кандидаты
-        let mut starved = false;
 
+        // бюджет есть хотя бы на одного кандидата; оценка без маршрута тоже
+        // его тратит, поэтому выбор ниже фиксируется в любом случае
         for point in rank_retreat_candidates(pos, &threats, candidates) {
-            let cost = match self.nav.route_cost(game, start, point, &params, &zones) {
-                // бюджета нет: стоимость маршрута и эвристика несравнимы
-                // (эвристика бывает отрицательной) — хватит оценённых, иначе
-                // выбор на следующем тике
-                None => {
-                    starved = true;
-                    break;
-                }
-                // маршрута нет — не кандидат
-                Some(None) => continue,
-                Some(Some(cost)) => cost,
+            // бюджет кончился: стоимость маршрута и эвристика несравнимы
+            // (эвристика бывает отрицательной) — хватит оценённых
+            let Some(route) = self.nav.route_cost(game, start, point, &params, &zones) else {
+                break;
+            };
+            // маршрута нет — не кандидат
+            let Some(cost) = route else {
+                continue;
             };
             let allies = game.team.map_or(0, |team| {
                 team.allies_near(point.pos, ALLY_NEAR, self.game_id).count()
@@ -1291,17 +1328,6 @@ impl BotBrain {
             if best.is_none_or(|(_, best_score)| score < best_score) {
                 best = Some((point, score));
             }
-        }
-
-        if starved && best.is_none() {
-            // ни один кандидат не оценён: повтор на следующем тике
-            // (`retreat_picked_at` не трогается), а пока — запасная точка, чтобы
-            // бот не стоял
-            if self.retreat_point.is_none() {
-                self.retreat_point = self.fallback_retreat_point(game, me, &threats);
-            }
-
-            return;
         }
 
         self.retreat_picked_at = self.clock;
@@ -1639,7 +1665,7 @@ impl BotBrain {
             self.weave_point = None;
 
             if self.profile.aggression > BACK_OFF_AGGRESSION {
-                let arrive_radius = bomb_weapon(game).map_or(tile, |(_, radius, _)| 0.5 * radius);
+                let arrive_radius = bomb_weapon(game).map_or(tile, |bomb| 0.5 * bomb.radius);
                 let opts = DriveOpts {
                     arrive_radius,
                     allow_reverse: true,
@@ -1891,9 +1917,14 @@ impl BotBrain {
             pos: me.pos_array(),
             level: me.level,
         };
+        let ramp_ends = game
+            .tank_on_ramp(me.id)
+            .then(|| game.levels?.ramp_at(me_point.pos[0], me_point.pos[1]))
+            .flatten()
+            .map(|ramp| [ramp.from, ramp.to]);
         let mut status = None;
 
-        if self.nav.needs_replan(me_point, true, &params) {
+        if self.nav.needs_replan(me_point, true, ramp_ends, &params) {
             status = Some(
                 self.nav
                     .plan(game, me_point, &params, extra, &mut self.stats),
@@ -2536,12 +2567,13 @@ impl BotBrain {
 
         // бомба вплотную
         if visible && self.wants_bomb(game, me, &contact, distance) {
-            if let Some((w2, _, _)) = bomb_weapon(game)
-                && self.select_weapon(game, w2)
+            if let Some(bomb) = bomb_weapon(game)
+                && self.select_weapon(game, bomb.index)
             {
                 self.press_fire(game);
                 self.evade_until = self.clock + BOMB_EVADE_TIME;
                 self.bomb_pos = Some(me.pos_array());
+                self.bomb_dropped_at = Some(self.clock);
             }
 
             return;
@@ -2562,9 +2594,10 @@ impl BotBrain {
         let tol = fire_tolerance(target_half_length, distance, &self.profile);
         let off = normalize_angle(gun_angle - target_angle).abs();
         // в атаке дальше дистанции боя не стреляет: подъезжает, ствол уже
-        // наведён; в обороне отстреливается на любой дистанции
+        // наведён; в обороне и по свежему обидчику — на любой дистанции
         let in_range = matches!(self.mode, BotMode::Hold | BotMode::Retreat)
-            || distance <= ENGAGE_RANGE_SHARE * self.profile.preferred_range[1];
+            || distance <= engage_range(self.profile.preferred_range)
+            || self.perception.recent_attacker(self.clock, RETALIATE_TIME) == Some(contact.id);
         let aimed = in_range && visible && line == Some(FireLine::Clear) && off < tol;
         // «в молоко»: цель только что скрылась за стеной, ствол смотрит туда
         let panic = in_range
@@ -2590,11 +2623,11 @@ impl BotBrain {
         contact: &Contact,
         distance: f32,
     ) -> bool {
-        let Some((w2, radius, damage)) = bomb_weapon(game) else {
+        let Some(bomb) = bomb_weapon(game) else {
             return false;
         };
 
-        let close_fight = distance < BOMB_RANGE_SHARE * radius;
+        let close_fight = distance < BOMB_RANGE_SHARE * bomb.radius;
         let chaser = self.mode == BotMode::Retreat
             && distance < RETREAT_BOMB_DISTANCE
             && chasing_from_behind(game, me, contact);
@@ -2602,18 +2635,18 @@ impl BotBrain {
         if self.clock < self.evade_until
             || contact.level != me.level
             || !(close_fight || chaser)
-            || game.ammo(me.id, w2) < 1.0
+            || game.ammo(me.id, bomb.index) < 1.0
         {
             return false;
         }
 
-        if game.friendly_fire && ally_in_blast(game, me, radius) {
+        if game.friendly_fire && ally_in_blast(game, me, &bomb) {
             return false;
         }
 
         !game.friendly_fire
             || (self.profile.aggression > BOMB_FF_AGGRESSION
-                && game.tank_health(me.id) > damage + 10.0)
+                && game.tank_health(me.id) > bomb.damage + 10.0)
     }
 
     /// Вне боя — вернуть пушку, если в руках бомба.
@@ -2733,24 +2766,42 @@ fn rank_retreat_candidates(
     candidates
 }
 
-/// Бомба `w2`: индекс, радиус взрыва и урон — из конфига оружия.
-fn bomb_weapon(game: &BotView<'_>) -> Option<(usize, f32, f64)> {
+/// Бомба `w2` по конфигу оружия.
+#[derive(Clone, Copy)]
+struct BombWeapon {
+    index: usize,
+    /// Радиус взрыва, ед.
+    radius: f32,
+    /// Урон в эпицентре.
+    damage: f64,
+    /// Задержка взрыва после закладки, с (`time` оружия — в мс).
+    fuse: f32,
+}
+
+fn bomb_weapon(game: &BotView<'_>) -> Option<BombWeapon> {
     let index = game.weapon_index("w2")?;
     let (_, weapon) = game.weapons.get_index(index)?;
 
-    Some((index, weapon.radius, weapon.damage))
+    Some(BombWeapon {
+        index,
+        radius: weapon.radius,
+        damage: weapon.damage,
+        fuse: weapon.time / 1000.0,
+    })
 }
 
-/// Союзник своего уровня ближе `BOMB_ALLY_CLEARANCE · radius`: своя бомба при
-/// огне по своим ранила бы его. Плита моста взрыв экранирует — чужой уровень
-/// не в счёт.
-fn ally_in_blast(game: &BotView<'_>, me: &SelfState, radius: f32) -> bool {
+/// Союзник своего уровня успеет попасть под взрыв: он ближе радиуса взрыва
+/// плюс путь на своей полной скорости за время до взрыва. Своя бомба при огне
+/// по своим ранила бы его. Плита моста взрыв экранирует — чужой уровень не в
+/// счёт.
+fn ally_in_blast(game: &BotView<'_>, me: &SelfState, bomb: &BombWeapon) -> bool {
     let Some(team) = game.tank_team(me.id) else {
         return false;
     };
-    let reach = BOMB_ALLY_CLEARANCE * radius;
 
     game.tanks.iter().any(|(&id, tank)| {
+        let reach = bomb.radius + game.max_forward_speed(id) * bomb.fuse;
+
         id != me.id
             && tank.team_id == team
             && tank.is_alive()
@@ -2970,6 +3021,20 @@ mod tests {
             assert!(
                 fires_within(&mut fixture, &mut brain, 100),
                 "{mode:?}: в обороне бот отстреливается на любой дистанции"
+            );
+        }
+
+        // свежему обидчику атакующий отвечает и за дистанцией боя, давнему — нет
+        for (attacked_ago, expected) in [(0.0, true), (RETALIATE_TIME + 1.0, false)] {
+            let (mut fixture, mut brain) = setup(BotMode::Engage);
+
+            brain.perception.last_attacker = Some(2);
+            brain.perception.last_attacked_at = Some(brain.clock - attacked_ago);
+
+            assert_eq!(
+                fires_within(&mut fixture, &mut brain, 100),
+                expected,
+                "обидчик ранил бота {attacked_ago} с назад"
             );
         }
     }
@@ -3344,7 +3409,14 @@ mod tests {
 
     #[test]
     fn bomb_spares_an_ally_with_friendly_fire() {
-        for (with_ally, expected) in [(false, true), (true, false)] {
+        // союзник успевает под взрыв ближе 50 + 260 · 0.3 = 128 ед. (радиус
+        // `w2` плюс его путь на полной скорости до взрыва)
+        for (ally, expected) in [
+            (None, true),
+            (Some(25.0), false),
+            (Some(100.0), false),
+            (Some(160.0), true),
+        ] {
             let mut fixture = Fixture::new();
 
             // иначе «драчуну» не хватит здоровья на свою бомбу
@@ -3354,8 +3426,8 @@ mod tests {
             fixture.add_tank(1, 1, 112.0, 112.0, 0);
             fixture.add_tank(2, 2, 112.0 + 30.0, 112.0, 0);
 
-            if with_ally {
-                fixture.add_tank(3, 1, 112.0 - 25.0, 112.0, 0);
+            if let Some(distance) = ally {
+                fixture.add_tank(3, 1, 112.0, 112.0 + distance, 0);
             }
 
             let mut brain = brain_at(1, [112.0, 112.0], 0);
@@ -3365,7 +3437,7 @@ mod tests {
             assert_eq!(
                 drops_bomb(&mut fixture, &mut brain),
                 expected,
-                "союзник рядом: {with_ally}"
+                "союзник в {ally:?} ед."
             );
         }
     }
@@ -3448,6 +3520,67 @@ mod tests {
         assert_eq!(brain.perception.last_attacker, Some(2));
         assert_eq!(brain.perception.last_damage_at, Some(brain.clock));
         assert!(brain.perception.damage_recent > 30.0);
+    }
+
+    #[test]
+    fn landing_damage_blames_no_one() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 112.0, 112.0, 0);
+        fixture.add_tank(2, 2, 300.0, 112.0, 0);
+        fixture.tanks[&2].gun_rotation = std::f32::consts::PI;
+
+        let mut brain = brain_at(1, [112.0, 112.0], 0);
+
+        think(&mut fixture, &mut brain);
+
+        // приземлился на прошлом тике и получил урон от падения
+        brain.fell_at = Some(brain.clock);
+        fixture.tanks[&1].health = 60.0;
+        think(&mut fixture, &mut brain);
+
+        assert_eq!(brain.perception.last_attacker, None);
+        assert_eq!(brain.perception.last_damage_at, Some(brain.clock));
+        assert_ne!(
+            brain.mode,
+            BotMode::Engage,
+            "оборона при атаке без обидчика"
+        );
+    }
+
+    #[test]
+    fn self_inflicted_damage_windows() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 112.0, 112.0, 0);
+
+        let mut brain = brain_at(1, [112.0, 112.0], 0);
+        let fuse = fixture.weapons["w2"].time / 1000.0;
+
+        brain.clock = 10.0;
+
+        // падение: окно `SELF_DAMAGE_WINDOW` после последнего тика в полёте
+        brain.fell_at = Some(10.0 - 0.5 * SELF_DAMAGE_WINDOW);
+        assert!(brain.self_inflicted_damage(&fixture.view()));
+
+        brain.fell_at = Some(10.0 - 2.0 * SELF_DAMAGE_WINDOW);
+        assert!(!brain.self_inflicted_damage(&fixture.view()));
+
+        // своя бомба: только при огне по своим и только сразу после взрыва
+        brain.bomb_dropped_at = Some(10.0 - fuse - 0.5 * SELF_DAMAGE_WINDOW);
+        assert!(
+            !brain.self_inflicted_damage(&fixture.view()),
+            "огонь по своим выключен"
+        );
+
+        fixture.friendly_fire = true;
+        assert!(brain.self_inflicted_damage(&fixture.view()));
+
+        brain.bomb_dropped_at = Some(10.0 - fuse - 2.0 * SELF_DAMAGE_WINDOW);
+        assert!(
+            !brain.self_inflicted_damage(&fixture.view()),
+            "взрыв давно позади"
+        );
     }
 
     #[test]
@@ -3918,38 +4051,78 @@ mod tests {
     }
 
     #[test]
-    fn cover_point_is_hidden_from_threat() {
-        // плоская карта 20×20: периметр и отрезок стены в колонке 10, строки 8..=12
+    fn retreat_pick_does_not_hog_the_route_budget() {
+        // бот заперт в «кармане» (стены в строках и колонках 5 и 11): все
+        // укрытия снаружи, маршрута к ним нет
         let mut grid = vec![vec![0; 20]; 20];
 
         for (y, row) in grid.iter_mut().enumerate() {
             row[0] = 1;
             row[19] = 1;
 
-            if (8..=12).contains(&y) {
-                row[10] = 1;
+            if (5..=11).contains(&y) {
+                row[5] = 1;
+                row[11] = 1;
             }
         }
 
         grid[0] = vec![1; 20];
         grid[19] = vec![1; 20];
 
+        for x in 5..=11 {
+            grid[5][x] = 1;
+            grid[11][x] = 1;
+        }
+
         let mut fixture = Fixture::new();
 
         fixture.nav = Some(NavigationSystem::generate(&grid, &[1], TILE));
-        // бот на виду у угрозы, угроза — по ту сторону стены
-        fixture.add_tank(1, 1, 7.5 * TILE, 3.5 * TILE, 0);
-        fixture.add_tank(2, 2, 13.5 * TILE, 10.5 * TILE, 0);
+        fixture.add_tank(1, 1, 8.5 * TILE, 8.5 * TILE, 0);
         fixture.sync_queries();
 
-        let mut brain = brain_at(1, [7.5 * TILE, 3.5 * TILE], 0);
+        let mut brain = brain_at(1, [8.5 * TILE, 8.5 * TILE], 0);
+        let me = SelfState::read(&fixture.view(), 1).unwrap();
 
-        think(&mut fixture, &mut brain);
+        {
+            let view = fixture.view();
+            let ranked = rank_retreat_candidates(
+                me.pos_array(),
+                &[],
+                brain.retreat_candidates(&view, &me, &[]),
+            );
 
-        let threat = *brain.perception.contact(2).unwrap();
+            assert!(
+                ranked.len() > 2,
+                "бюджета тика не хватит на всех: {ranked:?}"
+            );
+        }
 
-        assert!(threat.visible, "бот стоит на виду");
+        // тики ИИ по 2 поиска маршрута; вход в отход — выбор сразу
+        brain.retreat_picked_at = brain.clock - RETREAT_REPICK;
 
+        let mut spent = 0;
+
+        for _ in 0..10 {
+            fixture.route_budget = 2;
+            brain.clock += 1.0 / 120.0;
+
+            if brain.retreat_pick_due() {
+                brain.pick_retreat_point(&mut fixture.view(), &me);
+            }
+
+            spent += 2 - fixture.route_budget;
+        }
+
+        assert_eq!(spent, 2, "недостижимые кандидаты оцениваются каждый тик");
+        assert_eq!(
+            brain.retreat_point, None,
+            "запасной точки нет: ни дома, ни угроз"
+        );
+    }
+
+    #[test]
+    fn cover_point_is_hidden_from_threat() {
+        let (mut fixture, mut brain, threat) = retreat_setup();
         let mut view = fixture.view();
         let me = SelfState::read(&view, 1).unwrap();
 

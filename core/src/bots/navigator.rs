@@ -35,6 +35,29 @@ pub(crate) struct AvoidMark {
     pub ttl: f32,
 }
 
+/// Причина перестроения маршрута (счётчики `BotStats::replan_causes`, индекс — `as usize`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ReplanCause {
+    /// Новая цель, её сдвиг дальше 3 тайлов или смена уровня (`set_goal`).
+    #[default]
+    GoalMoved,
+    /// Периодическое перестроение к движущейся цели (`MOVING_GOAL_REPLAN`).
+    MovingGoal,
+    /// Бот не на уровне текущего или прошлого участка маршрута.
+    WrongLevel,
+    /// Бот дальше 3 тайлов от отрезка маршрута.
+    OffRoute,
+    /// Нет продвижения к точке `STALL_TIME` (ставится метка `avoid`).
+    Stall,
+    /// Повтор после неудачного поиска (`RETRY_DELAY`, маршрута нет).
+    Retry,
+    /// Запрос мозга (`request_replan`, выход из застревания).
+    Requested,
+}
+
+/// Сколько причин у `ReplanCause`.
+pub(crate) const REPLAN_CAUSES: usize = 7;
+
 /// Результат шага навигатора.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NavStatus {
@@ -98,6 +121,9 @@ pub(crate) struct Navigator {
     /// следующий тик продолжает с этого шага.
     #[serde(default)]
     attempt: u8,
+    /// Причина ближайшего перестроения (для `BotStats::replan_causes`).
+    #[serde(default)]
+    cause: ReplanCause,
 }
 
 impl Navigator {
@@ -115,6 +141,7 @@ impl Navigator {
         if replan {
             self.pending = true;
             self.attempt = 0;
+            self.cause = ReplanCause::GoalMoved;
             return;
         }
 
@@ -145,6 +172,7 @@ impl Navigator {
         if self.goal.is_some() {
             self.pending = true;
             self.attempt = 0;
+            self.cause = ReplanCause::Requested;
         }
     }
 
@@ -192,10 +220,12 @@ impl Navigator {
 
     /// Нужно ли перестроить маршрут. Застревание у точки (дистанция не
     /// улучшалась `STALL_TIME`) ставит метку `avoid` на эту точку.
+    /// `ramp_ends` — уровни концов прогона под ботом (`None` — не на рампе).
     pub(crate) fn needs_replan(
         &mut self,
         me: PathPoint,
         grounded: bool,
+        ramp_ends: Option<[u8; 2]>,
         params: &NavParams,
     ) -> bool {
         if self.goal.is_none() {
@@ -212,10 +242,12 @@ impl Navigator {
 
         // прошлый поиск не удался: повтор после паузы
         if self.legs.is_empty() {
+            self.cause = ReplanCause::Retry;
             return true;
         }
 
         if self.moving_goal && self.route_age > MOVING_GOAL_REPLAN {
+            self.cause = ReplanCause::MovingGoal;
             return true;
         }
 
@@ -223,13 +255,20 @@ impl Navigator {
             return false;
         };
         let (_, prev_level) = self.previous_point();
+        let on_route = |level: u8| level == current.level || level == prev_level;
+        // на прогоне через уровень (`0 → 2`) уровень танка посередине щёлкает
+        // на промежуточный, которого у маршрута нет: сверяются концы прогона
+        let level_ok = on_route(me.level)
+            || ramp_ends.is_some_and(|[from, to]| on_route(from) || on_route(to));
 
         // упал или заехал не туда: уровень не тот, что у маршрута
-        if grounded && me.level != current.level && me.level != prev_level {
+        if grounded && !level_ok {
+            self.cause = ReplanCause::WrongLevel;
             return true;
         }
 
         if point_segment_distance(me.pos, self.segment_start, current.pos) > 3.0 * params.tile {
+            self.cause = ReplanCause::OffRoute;
             return true;
         }
 
@@ -241,6 +280,7 @@ impl Navigator {
                 radius: 1.5 * params.tile,
                 ttl: 8.0,
             });
+            self.cause = ReplanCause::Stall;
 
             return true;
         }
@@ -267,6 +307,8 @@ impl Navigator {
         };
 
         let me = on_ramp_end(game, me);
+        // цель — позиция танка посередине такого же прогона
+        let goal = on_ramp_end(game, goal);
         let zones = self.zones(extra);
         let query = path_query(params, &zones);
         let snap_radius = 4.0 * params.tile;
@@ -281,6 +323,7 @@ impl Navigator {
         loop {
             if *game.route_budget == 0 {
                 self.pending = true;
+                stats.route_waits += 1;
                 return NavStatus::Waiting;
             }
 
@@ -332,6 +375,7 @@ impl Navigator {
                 self.stall_time = 0.0;
                 self.lookahead_timer = 0.0;
                 stats.replans += 1;
+                stats.replan_causes[self.cause as usize] += 1;
 
                 return NavStatus::Moving;
             }
@@ -376,6 +420,7 @@ impl Navigator {
         *game.route_budget -= 1;
 
         let start = on_ramp_end(game, start);
+        let end = on_ramp_end(game, end);
         let nav = game.nav.as_ref()?;
         let zones = self.zones(extra);
         let query = path_query(params, &zones);
@@ -549,10 +594,11 @@ pub(crate) fn flank_zone(level: u8, centroid: [f32; 2], focus: [f32; 2]) -> Pena
     }
 }
 
-/// Старт маршрута на прогоне через уровень (`0 → 2`): посередине уровень
-/// танка щёлкает на промежуточный (`level::update`), а у нав-графа там
-/// уровней только два — концы прогона. Такой старт приводится к ближайшему
-/// концу, иначе из середины рампы не строится ни один маршрут.
+/// Старт или цель маршрута на прогоне через уровень (`0 → 2`): посередине
+/// уровень танка щёлкает на промежуточный (`level::update`), а у нав-графа
+/// там уровней только два — концы прогона. Такая точка приводится к
+/// ближайшему концу, иначе из середины рампы (и к ней) не строится ни один
+/// маршрут.
 fn on_ramp_end(game: &BotView<'_>, me: PathPoint) -> PathPoint {
     let Some(ramp) = game.levels.and_then(|levels| levels.ramp_at(me.pos[0], me.pos[1])) else {
         return me;
@@ -599,6 +645,11 @@ mod tests {
 
     fn point(x: f32, y: f32, level: u8) -> PathPoint {
         PathPoint { pos: [x, y], level }
+    }
+
+    #[test]
+    fn replan_causes_count_matches_enum() {
+        assert_eq!(ReplanCause::Requested as usize + 1, REPLAN_CAUSES);
     }
 
     #[test]
@@ -678,7 +729,7 @@ mod tests {
 
         nav.tick(1.1);
         assert!(
-            nav.needs_replan(me, true, &params()),
+            nav.needs_replan(me, true, None, &params()),
             "после паузы поиск повторяется"
         );
     }
@@ -696,7 +747,7 @@ mod tests {
         nav.segment_start = [112.0, 112.0];
         nav.stall_time = 1.6;
 
-        assert!(nav.needs_replan(point(150.0, 112.0, 0), true, &params()));
+        assert!(nav.needs_replan(point(150.0, 112.0, 0), true, None, &params()));
         assert_eq!(nav.avoid.len(), 1);
         assert_eq!(nav.avoid[0].center, [300.0, 112.0]);
 
@@ -704,6 +755,93 @@ mod tests {
         assert_eq!(nav.avoid.len(), 1);
         nav.tick(0.2);
         assert!(nav.avoid.is_empty(), "метка истекает по ttl");
+    }
+
+    #[test]
+    fn mid_ramp_level_is_not_a_wrong_level() {
+        let mut nav = Navigator::default();
+
+        // подъём по прогону 0 → 2: бот посередине, его уровень — промежуточный 1
+        nav.goal = Some(point(400.0, 112.0, 2));
+        nav.legs = vec![RouteLeg {
+            point: point(400.0, 112.0, 2),
+            kind: LegKind::Ramp { axis: 0, sign: 1 },
+        }];
+        nav.origin = [112.0, 112.0];
+        nav.segment_start = [112.0, 112.0];
+
+        let me = point(250.0, 112.0, 1);
+
+        assert!(
+            !nav.needs_replan(me, true, Some([0, 2]), &params()),
+            "промежуточный уровень на прогоне маршрута — не сход"
+        );
+        assert!(
+            nav.needs_replan(me, true, None, &params()),
+            "вне рампы чужой уровень — сход"
+        );
+        assert_eq!(nav.cause, ReplanCause::WrongLevel);
+    }
+
+    #[test]
+    fn goal_in_the_middle_of_a_through_ramp_is_reachable() {
+        // карта terraces (тайл 32 · 0.4): рампа 8 на запад, прогон 0 → 2,
+        // строка 21, колонки 53..56 (x 678.4..729.6); восточнее — земля
+        let cfg: vimp_engine_core::map::MapConfig =
+            serde_json::from_str(include_str!("../../../tests/core/fixtures/terraces.json"))
+                .unwrap();
+        let tile = 12.8;
+        let mut fixture = Fixture::new();
+
+        fixture.levels = vimp_engine_core::map::MapLevels::build(
+            &cfg.map,
+            &cfg.physics_static,
+            &cfg.levels,
+            &cfg.ramps,
+            tile,
+            None,
+        );
+        fixture.nav = Some(
+            vimp_engine_core::nav::navigation::NavigationSystem::generate_layered(
+                &fixture.levels,
+                tile,
+            ),
+        );
+
+        let params = NavParams {
+            hull_width: 3.6,
+            hull_half_length: 2.4,
+            tile,
+            ledge_cost_scale: 1.0,
+        };
+        let me = point(752.0, 273.0, 0);
+
+        // цель — танк посередине прогона: его уровень — промежуточный 1
+        for x in [709.5, 690.0] {
+            let mut nav = Navigator::default();
+            let mut stats = BotStats::default();
+
+            nav.set_goal(point(x, 274.8, 1), true, tile);
+
+            let mut view = fixture.view();
+
+            assert_eq!(
+                nav.plan(&mut view, me, &params, &[], &mut stats),
+                NavStatus::Moving,
+                "цель посередине прогона на x = {x} недостижима"
+            );
+        }
+
+        // стоимость (без цепочки попыток `plan`): точка в нижней половине
+        // прогона, её ближайший конец — уровень 0
+        let nav = Navigator::default();
+        let mut view = fixture.view();
+
+        assert!(
+            nav.route_cost(&mut view, me, point(709.5, 274.8, 1), &params, &[])
+                .is_some_and(|cost| cost.is_some()),
+            "стоимость до цели посередине прогона не считается"
+        );
     }
 
     #[test]
@@ -765,7 +903,7 @@ mod tests {
         nav.segment_start = [112.0, 112.0];
 
         assert!(
-            !nav.needs_replan(point(150.0, 112.0, 0), true, &params()),
+            !nav.needs_replan(point(150.0, 112.0, 0), true, None, &params()),
             "отклонение меряется от начала срезанного отрезка"
         );
     }

@@ -367,6 +367,15 @@ fn make_core() -> GameCore {
     GameCore::new(&config_json()).unwrap()
 }
 
+/// Ядро тестового конфига с другим сидом ГСЧ (`seed` и в `engine`, и в `game`).
+fn make_core_seeded(seed: u64) -> GameCore {
+    let mut flat = flat_config_json();
+
+    flat["seed"] = serde_json::json!(seed);
+
+    GameCore::new(&serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()).unwrap()
+}
+
 fn steps(core: &mut GameCore, count: usize) {
     for _ in 0..count {
         core.step(DT);
@@ -665,8 +674,13 @@ fn bot_accuracy_is_human_like() {
 }
 
 /// Дуэль двух ботов до первой смерти (не дольше 60 с): победитель или `None`.
-fn duel_winner(a: (f32, f32, f32), b: (f32, f32, f32), skills: [BotSkill; 2]) -> Option<u32> {
-    let mut core = make_core();
+fn duel_winner(
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+    skills: [BotSkill; 2],
+    seed: u64,
+) -> Option<u32> {
+    let mut core = make_core_seeded(seed);
 
     core.load_map(&map_json()).unwrap();
     core.spawn_scripted_actor(1, "m1", 1, a.0, a.1, a.2).unwrap();
@@ -691,6 +705,12 @@ fn duel_winner(a: (f32, f32, f32), b: (f32, f32, f32), skills: [BotSkill; 2]) ->
     None
 }
 
+/// Сиды дуэлей `hard_bots_beat_easy_bots_more_often`.
+const DUEL_SEEDS: [u64; 3] = [42, 7, 2026];
+
+/// Минимальная доля побед `hard` среди завершившихся дуэлей (замер: 32 из 36).
+const HARD_WIN_SHARE: f32 = 0.75;
+
 #[test]
 fn hard_bots_beat_easy_bots_more_often() {
     let layouts = [
@@ -701,26 +721,41 @@ fn hard_bots_beat_easy_bots_more_often() {
         ((120.0, 120.0, 45.0), (500.0, 500.0, 225.0)),
         ((200.0, 300.0, 90.0), (450.0, 250.0, 0.0)),
     ];
+    let mut decided = 0;
     let mut hard_wins = 0;
     let mut results = Vec::new();
 
-    for (i, (a, b)) in layouts.into_iter().enumerate() {
-        // стороны меняются: `hard` стартует то с `a`, то с `b`
-        let (skills, hard_id) = if i % 2 == 0 {
-            ([BotSkill::Hard, BotSkill::Easy], 1)
-        } else {
-            ([BotSkill::Easy, BotSkill::Hard], 2)
-        };
-        let winner = duel_winner(a, b, skills);
+    // каждая расстановка — с обеих сторон и на нескольких сидах, чтобы итог
+    // не решали одна-две партии и сторона старта
+    for seed in DUEL_SEEDS {
+        for (a, b) in layouts {
+            for (skills, hard_id) in [
+                ([BotSkill::Hard, BotSkill::Easy], 1),
+                ([BotSkill::Easy, BotSkill::Hard], 2),
+            ] {
+                let winner = duel_winner(a, b, skills, seed);
 
-        if winner == Some(hard_id) {
-            hard_wins += 1;
+                if winner.is_some() {
+                    decided += 1;
+                }
+
+                if winner == Some(hard_id) {
+                    hard_wins += 1;
+                }
+
+                results.push((seed, hard_id, winner));
+            }
         }
-
-        results.push((hard_id, winner));
     }
 
-    assert!(hard_wins >= 4, "hard выиграл {hard_wins} из 6: {results:?}");
+    assert!(
+        decided >= 29,
+        "завершились {decided} дуэлей из 36: {results:?}"
+    );
+    assert!(
+        hard_wins as f32 >= HARD_WIN_SHARE * decided as f32,
+        "hard выиграл {hard_wins} из {decided}: {results:?}"
+    );
 }
 
 #[test]
@@ -4592,6 +4627,27 @@ fn assert_use_levels(map: &'static str) {
     assert!(came_down, "{map}: ни один бот не спустился на уровень 0");
 }
 
+/// Имена причин перестроения в порядке `ReplanCause` (сам enum `pub(crate)`).
+const REPLAN_CAUSE_NAMES: [&str; 7] = [
+    "goal",
+    "moving",
+    "level",
+    "off-route",
+    "stall",
+    "retry",
+    "requested",
+];
+
+/// Причины перестроений бота строкой: `"goal 40, moving 55, …"`.
+fn causes(stats: &BotStats) -> String {
+    REPLAN_CAUSE_NAMES
+        .iter()
+        .zip(stats.replan_causes)
+        .map(|(name, count)| format!("{name} {count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn assert_replans_bounded(map: &'static str) {
     let log = match_on(map);
     let minutes = log.seconds / 60.0;
@@ -4602,8 +4658,9 @@ fn assert_replans_bounded(map: &'static str) {
 
         assert!(
             replans as f32 <= 90.0 * minutes,
-            "{map}: бот {id} перестроил маршрут {replans} раз за {} с",
-            log.seconds
+            "{map}: бот {id} перестроил маршрут {replans} раз за {} с ({})",
+            log.seconds,
+            causes(&log.stats[log.index(id)])
         );
         assert!(
             (failures as f32) / (replans.max(1) as f32) < 0.1,
@@ -4721,6 +4778,39 @@ fn bot_dump_restores_identical_simulation() {
     }
 }
 
+/// Ожидания общего бюджета поисков маршрута (`route_waits`) по порядку спавна.
+fn route_waits_downtown(per_team: usize, seconds: usize) -> Vec<u32> {
+    let map = downtown_map_json();
+    let mut core = make_core();
+
+    core.load_map(map).unwrap();
+
+    let bots = spawn_teams(&mut core, map, per_team, true);
+
+    steps(&mut core, seconds * 120);
+
+    bots.iter()
+        .map(|&(id, _)| core.state().sim.bot_debug(id).unwrap().stats.route_waits)
+        .collect()
+}
+
+#[test]
+fn route_budget_is_shared_fairly() {
+    // 5×5 на downtown, 30 с. Порядок обхода без очереди — порядок спавна:
+    // тогда вторая половина ждала вдвое дольше первой (65 против 32)
+    const K: f32 = 1.5;
+
+    let waits = route_waits_downtown(5, 30);
+    let (first, last) = waits.split_at(waits.len() / 2);
+    let first: u32 = first.iter().sum();
+    let last: u32 = last.iter().sum();
+
+    assert!(
+        last as f32 <= K * first.max(1) as f32,
+        "последние по порядку ждут бюджет дольше первых: {last} против {first}, по ботам {waits:?}"
+    );
+}
+
 #[test]
 fn old_bot_dump_still_loads() {
     // мозг в форме `BotBrain` до нового ИИ (bots::controller, HEAD 32e229f)
@@ -4768,6 +4858,114 @@ fn mean_step_micros(with_ai: bool) -> f64 {
     }
 
     total.as_secs_f64() * 1.0e6 / count as f64
+}
+
+/// Бот против неподвижного танка человека на `distance` ед. (не дольше 60 с):
+/// (время убийства в секундах или `None`, выстрелы, попадания).
+fn kill_run(skill: BotSkill, distance: f32, seed: u64) -> (Option<f32>, u32, u32) {
+    let mut core = make_core_seeded(seed);
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 100.0, 300.0, 0.0)
+        .unwrap();
+    core.spawn_actor(2, "m1", 2, 100.0 + distance, 300.0, 180.0)
+        .unwrap();
+    core.state_mut().sim.debug_set_bot_skill(1, skill);
+
+    let mut health = 100.0;
+    let mut hits = 0;
+    let mut kill_time = None;
+
+    // порции по 0.1 с: попадание — `PanelSet health` меньше прошлого значения
+    for portion in 1..=600 {
+        steps(&mut core, 12);
+
+        for event in events(&mut core) {
+            match event {
+                CoreEvent::PanelSet {
+                    id: 2,
+                    field,
+                    value,
+                } if field == "health" => {
+                    if value < health {
+                        hits += 1;
+                    }
+
+                    health = value;
+                }
+                CoreEvent::Death { victim: 2, .. } => kill_time = Some(portion as f32 * 0.1),
+                _ => {}
+            }
+        }
+
+        if kill_time.is_some() {
+            break;
+        }
+    }
+
+    let shots = core.state().sim.bot_debug(1).unwrap().stats.shots_fired;
+
+    (kill_time, shots, hits)
+}
+
+/// Сила пресетов для подбора `coreParams.bots.presets`: бот против неподвижного
+/// танка человека на 200/300/450 ед., 8 сидов на дистанцию, не дольше 60 с.
+/// `cargo test -q -p vimp-tanks-core --test sim bot_skill_report -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn bot_skill_report() {
+    let skills = [
+        ("easy", BotSkill::Easy),
+        ("normal", BotSkill::Normal),
+        ("hard", BotSkill::Hard),
+    ];
+
+    for (name, skill) in skills {
+        let mut kills = 0;
+        let mut kill_time = 0.0;
+        let mut shots = 0;
+        let mut hits = 0;
+
+        for distance in [200.0, 300.0, 450.0] {
+            for seed in 1..=8 {
+                let (time, run_shots, run_hits) = kill_run(skill, distance, seed);
+
+                if let Some(time) = time {
+                    kills += 1;
+                    kill_time += time;
+                }
+
+                shots += run_shots;
+                hits += run_hits;
+            }
+        }
+
+        println!(
+            "{name}: убийств {kills} из 24, среднее время {:.1} с, меткость {:.2} ({hits}/{shots})",
+            kill_time / kills.max(1) as f32,
+            hits as f32 / shots.max(1) as f32
+        );
+    }
+}
+
+/// Причины перестроений по ботам (матчи 4×4 по 120 с, как у `assert_replans_bounded`).
+/// `cargo test -q -p vimp-tanks-core --test sim replan_causes_report -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn replan_causes_report() {
+    for map in ["downtown", "terraces", "overpass"] {
+        let log = match_on(map);
+
+        for &(id, team) in &log.bots {
+            let stats = &log.stats[log.index(id)];
+
+            println!(
+                "{map} бот {id} (команда {team}): всего {}; {}",
+                stats.replans,
+                causes(stats)
+            );
+        }
+    }
 }
 
 /// Замер вклада ИИ (этап 7.3): `cargo test --release -q -p vimp-tanks-core

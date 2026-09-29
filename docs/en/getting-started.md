@@ -243,6 +243,19 @@ CI (`.github/workflows/test.yml`) runs two jobs: `lint` (eslint only);
 + both Vitest projects — `vimp-engine` is installed from the npm registry
 here, not a workspace symlink).
 
+Report-only cargo tests are marked `#[ignore]` and assert nothing — they
+print numbers for tuning:
+
+- `bench_bot_ai_downtown` — the bot AI's share of a core step:
+  `cargo test --release -q -p vimp-tanks-core --test sim bench_bot_ai_downtown -- --ignored --nocapture`;
+- `bot_skill_report` — preset strength (kills, time to kill, accuracy of a
+  bot against a still tank at 200/300/450 units):
+  `cargo test -q -p vimp-tanks-core --test sim bot_skill_report -- --ignored --nocapture`.
+  After editing `coreParams.bots.presets`, run it before and after the edit;
+- `replan_causes_report` — route re-plans per bot and per cause in the
+  4×4 matches of `bot_replans_are_bounded_*`:
+  `cargo test -q -p vimp-tanks-core --test sim replan_causes_report -- --ignored --nocapture`.
+
 ## Debug scenarios (headless match)
 
 The engine ships a headless runner (`vimp-sim`) that closes the loop

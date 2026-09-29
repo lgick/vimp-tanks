@@ -1204,13 +1204,14 @@ fn default_seed() -> u64 {
 }
 
 #[cfg(test)]
-mod validate_tests {
+mod preset_tests {
     use super::*;
 
     #[test]
     fn bot_rules_default_matches_game_js() {
-        // фикстура — копия coreParams.bots, её сверяет с game.js tests/core/fixtures.test.js.
-        // `skill` не сверяется: game.js выбирает сложность, дефолт ядра — `normal`
+        // фикстура — копия `variance` и `presets` из coreParams.bots, её сверяет
+        // с game.js tests/core/fixtures.test.js. `skill` в ней нет: game.js
+        // выбирает сложность, дефолт ядра — `normal`
         let rules: BotRules =
             serde_json::from_str(include_str!("../../tests/core/fixtures/bots.json")).unwrap();
         let defaults = BotRules::default();
@@ -1218,6 +1219,11 @@ mod validate_tests {
         assert_eq!(rules.presets, defaults.presets);
         assert_eq!(rules.variance, defaults.variance);
     }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
 
     fn weapon() -> WeaponConfig {
         WeaponConfig {

@@ -17,12 +17,14 @@ describe('tests/core/fixtures/*.json', () => {
   });
 
   // пресеты ботов продублированы в core/src/config.rs (default_bot_presets):
-  // Rust-тест bot_rules_default_matches_game_js сверяет их с этой фикстурой
-  it('bots.json совпадает с coreParams.bots', () => {
+  // Rust-тест bot_rules_default_matches_game_js сверяет их с этой фикстурой.
+  // `skill` в фикстуре нет: сложность выбирают в game.js, пресеты от неё не зависят
+  it('bots.json совпадает с пресетами coreParams.bots', () => {
     const fixture = JSON.parse(
       readFileSync(new URL('./fixtures/bots.json', import.meta.url), 'utf8'),
     );
+    const { variance, presets } = gameConfig.coreParams.bots;
 
-    expect(fixture).toEqual(JSON.parse(JSON.stringify(gameConfig.coreParams.bots)));
+    expect(fixture).toEqual(JSON.parse(JSON.stringify({ variance, presets })));
   });
 });

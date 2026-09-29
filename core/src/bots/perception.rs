@@ -241,6 +241,10 @@ pub(crate) struct Perception {
     pub damage_recent: f32,
     pub last_damage_at: Option<f32>,
     pub last_attacker: Option<u32>,
+    /// Когда `last_attacker` назначен последний раз. Урон от себя меняет
+    /// `last_damage_at`, но не это время: старый обидчик от него не «свежеет».
+    #[serde(default)]
+    pub last_attacked_at: Option<f32>,
 }
 
 impl Perception {
@@ -354,6 +358,12 @@ impl Perception {
         self.update_damage(game, me, clock, dt, self_inflicted);
     }
 
+    /// Обидчик, ранивший бота не дольше `window` с назад.
+    pub(crate) fn recent_attacker(&self, clock: f32, window: f32) -> Option<u32> {
+        self.last_attacker
+            .filter(|_| self.last_attacked_at.is_some_and(|at| clock - at < window))
+    }
+
     /// Вставка или замена контакта с сохранением порядка по `id`.
     fn put(&mut self, index: Option<usize>, contact: Contact) {
         match index {
@@ -382,21 +392,22 @@ impl Perception {
         if health < self.last_health {
             self.damage_recent += (self.last_health - health) as f32;
             self.last_damage_at = Some(clock);
-        }
 
-        if health < self.last_health && !self_inflicted {
-            let my_pos = me.pos_array();
-            let nearest = |pick: &dyn Fn(&Contact) -> bool| {
-                self.contacts
-                    .iter()
-                    .filter(|c| pick(c))
-                    .min_by(|a, b| dist_sq(my_pos, a.pos).total_cmp(&dist_sq(my_pos, b.pos)))
-                    .map(|c| c.id)
-            };
+            if !self_inflicted {
+                let my_pos = me.pos_array();
+                let nearest = |pick: &dyn Fn(&Contact) -> bool| {
+                    self.contacts
+                        .iter()
+                        .filter(|c| pick(c))
+                        .min_by(|a, b| dist_sq(my_pos, a.pos).total_cmp(&dist_sq(my_pos, b.pos)))
+                        .map(|c| c.id)
+                };
 
-            self.last_attacker = nearest(&|c| c.visible && c.aiming_at_me)
-                .or_else(|| nearest(&|c| c.visible))
-                .or_else(|| nearest(&|_| true));
+                self.last_attacker = nearest(&|c| c.visible && c.aiming_at_me)
+                    .or_else(|| nearest(&|c| c.visible))
+                    .or_else(|| nearest(&|_| true));
+                self.last_attacked_at = Some(clock);
+            }
         }
 
         // и урон, и респаун (здоровье выросло) — просто запомнить
@@ -466,10 +477,22 @@ mod tests {
         clock: f32,
         dt: f32,
     ) {
+        perceive_damage(fixture, perception, profile, clock, dt, false);
+    }
+
+    /// То же с признаком урона от себя.
+    fn perceive_damage(
+        fixture: &mut Fixture,
+        perception: &mut Perception,
+        profile: &BotProfile,
+        clock: f32,
+        dt: f32,
+        self_inflicted: bool,
+    ) {
         let mut view = fixture.view();
         let me = SelfState::read(&view, 1).unwrap();
 
-        perception.update(&mut view, &me, profile, clock, dt, false);
+        perception.update(&mut view, &me, profile, clock, dt, self_inflicted);
     }
 
     #[test]
@@ -487,15 +510,39 @@ mod tests {
 
         // урон от падения или своей бомбы: учтён, но врага не назначает
         fixture.tanks[&1].health = 60.0;
-
-        let mut view = fixture.view();
-        let me = SelfState::read(&view, 1).unwrap();
-
-        perception.update(&mut view, &me, &profile, 0.2, 0.1, true);
+        perceive_damage(&mut fixture, &mut perception, &profile, 0.2, 0.1, true);
 
         assert_eq!(perception.last_attacker, None);
+        assert_eq!(perception.last_attacked_at, None);
         assert_eq!(perception.last_damage_at, Some(0.2));
         assert!(perception.damage_recent > 30.0);
+    }
+
+    #[test]
+    fn self_inflicted_damage_does_not_refresh_the_attacker() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 112.0, 112.0, 0);
+        fixture.add_tank(2, 2, 300.0, 112.0, 0);
+
+        let profile = BotProfile::default();
+        let mut perception = Perception::default();
+
+        perceive(&mut fixture, &mut perception, &profile, 0.1, 0.1);
+
+        // враг ранил бота — он обидчик
+        fixture.tanks[&1].health = 60.0;
+        perceive(&mut fixture, &mut perception, &profile, 0.2, 0.1);
+
+        assert_eq!(perception.recent_attacker(0.2, 2.0), Some(2));
+
+        // через 10 с — урон от себя: обидчик прежний, но уже не свежий
+        fixture.tanks[&1].health = 30.0;
+        perceive_damage(&mut fixture, &mut perception, &profile, 10.2, 0.1, true);
+
+        assert_eq!(perception.last_damage_at, Some(10.2));
+        assert_eq!(perception.last_attacker, Some(2));
+        assert_eq!(perception.recent_attacker(10.2, 2.0), None);
     }
 
     #[test]

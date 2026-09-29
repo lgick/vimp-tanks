@@ -13,8 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   worse and fire shorter, rarer bursts (`coreParams.bots.presets`).
 - Bots no longer open fire from across the map: an attacking bot shoots only
   within its combat distance (`preferredRange` max × 1.3) and drives closer
-  first, while one in an ambush or retreating still returns fire at any
-  distance; the presets' `preferredRange` is shorter.
+  first, while one in an ambush or retreating, or one just hit by an enemy
+  (within 3 s), still returns fire at any distance; the presets'
+  `preferredRange` is shorter.
+- The shipped config plays bots on the `easy` preset
+  (`coreParams.bots.skill`); the core's default without the section stays
+  `normal`.
+
+### Fixed
+
+- Bots on multi-level maps no longer keep re-planning their route while
+  driving up or down a ramp that spans two levels.
+- A bot chasing a target that is half-way up or down a ramp spanning two
+  levels no longer loses its route to it (the search failed, and the bot
+  stood waiting a second before trying again), and no longer takes such a
+  target for unreachable when choosing whom to attack.
+- With many bots on the map, the bots updated last no longer wait
+  noticeably longer than the others for their routes.
+- A retreating bot no longer stalls itself and the bots after it by
+  re-costing unreachable retreat points on every tick: a pick is settled for
+  a second once any candidate is costed.
+- Damage from a bot's own fall or bomb no longer makes an earlier attacker
+  "fresh" again, and the bomb's self-damage window now ends shortly after its
+  blast instead of a second later, so an enemy hitting the bot right after it
+  is blamed.
+- With friendly fire on, a bot no longer drops a bomb while a teammate could
+  drive into the blast before it goes off (before, only a teammate within
+  one and a half blast radii counted).
 
 ## [0.22.13] - 2026-09-29
 

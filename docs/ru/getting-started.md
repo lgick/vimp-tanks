@@ -244,6 +244,19 @@ eslint); `tanks` (`cargo test -p vimp-tanks-core` + `core:build:web` +
 `core:build:node` + оба Vitest-проекта — `vimp-engine` здесь ставится из
 npm registry, а не из workspace-симлинка).
 
+Отчётные cargo-тесты помечены `#[ignore]` и ничего не проверяют — они
+печатают числа для настройки:
+
+- `bench_bot_ai_downtown` — вклад ИИ ботов в шаг ядра:
+  `cargo test --release -q -p vimp-tanks-core --test sim bench_bot_ai_downtown -- --ignored --nocapture`;
+- `bot_skill_report` — сила пресетов (убийства, время убийства, меткость
+  бота против неподвижного танка на 200/300/450 ед.):
+  `cargo test -q -p vimp-tanks-core --test sim bot_skill_report -- --ignored --nocapture`.
+  После правки `coreParams.bots.presets` отчёт стоит прогнать до и после;
+- `replan_causes_report` — перестроения маршрута по ботам и причинам в
+  матчах 4×4 из `bot_replans_are_bounded_*`:
+  `cargo test -q -p vimp-tanks-core --test sim replan_causes_report -- --ignored --nocapture`.
+
 ## Отладочные сценарии (headless-матч)
 
 В движке есть headless-раннер (`vimp-sim`): он замыкает контур

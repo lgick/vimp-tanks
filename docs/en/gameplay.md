@@ -414,7 +414,8 @@ A bot aims and shoots like a player, with the same keys:
   (`burstPause`); it fires on the move too, at a visible target in its line
   of fire, but when attacking only within its combat distance
   (`preferredRange` max × 1.3): a target seen farther away it drives up to
-  first; in an ambush or on a retreat it returns fire at any distance;
+  first; in an ambush or on a retreat, and at an enemy that has hit it
+  within the last 3 seconds, it returns fire at any distance;
   sometimes it fires one blind shot at a target that has just
   ducked behind a wall (`panicFire`);
 - the turret turns at most `maxGunAngle` from the hull: a target beyond it
@@ -433,8 +434,9 @@ not shoot a crate. In the heat of a fight it may drive off a bridge edge
 The bomb (`w2`, dropped under itself) is used only point-blank: the enemy
 closer than 0.8 of the blast radius, on the bot's level, and only if its
 own bomb cannot hurt it (`friendlyFire` off) — with `friendlyFire` on, only
-a very aggressive bot with health to spare, and never with a teammate on
-its level within one and a half blast radii. It then drives away from the
+a very aggressive bot with health to spare, and never while a teammate on
+its level could drive into the blast before the bomb goes off. It then
+drives away from the
 bomb for a second and takes the gun back. With no gun ammo left (and no
 enemy within the bomb's reach) a bot retreats.
 

@@ -319,6 +319,9 @@ pub struct TanksSim {
     /// Часы ИИ и таймер пересборки досок, с (после `deserialize` — с нуля).
     ai_clock: f32,
     team_timer: f32,
+    /// Очередь бюджета маршрутов: с какого бота начинается следующий тик ИИ.
+    /// Едет в дамп, иначе восстановленный хост пошёл бы с другого бота.
+    ai_turn: u32,
 
     shots: IndexMap<u32, Bomb>,
     shots_at_time: Vec<Vec<u32>>,
@@ -408,6 +411,7 @@ impl GameSim<TanksGame> for TanksSim {
             team_boards: IndexMap::new(),
             ai_clock: 0.0,
             team_timer: 0.0,
+            ai_turn: 0,
             shots: IndexMap::new(),
             shots_at_time: vec![Vec::new(); max_shot_time_in_steps],
             current_shot_id: 0,
@@ -805,35 +809,47 @@ impl GameSim<TanksGame> for TanksSim {
             self.rebuild_team_boards(ctx.world);
         }
 
-        let ids: Vec<u32> = self.bots.keys().copied().collect();
+        let mut ids: Vec<u32> = self.bots.keys().copied().collect();
+        // очередь бюджета маршрутов: каждый тик первым ходит следующий бот, иначе
+        // первые по порядку всегда забирали бы весь бюджет
+        let first = self.ai_turn as usize % ids.len();
+
+        ids.rotate_left(first);
+        self.ai_turn = self.ai_turn.wrapping_add(1);
+
         let mut route_budget = BOT_ROUTE_BUDGET_PER_TICK;
+        // мозги вынимаются целиком: порядок в `self.bots` не меняется, а
+        // `BotView` мозгов не содержит
+        let mut bots = std::mem::take(&mut self.bots);
 
         for id in ids {
-            if let Some(mut brain) = self.bots.shift_remove(&id) {
-                let team = self
-                    .tanks
-                    .get(&id)
-                    .and_then(|tank| self.team_boards.get(&tank.team_id));
-                let mut view = crate::tanks::BotView {
-                    world: &mut *ctx.world,
-                    nav: ctx.nav,
-                    spatial: &*ctx.spatial,
-                    rng: &mut *ctx.rng,
-                    tanks: &mut self.tanks,
-                    key_bits: &self.key_bits,
-                    weapons: &self.weapons,
-                    levels: self.levels.as_ref(),
-                    friendly_fire: self.friendly_fire,
-                    models: &self.models,
-                    level_rules: &self.level_rules,
-                    route_budget: &mut route_budget,
-                    team,
-                };
+            let Some(brain) = bots.get_mut(&id) else {
+                continue;
+            };
+            let team = self
+                .tanks
+                .get(&id)
+                .and_then(|tank| self.team_boards.get(&tank.team_id));
+            let mut view = crate::tanks::BotView {
+                world: &mut *ctx.world,
+                nav: ctx.nav,
+                spatial: &*ctx.spatial,
+                rng: &mut *ctx.rng,
+                tanks: &mut self.tanks,
+                key_bits: &self.key_bits,
+                weapons: &self.weapons,
+                levels: self.levels.as_ref(),
+                friendly_fire: self.friendly_fire,
+                models: &self.models,
+                level_rules: &self.level_rules,
+                route_budget: &mut route_budget,
+                team,
+            };
 
-                brain.update(&mut view, dt);
-                self.bots.insert(id, brain);
-            }
+            brain.update(&mut view, dt);
         }
+
+        self.bots = bots;
 
         self.rebuild_spatial_grid(ctx.world, ctx.spatial);
     }
@@ -968,12 +984,11 @@ impl GameSim<TanksGame> for TanksSim {
     fn clear(&mut self) {
         self.tanks.clear();
         self.bots.clear();
+        self.ai_turn = 0;
         // ИИ начинается заново вместе с мозгами: доски и их часы — тоже. Иначе
         // f32-часы копились бы всё время жизни хоста и теряли точность
         // (через ≈58 ч шаг 1/120 с перестаёт их двигать)
-        self.team_boards.clear();
-        self.ai_clock = 0.0;
-        self.team_timer = 0.0;
+        self.reset_team_boards();
 
         self.new_tracers.clear();
         self.new_bombs.clear();
@@ -1012,6 +1027,7 @@ impl GameSim<TanksGame> for TanksSim {
             current_shot_id: self.current_shot_id,
             current_step_tick: self.current_step_tick,
             props: &self.props,
+            ai_turn: self.ai_turn,
         };
 
         serde_json::to_value(dump).unwrap_or(serde_json::Value::Null)
@@ -1029,11 +1045,9 @@ impl GameSim<TanksGame> for TanksSim {
         // пропы — из дампа: `rebuild_map_derived` их не пересобирает, иначе
         // разрушенное на прошлом хосте восстановилось бы
         self.props = dump.props;
+        self.ai_turn = dump.ai_turn;
         self.pre_step_vel.clear();
-        // доски команд производные: пересоберутся на первом тике ИИ
-        self.team_boards.clear();
-        self.ai_clock = 0.0;
-        self.team_timer = 0.0;
+        self.reset_team_boards();
 
         self.new_tracers.clear();
         self.new_bombs.clear();
@@ -1091,6 +1105,14 @@ impl TanksSim {
         let team = self.tanks.get(&id)?.team_id;
 
         self.team_boards.get(&team).map(|board| board.role(id))
+    }
+
+    /// Сброс досок команд и их часов: доски производные и пересоберутся на
+    /// первом тике ИИ.
+    fn reset_team_boards(&mut self) {
+        self.team_boards.clear();
+        self.ai_clock = 0.0;
+        self.team_timer = 0.0;
     }
 
     /// Пересборка досок команд: живые танки с телом (и люди, и боты), их
@@ -2232,6 +2254,7 @@ struct TanksDump<'a> {
     current_shot_id: u32,
     current_step_tick: usize,
     props: &'a Props,
+    ai_turn: u32,
 }
 
 #[derive(Deserialize)]
@@ -2244,4 +2267,6 @@ struct TanksDumpOwned {
     current_step_tick: usize,
     #[serde(default)]
     props: Props,
+    #[serde(default)]
+    ai_turn: u32,
 }
