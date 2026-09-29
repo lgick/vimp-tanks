@@ -975,6 +975,12 @@ impl GameSim<TanksGame> for TanksSim {
     fn clear(&mut self) {
         self.tanks.clear();
         self.bots.clear();
+        // ИИ начинается заново вместе с мозгами: доски и их часы — тоже. Иначе
+        // f32-часы копились бы всё время жизни хоста и теряли точность
+        // (через ≈58 ч шаг 1/120 с перестаёт их двигать)
+        self.team_boards.clear();
+        self.ai_clock = 0.0;
+        self.team_timer = 0.0;
 
         self.new_tracers.clear();
         self.new_bombs.clear();

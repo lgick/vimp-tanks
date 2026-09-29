@@ -430,7 +430,8 @@ not shoot a crate. In the heat of a fight it may drive off a bridge edge
 The bomb (`w2`, dropped under itself) is used only point-blank: the enemy
 closer than 0.8 of the blast radius, on the bot's level, and only if its
 own bomb cannot hurt it (`friendlyFire` off) — with `friendlyFire` on, only
-a very aggressive bot with health to spare. It then drives away from the
+a very aggressive bot with health to spare, and never with a teammate on
+its level within one and a half blast radii. It then drives away from the
 bomb for a second and takes the gun back. With no gun ammo left (and no
 enemy within the bomb's reach) a bot retreats.
 
@@ -454,7 +455,8 @@ enemy within the bomb's reach) a bot retreats.
   it move), steps aside from a teammate nearby, and in a fight weaves away
   from a teammate closer than 120 units.
 - When a visible enemy wounds it while it is driving around, chasing or
-  regrouping, it turns on the attacker at once.
+  regrouping, it turns on the attacker at once. Damage from its own fall or
+  its own bomb is not blamed on an enemy.
 
 ### Retreat and defence
 

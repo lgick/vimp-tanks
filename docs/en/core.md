@@ -1129,7 +1129,10 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   on each axis, with zero speed. A dead enemy's contact is dropped at once.
   The same pass tracks damage: `damage_recent` (decays with a 3 s time
   constant), `last_damage_at` and `last_attacker` (the nearest visible enemy
-  aiming at the bot, else the nearest visible, else the nearest). The RNG
+  aiming at the bot, else the nearest visible, else the nearest).
+  Self-inflicted damage — within 0.3 s of a fall, or from the bot's own bomb
+  with friendly fire on — counts towards `damage_recent`/`last_damage_at`
+  but leaves `last_attacker` as it was. The RNG
   is drawn only on a radar tick, contact by contact in id order.
 - `FireLine` — what stands in the line of fire: `OutOfRange` (farther than
   the `w1` range), `Wall`, `OutOfReach` and `Embankment` (the level rules
@@ -1149,8 +1152,9 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   lower id), kept unless it died, or it has been held 3 s and the new one
   is at least 1.3 times better; `roles` — every 2 s: health below 50 →
   `Support`, with three bots or more the most aggressive of the rest →
-  `Flanker` (ties go to the lower id), others `Assault`. Debug:
-  `TanksSim::team_focus()`/`team_role()`.
+  `Flanker` (ties go to the lower id), others `Assault`. The boards and
+  their clock are reset together with the bots on a map change (`clear`).
+  Debug: `TanksSim::team_focus()`/`team_role()`.
 - `bots/brain.rs` — the `BotMode` state machine, switched on the decision
   tick. All transitions live in the pure `next_mode(&ModeInputs)`; rules in
   priority order, the first that fires wins, and a mode is held at least
@@ -1179,7 +1183,8 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   to the bot than to the team centre. "Nothing to fight with": no `w1` ammo
   and no bomb or no visible enemy within its radius. On top of the table,
   fresh damage from a visible attacker in `Roam`/`Hunt`/`Regroup` switches
-  to `Engage` at once and flips the weaving side.
+  to `Engage` at once and flips the weaving side (self-inflicted damage
+  does not).
 
   `Roam` drives to random walkable points; `Hunt` follows the route to the
   target's contact (for an unseen one — its radar position) with the
@@ -1222,9 +1227,11 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   of the point excluded by rule 6) are dropped. The 4 best by
   `d(bot, p) − 1.5 · min d(threat, p)` are costed by `find_route` with
   threat penalty zones (radius 220, 4 per unit) and a ledge price of 0.3
-  (one route budget unit each; without budget the heuristic stands in),
-  `− 200` per teammate within 250 of the point, `+ 300` if a threat sees
-  it. Fallback: `home`, then 6 tiles away from the nearest threat. The
+  (one route budget unit each), `− 200` per teammate within 250 of the
+  point, `+ 300` if a threat sees it. Candidates are compared by route cost
+  only: if the tick's budget runs out before at least one is costed, the
+  pick is repeated on the next tick while the bot drives to the fallback
+  point. Fallback: `home`, then 6 tiles away from the nearest threat. The
   route avoids the threat zones; with a visible threat more than 2 rad off
   the retreat direction the bot reverses up to 8 tiles, facing it. The
   turret holds the nearest visible threat and fires back with the aim error
@@ -1278,7 +1285,8 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   (`w2`: `radius` and `damage` from the weapon config) is dropped when a
   visible enemy on the bot's level is closer than `0.8 · radius`, there is
   bomb ammo, the previous bomb's evade is over and `friendlyFire` is off
-  (on: `aggression` > 0.8 and health > `damage` + 10). Weapons are switched
+  (on: `aggression` > 0.8 and health > `damage` + 10, and no teammate on
+  the bot's level within `1.5 · radius`). Weapons are switched
   with `nextWeapon`, at most one press per 0.15 s.
 - The line of sight, the weaving point and the obstacle
   avoidance rays all run on the bot's own level

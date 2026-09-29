@@ -35,8 +35,10 @@ a newer `vimp-engine` / `vimp-engine-core` when you want something it added.
 A capability the game cannot do without is then named in `manifest.requires`
 (`scripts/build-game-manifest.js`), and only an engine too old to
 provide that name refuses the package. This release follows
-`vimp-engine-core` 0.12.0 / `vimp-engine` 0.31.0 (N-level maps) and names
-`map.levelsN` in `manifest.requires`.
+`vimp-engine-core` 0.23.1 / `vimp-engine` 0.35.6 (hull-aware bot routes,
+`find_route`); the crate is compiled into the WASM core, so it adds no name to
+`manifest.requires`. `map.levelsN` there dates from `vimp-engine-core` 0.12.0 /
+`vimp-engine` 0.31.0 (N-level maps).
 
 Bumping the crate version in `core/Cargo.toml` is not enough on its own —
 the WASM artifacts under `core/pkg-web/` and `core/pkg-node/` are built
@@ -264,7 +266,8 @@ the snapshot schema or the panel. The scenarios:
 | --- | --- |
 | `movement.json` | driving, turning, turret; prediction drift with tight thresholds |
 | `combat.json` | two players, both weapons, explosions, a map with dynamic bodies (`c1`) |
-| `round.json` | bots, friendly fire, death → round end → respawn (invariant 10) |
+| `round.json` | bots, friendly fire, death → round end → respawn (invariant 10); the drift detector is off (see below) |
+| `round_respawn.json` | two players, friendly fire: a self-bomb death → round end → respawn, with the `movement.json` drift thresholds — the prediction survives a round restart |
 | `contact.json` | two tanks in contact: one pushes the other, both predict the remote hull (`remote_tanks.rs`) |
 | `bridge.json` | `overpass`: up the west ramp, across the bridge in the middle lane (the outer ones hold boxes), coasting down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
 | `fall.json` | `overpass`: off a gap in the railings — `Airborne`, `z` down to 0, landing at level 0 |
@@ -303,7 +306,10 @@ kept its coverage in `selfblast.json`. Splitting the two beats loosening a
 threshold: a threshold is the definition of "the prediction matched the
 server", and one frame of an authoritative impulse is not a reason to
 redefine it. `downtown_props.json` (a barrel blast), `bots_downtown.json` and `bots_terraces.json` set
-`null` for the same reason. Both kinds of divergence are also worth knowing when writing a
+`null` for the same reason. So does `round.json`: the bot hunts the player by radar and hits him,
+and a hitscan hit pushes the tank with an authoritative-only impulse. The round restart keeps its
+drift coverage in `round_respawn.json`, the same run with a second player instead of the bot.
+Both kinds of divergence are also worth knowing when writing a
 new scenario: a tank ramming a wall at speed and a state transition that
 depends on the position (the edge of a ledge, the end of a ramp)
 legitimately break the tight thresholds for a few ticks — steer around walls

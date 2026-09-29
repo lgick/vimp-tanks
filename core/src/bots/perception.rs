@@ -244,6 +244,8 @@ pub(crate) struct Perception {
 }
 
 impl Perception {
+    /// `self_inflicted`: свежий урон — от падения или своей бомбы, обидчика
+    /// у него нет.
     pub(crate) fn update(
         &mut self,
         game: &mut BotView<'_>,
@@ -251,6 +253,7 @@ impl Perception {
         profile: &BotProfile,
         clock: f32,
         dt: f32,
+        self_inflicted: bool,
     ) {
         let my_team = game.tank_team(me.id);
         let my_pos = me.pos_array();
@@ -348,7 +351,7 @@ impl Perception {
             }
         }
 
-        self.update_damage(game, me, clock, dt);
+        self.update_damage(game, me, clock, dt, self_inflicted);
     }
 
     /// Вставка или замена контакта с сохранением порядка по `id`.
@@ -363,14 +366,25 @@ impl Perception {
         }
     }
 
-    /// Урон: сколько потерял, когда и от кого (по тому, что бот видит).
-    fn update_damage(&mut self, game: &BotView<'_>, me: &SelfState, clock: f32, dt: f32) {
+    /// Урон: сколько потерял, когда и от кого (по тому, что бот видит). Урон
+    /// от себя (`self_inflicted`) учитывается — раненый отступает, — но
+    /// обидчика не назначает.
+    fn update_damage(
+        &mut self,
+        game: &BotView<'_>,
+        me: &SelfState,
+        clock: f32,
+        dt: f32,
+        self_inflicted: bool,
+    ) {
         let health = game.tank_health(me.id);
 
         if health < self.last_health {
             self.damage_recent += (self.last_health - health) as f32;
             self.last_damage_at = Some(clock);
+        }
 
+        if health < self.last_health && !self_inflicted {
             let my_pos = me.pos_array();
             let nearest = |pick: &dyn Fn(&Contact) -> bool| {
                 self.contacts
@@ -455,7 +469,33 @@ mod tests {
         let mut view = fixture.view();
         let me = SelfState::read(&view, 1).unwrap();
 
-        perception.update(&mut view, &me, profile, clock, dt);
+        perception.update(&mut view, &me, profile, clock, dt, false);
+    }
+
+    #[test]
+    fn self_inflicted_damage_keeps_last_attacker() {
+        let mut fixture = Fixture::new();
+
+        fixture.add_tank(1, 1, 112.0, 112.0, 0);
+        fixture.add_tank(2, 2, 300.0, 112.0, 0);
+
+        let profile = BotProfile::default();
+        let mut perception = Perception::default();
+
+        perceive(&mut fixture, &mut perception, &profile, 0.1, 0.1);
+        assert_eq!(perception.last_attacker, None);
+
+        // урон от падения или своей бомбы: учтён, но врага не назначает
+        fixture.tanks[&1].health = 60.0;
+
+        let mut view = fixture.view();
+        let me = SelfState::read(&view, 1).unwrap();
+
+        perception.update(&mut view, &me, &profile, 0.2, 0.1, true);
+
+        assert_eq!(perception.last_attacker, None);
+        assert_eq!(perception.last_damage_at, Some(0.2));
+        assert!(perception.damage_recent > 30.0);
     }
 
     #[test]

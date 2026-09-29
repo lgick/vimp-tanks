@@ -50,6 +50,9 @@ const WEAVE_ANGLE: f32 = std::f32::consts::FRAC_PI_2 - 0.5;
 const BACK_OFF_AGGRESSION: f32 = 0.7;
 /// Своя бомба при огне по своим — только у такого «драчуна».
 const BOMB_FF_AGGRESSION: f32 = 0.8;
+/// При огне по своим бомба не кладётся, если союзник своего уровня ближе
+/// стольких радиусов взрыва: за 300 мс до взрыва он успеет подъехать.
+const BOMB_ALLY_CLEARANCE: f32 = 1.5;
 /// Корпус доворачивается, пока цель не войдёт в сектор башни с таким
 /// запасом, рад.
 const HULL_TURN_MARGIN: f32 = 0.3;
@@ -325,6 +328,10 @@ pub struct BotBrain {
     evade_until: f32,
     #[serde(default)]
     bomb_pos: Option<[f32; 2]>,
+    /// Последний тик падения (ввод заблокирован): урон сразу после него —
+    /// от падения, а не от врага.
+    #[serde(default)]
+    fell_at: Option<f32>,
     /// Смена оружия: когда можно нажать снова и сколько нажатий подряд.
     #[serde(default)]
     weapon_switch_at: f32,
@@ -431,6 +438,7 @@ impl BotBrain {
             hull_turn: false,
             evade_until: 0.0,
             bomb_pos: None,
+            fell_at: None,
             weapon_switch_at: 0.0,
             switch_presses: 0,
             prop_shot_at: 0.0,
@@ -563,6 +571,7 @@ impl BotBrain {
         // танк в падении не управляется: любые клавиши всё равно
         // игнорируются ядром, а стояние в полёте — не застревание
         if game.tank_input_locked(self.game_id) {
+            self.fell_at = Some(self.clock);
             self.release_all_keys(game);
             self.stuck.reset();
             self.watchdog_pos = self.my_position;
@@ -628,6 +637,7 @@ impl BotBrain {
                     None
                 };
                 self.retreat_point = None;
+                self.retreat_picked_at = self.clock - RETREAT_REPICK;
                 self.hull_turn = false;
                 self.weave_point = None;
             }
@@ -710,9 +720,16 @@ impl BotBrain {
     fn think(&mut self, game: &mut BotView<'_>, me: &SelfState) {
         let dt = self.clock - self.perceived_at;
 
+        // урон от себя: приземление после падения или своя бомба при огне по
+        // своим — обидчика у него нет
+        let self_inflicted = self.fell_at.is_some_and(|at| self.clock - at < 0.3)
+            || (game.friendly_fire
+                && self.bomb_pos.is_some()
+                && self.clock < self.evade_until + 0.2);
+
         self.perceived_at = self.clock;
         self.perception
-            .update(game, me, &self.profile, self.clock, dt);
+            .update(game, me, &self.profile, self.clock, dt, self_inflicted);
 
         let damaged_now = self.perception.last_damage_at == Some(self.clock);
         let target_lost = self
@@ -728,7 +745,7 @@ impl BotBrain {
             self.choose_target(game, me);
         }
 
-        self.update_mode(game, me, damaged_now);
+        self.update_mode(game, me, damaged_now, self_inflicted);
     }
 
     /// Выбор цели по дистанции маршрута, видимости, угрозе, повреждённости
@@ -881,7 +898,13 @@ impl BotBrain {
 
     /// Переходы режимов (тик решений): снимок `ModeInputs` → `next_mode`,
     /// плюс оборона при атаке.
-    fn update_mode(&mut self, game: &mut BotView<'_>, me: &SelfState, damaged_now: bool) {
+    fn update_mode(
+        &mut self,
+        game: &mut BotView<'_>,
+        me: &SelfState,
+        damaged_now: bool,
+        self_inflicted: bool,
+    ) {
         let target = self.target_contact();
 
         match target {
@@ -964,7 +987,8 @@ impl BotBrain {
         let mut next = next_mode(&inputs);
 
         // оборона при атаке: свежий урон от видимого обидчика — сразу в бой
-        // (цель уже переключена `choose_target`), «змейка» сразу меняет сторону
+        // (цель уже переключена `choose_target`), «змейка» сразу меняет
+        // сторону. Урон от себя обидчика не имеет
         let attacker_visible = self
             .perception
             .last_attacker
@@ -972,6 +996,7 @@ impl BotBrain {
             .is_some_and(|contact| contact.visible);
 
         if damaged_now
+            && !self_inflicted
             && attacker_visible
             && matches!(self.mode, BotMode::Roam | BotMode::Hunt | BotMode::Regroup)
             && !matches!(next, BotMode::Retreat | BotMode::Dead)
@@ -1223,28 +1248,9 @@ impl BotBrain {
     /// Выбор точки отхода: кандидаты (союзник, дом, прыжок вниз, укрытия),
     /// предотбор по эвристике, оценка маршрутом с зонами угроз.
     fn pick_retreat_point(&mut self, game: &mut BotView<'_>, me: &SelfState) {
-        self.retreat_picked_at = self.clock;
-
-        let tile = game.tile_size();
         let pos = me.pos_array();
         let threats = self.perception.retreat_threats(pos, THREAT_RADIUS);
-        let mut candidates = self.retreat_candidates(game, me, &threats);
-        let heuristic = |p: [f32; 2]| {
-            let nearest = threats
-                .iter()
-                .map(|threat| dist(threat.pos, p))
-                .fold(None, |acc: Option<f32>, d| {
-                    Some(acc.map_or(d, |a| a.min(d)))
-                })
-                .unwrap_or(0.0);
-
-            dist(pos, p) - 1.5 * nearest
-        };
-
-        // устойчивая сортировка: при равенстве — порядок сбора
-        candidates.sort_by(|a, b| heuristic(a.pos).total_cmp(&heuristic(b.pos)));
-        candidates.truncate(RETREAT_ROUTED);
-
+        let candidates = self.retreat_candidates(game, me, &threats);
         let params = self.nav_params(game, me);
         let zones = threat_zones(&threats);
         let start = PathPoint {
@@ -1252,13 +1258,21 @@ impl BotBrain {
             level: me.level,
         };
         let mut best: Option<(PathPoint, f32)> = None;
+        // бюджет тика кончился раньше, чем оценены все кандидаты
+        let mut starved = false;
 
-        for point in candidates {
+        for point in rank_retreat_candidates(pos, &threats, candidates) {
             let cost = match self.nav.route_cost(game, start, point, &params, &zones) {
-                None => heuristic(point.pos),
-                Some(Some(cost)) => cost,
+                // бюджета нет: стоимость маршрута и эвристика несравнимы
+                // (эвристика бывает отрицательной) — хватит оценённых, иначе
+                // выбор на следующем тике
+                None => {
+                    starved = true;
+                    break;
+                }
                 // маршрута нет — не кандидат
                 Some(None) => continue,
+                Some(Some(cost)) => cost,
             };
             let allies = game.team.map_or(0, |team| {
                 team.allies_near(point.pos, ALLY_NEAR, self.game_id).count()
@@ -1274,30 +1288,54 @@ impl BotBrain {
             }
         }
 
-        let far_enough = |p: &PathPoint| dist(pos, p.pos) >= 1.5 * tile;
+        if starved && best.is_none() {
+            // ни один кандидат не оценён: повтор на следующем тике
+            // (`retreat_picked_at` не трогается), а пока — запасная точка, чтобы
+            // бот не стоял
+            if self.retreat_point.is_none() {
+                self.retreat_point = self.fallback_retreat_point(game, me, &threats);
+            }
 
+            return;
+        }
+
+        self.retreat_picked_at = self.clock;
         self.retreat_point = best
             .map(|(point, _)| point)
-            .or_else(|| self.home.filter(far_enough))
-            .or_else(|| {
-                // прочь от ближайшей угрозы на 6 тайлов
-                let threat = threats
-                    .iter()
-                    .min_by(|a, b| dist_sq(pos, a.pos).total_cmp(&dist_sq(pos, b.pos)))?;
-                let away = (me.pos - Vector::new(threat.pos[0], threat.pos[1])).normalize_or_zero();
-                let q = me.pos + away * (6.0 * tile);
-                let snapped = game.nav.as_ref()?.nearest_walkable_on(
-                    me.level,
-                    [q.x, q.y],
-                    2.0 * me.half_width,
-                    4.0 * tile,
-                )?;
+            .or_else(|| self.fallback_retreat_point(game, me, &threats));
+    }
 
-                Some(PathPoint {
-                    pos: snapped,
-                    level: me.level,
-                })
-            });
+    /// Запасная точка отхода: дом дальше 1.5 тайла, иначе — прочь от
+    /// ближайшей угрозы на 6 тайлов.
+    fn fallback_retreat_point(
+        &self,
+        game: &BotView<'_>,
+        me: &SelfState,
+        threats: &[Contact],
+    ) -> Option<PathPoint> {
+        let tile = game.tile_size();
+        let pos = me.pos_array();
+        let far_enough = |p: &PathPoint| dist(pos, p.pos) >= 1.5 * tile;
+
+        self.home.filter(far_enough).or_else(|| {
+            // прочь от ближайшей угрозы на 6 тайлов
+            let threat = threats
+                .iter()
+                .min_by(|a, b| dist_sq(pos, a.pos).total_cmp(&dist_sq(pos, b.pos)))?;
+            let away = (me.pos - Vector::new(threat.pos[0], threat.pos[1])).normalize_or_zero();
+            let q = me.pos + away * (6.0 * tile);
+            let snapped = game.nav.as_ref()?.nearest_walkable_on(
+                me.level,
+                [q.x, q.y],
+                2.0 * me.half_width,
+                4.0 * tile,
+            )?;
+
+            Some(PathPoint {
+                pos: snapped,
+                level: me.level,
+            })
+        })
     }
 
     /// Кандидаты в точки отхода (не больше `RETREAT_CANDIDATES`): за
@@ -2582,6 +2620,10 @@ impl BotBrain {
             return false;
         }
 
+        if game.friendly_fire && ally_in_blast(game, me, radius) {
+            return false;
+        }
+
         !game.friendly_fire
             || (self.profile.aggression > BOMB_FF_AGGRESSION
                 && game.tank_health(me.id) > damage + 10.0)
@@ -2675,12 +2717,61 @@ fn threat_zones(threats: &[Contact]) -> Vec<PenaltyZone> {
         .collect()
 }
 
+/// Эвристика точки отхода `p` для бота в `pos`: ближе к боту, дальше от
+/// ближайшей угрозы (меньше — лучше, бывает отрицательной).
+fn retreat_heuristic(pos: [f32; 2], threats: &[Contact], p: [f32; 2]) -> f32 {
+    let nearest = threats
+        .iter()
+        .map(|threat| dist(threat.pos, p))
+        .fold(None, |acc: Option<f32>, d| {
+            Some(acc.map_or(d, |a| a.min(d)))
+        })
+        .unwrap_or(0.0);
+
+    dist(pos, p) - 1.5 * nearest
+}
+
+/// Кандидаты отхода по эвристике «ближе к боту, дальше от угроз» (устойчиво:
+/// при равенстве — порядок сбора), не больше `RETREAT_ROUTED`.
+fn rank_retreat_candidates(
+    pos: [f32; 2],
+    threats: &[Contact],
+    mut candidates: Vec<PathPoint>,
+) -> Vec<PathPoint> {
+    // устойчивая сортировка: при равенстве — порядок сбора
+    candidates.sort_by(|a, b| {
+        retreat_heuristic(pos, threats, a.pos).total_cmp(&retreat_heuristic(pos, threats, b.pos))
+    });
+    candidates.truncate(RETREAT_ROUTED);
+    candidates
+}
+
 /// Бомба `w2`: индекс, радиус взрыва и урон — из конфига оружия.
 fn bomb_weapon(game: &BotView<'_>) -> Option<(usize, f32, f64)> {
     let index = game.weapon_index("w2")?;
     let (_, weapon) = game.weapons.get_index(index)?;
 
     Some((index, weapon.radius, weapon.damage))
+}
+
+/// Союзник своего уровня ближе `BOMB_ALLY_CLEARANCE · radius`: своя бомба при
+/// огне по своим ранила бы его. Плита моста взрыв экранирует — чужой уровень
+/// не в счёт.
+fn ally_in_blast(game: &BotView<'_>, me: &SelfState, radius: f32) -> bool {
+    let Some(team) = game.tank_team(me.id) else {
+        return false;
+    };
+    let reach = BOMB_ALLY_CLEARANCE * radius;
+
+    game.tanks.iter().any(|(&id, tank)| {
+        id != me.id
+            && tank.team_id == team
+            && tank.is_alive()
+            && game.tank_level(id) == me.level
+            && game
+                .tank_position_rounded(id)
+                .is_some_and(|pos| dist_sq(pos, me.pos_array()) < reach * reach)
+    })
 }
 
 /// Расступиться с союзником своего уровня ближе 25 ед.
@@ -3227,6 +3318,34 @@ mod tests {
     }
 
     #[test]
+    fn bomb_spares_an_ally_with_friendly_fire() {
+        for (with_ally, expected) in [(false, true), (true, false)] {
+            let mut fixture = Fixture::new();
+
+            // иначе «драчуну» не хватит здоровья на свою бомбу
+            assert!(fixture.weapons["w2"].damage <= 89.0);
+
+            fixture.friendly_fire = true;
+            fixture.add_tank(1, 1, 112.0, 112.0, 0);
+            fixture.add_tank(2, 2, 112.0 + 30.0, 112.0, 0);
+
+            if with_ally {
+                fixture.add_tank(3, 1, 112.0 - 25.0, 112.0, 0);
+            }
+
+            let mut brain = brain_at(1, [112.0, 112.0], 0);
+
+            brain.profile.aggression = 0.9;
+
+            assert_eq!(
+                drops_bomb(&mut fixture, &mut brain),
+                expected,
+                "союзник рядом: {with_ally}"
+            );
+        }
+    }
+
+    #[test]
     fn target_prefers_the_attacker() {
         let mut fixture = Fixture::new();
 
@@ -3680,6 +3799,97 @@ mod tests {
 
         assert!((alone - 1.0).abs() < 1e-3, "{alone}");
         assert!((with_human - 2.0).abs() < 1e-3, "{with_human}");
+    }
+
+    /// Карта 20×20 со стенкой (колонка 10, строки 8..=12), бот на виду у
+    /// угрозы, угроза — по ту сторону стены. Возвращает фикстуру, мозг бота
+    /// после тика решений и угрозу.
+    fn retreat_setup() -> (Fixture, BotBrain, Contact) {
+        let mut grid = vec![vec![0; 20]; 20];
+
+        for (y, row) in grid.iter_mut().enumerate() {
+            row[0] = 1;
+            row[19] = 1;
+
+            if (8..=12).contains(&y) {
+                row[10] = 1;
+            }
+        }
+
+        grid[0] = vec![1; 20];
+        grid[19] = vec![1; 20];
+
+        let mut fixture = Fixture::new();
+
+        fixture.nav = Some(NavigationSystem::generate(&grid, &[1], TILE));
+        fixture.add_tank(1, 1, 7.5 * TILE, 3.5 * TILE, 0);
+        fixture.add_tank(2, 2, 13.5 * TILE, 10.5 * TILE, 0);
+        fixture.sync_queries();
+
+        let mut brain = brain_at(1, [7.5 * TILE, 3.5 * TILE], 0);
+
+        think(&mut fixture, &mut brain);
+
+        let threat = *brain.perception.contact(2).unwrap();
+
+        assert!(threat.visible, "бот стоит на виду");
+
+        (fixture, brain, threat)
+    }
+
+    #[test]
+    fn retreat_pick_waits_for_the_route_budget() {
+        let (mut fixture, mut brain, threat) = retreat_setup();
+
+        fixture.route_budget = 0;
+        brain.retreat_picked_at = -5.0;
+
+        let mut view = fixture.view();
+        let me = SelfState::read(&view, 1).unwrap();
+        let threats = brain.perception.retreat_threats(me.pos_array(), THREAT_RADIUS);
+        let fallback = brain.fallback_retreat_point(&view, &me, &threats);
+
+        brain.pick_retreat_point(&mut view, &me);
+
+        assert_eq!(brain.retreat_picked_at, -5.0, "выбор не отложен");
+        assert_eq!(brain.retreat_point, fallback, "без бюджета — запасная точка");
+
+        fixture.route_budget = u32::MAX;
+
+        let mut view = fixture.view();
+
+        brain.pick_retreat_point(&mut view, &me);
+
+        assert_eq!(brain.retreat_picked_at, brain.clock);
+
+        let point = brain.retreat_point.expect("точка отхода");
+        let nav = fixture.nav.as_ref().unwrap();
+
+        assert!(
+            nav.has_obstacle_between_on(0, threat.pos, point.pos),
+            "угроза видит точку отхода {point:?}"
+        );
+    }
+
+    #[test]
+    fn retreat_pick_compares_only_routed_candidates() {
+        let (mut fixture, mut brain, _) = retreat_setup();
+
+        fixture.route_budget = 1;
+
+        let mut view = fixture.view();
+        let me = SelfState::read(&view, 1).unwrap();
+        let pos = me.pos_array();
+        let threats = brain.perception.retreat_threats(pos, THREAT_RADIUS);
+        let ranked =
+            rank_retreat_candidates(pos, &threats, brain.retreat_candidates(&view, &me, &threats));
+
+        assert!(ranked.len() > 1, "нужны неоценённые кандидаты: {ranked:?}");
+
+        brain.pick_retreat_point(&mut view, &me);
+
+        assert_eq!(brain.retreat_point, Some(ranked[0]));
+        assert_eq!(fixture.route_budget, 0);
     }
 
     #[test]

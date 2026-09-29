@@ -278,7 +278,7 @@ pub(crate) fn fires_within(fixture: &mut Fixture, brain: &mut BotBrain, attempts
         brain.clock += DT;
         brain
             .perception
-            .update(&mut view, &me, &brain.profile, brain.clock, DT);
+            .update(&mut view, &me, &brain.profile, brain.clock, DT, false);
         brain.execute_aim_and_shoot(&mut view, DT);
 
         if brain.stats.shots_fired > shots {

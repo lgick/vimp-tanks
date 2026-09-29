@@ -4235,6 +4235,37 @@ fn team_focuses_one_target() {
     assert!(focused >= 2, "в фокус {focus:?} бьют только {focused} из 3");
 }
 
+#[test]
+fn clear_resets_team_boards() {
+    let mut core = make_core();
+
+    core.load_map(&map_json()).unwrap();
+    core.spawn_scripted_actor(1, "m1", 1, 100.0, 250.0, 0.0).unwrap();
+    core.spawn_scripted_actor(2, "m1", 2, 400.0, 250.0, 180.0).unwrap();
+
+    for id in [1, 2] {
+        core.state_mut().sim.debug_set_health(id, 1.0e6);
+    }
+
+    let mut focused = false;
+
+    for _ in 0..600 {
+        core.step(DT);
+
+        if core.state().sim.team_focus(1).is_some() {
+            focused = true;
+            break;
+        }
+    }
+
+    assert!(focused, "у команды нет фокуса");
+
+    // смена карты: движок зовёт clear перед load_map
+    core.clear();
+
+    assert_eq!(core.state().sim.team_focus(1), None, "доска пережила clear");
+}
+
 /// Арена 60×20 тайлов (шаг 32, масштаб 1): периметр и стена в колонке 45,
 /// строки 0..=13 — проход внизу.
 fn long_walled_arena_json() -> String {

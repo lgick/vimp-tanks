@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Bots know where enemies are the way a player does from the radar — with a
   delay and an error — instead of only seeing enemies within about 600 units;
   they pick a target by route distance, visibility and threat.
-- Requires `vimp-engine-core` 0.23.0 (hull-aware bot routes); rebuilt against
-  `vimp-engine` 0.35.5.
+- Requires `vimp-engine-core` 0.23.1 (hull-aware bot routes; route penalty
+  zones are honoured on a direct line of sight); rebuilt against `vimp-engine`
+  0.35.6.
 - Bots aim like a player: a reaction delay, an aim error that settles while
   tracking, a tremor, a flinch after each shot, worse accuracy on the move;
   they fire in bursts, keep their preferred range, weave within the turret's
@@ -43,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Bots no longer fire into a teammate or a crate standing in the line of fire.
 - Bots drop a bomb only when the enemy is inside its blast radius and drive
   away from it (before, they dropped it at up to 100 units, where it could not
-  reach).
+  reach), and, with friendly fire on, never with a teammate next to them.
 - Restoring a state dump (Worker handoff) on a layered map no longer
   re-levels every tank by geometry: a tank flying off a ramp or standing under
   a bridge keeps its level, and the simulation continues exactly as before the
