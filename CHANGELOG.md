@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.15] - 2026-09-30
+
 ### Added
 
 - A `w1` hit now bursts like a tank shell: a flame burst fanning back toward
