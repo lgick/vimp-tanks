@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.16] - 2026-09-30
+
 ### Added
 
 - `hitResponse` model block (`lateralFactor`, `idleFactor`, `spinFactor`):
