@@ -101,11 +101,15 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       core.spawn_actor(1, 'm1', 1, 0, 0, 0);
       core.apply_input(1, 15, 'down', 'forward');
 
-      stepTicks(core, 120);
+      const ticks = 120;
+
+      stepTicks(core, ticks);
 
       const [x, y] = core.position_of(1);
 
-      expect(x).toBeGreaterThan(50);
+      // за секунду разгона с места танк проходит заметную долю пути на полном
+      // ходу — порог из модели, а не число под текущую скорость
+      expect(x).toBeGreaterThan(models.m1.maxForwardSpeed * ticks * DT * 0.4);
       expect(Math.abs(y)).toBeLessThan(1);
       expect(core.last_input_seq(1)).toBe(15);
     });

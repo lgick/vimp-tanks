@@ -381,6 +381,26 @@ export const wreckFx = {
   scorch: { enabled: true, size: 26, alpha: 0.55, fadeIn: 400 },
 };
 
+// цвета горящего фосфора: трассер, пламя у дула и разрыв снаряда светят
+// одним цветом (аддитивно) — пламя и раскалённое ядро
+const phosphorColors = { color: 0xff9a4a, coreColor: 0xfff4e0 };
+
+// мягкий край пламени вспышек (`muzzleFlash`, `impactFlash`): те же языки,
+// нарисованные слоями — шире и тусклее снаружи, уже и ярче внутри.
+// `core: true` — слой цвета ядра
+const flameLayers = [
+  { scale: 1.35, alpha: 0.18 },
+  { scale: 1, alpha: 0.45 },
+  { scale: 0.55, alpha: 0.95, core: true },
+];
+
+// к концу вспышка скорее гаснет, чем сжимается: размер падает только на эту
+// долю
+const flameShrink = 0.3;
+
+// цвет ударной волны вспышек
+const shockRingColor = 0xffe2b0;
+
 // трассер выстрела hitscan (`src/client/parts/effects/shot/TracerEffect.js`).
 // Длины и ширины — мировые единицы, время — мс
 export const tracer = {
@@ -401,8 +421,7 @@ export const tracer = {
   // почти белое ядро и узкое тусклое свечение тёплого оттенка — цвет
   // горящего фосфора реального трассера. Толстая полоса читается лазером:
   // мощь выстрела пушки — во вспышке у дула и разрыве, а не в толщине линии
-  color: 0xff9a4a,
-  coreColor: 0xfff4e0,
+  ...phosphorColors,
   coreWidth: 0.4,
   glowWidth: 1.3,
   glowAlpha: 0.2,
@@ -462,24 +481,20 @@ export const muzzleFlash = {
 
   // мягкий край: те же языки, нарисованные слоями — шире и тусклее снаружи,
   // уже и ярче внутри. `core: true` — слой цвета ядра
-  layers: [
-    { scale: 1.35, alpha: 0.18 },
-    { scale: 1, alpha: 0.45 },
-    { scale: 0.55, alpha: 0.95, core: true },
-  ],
+  layers: flameLayers,
 
   // к концу вспышка скорее гаснет, чем сжимается: размер падает только на
   // эту долю
-  shrink: 0.3,
+  shrink: flameShrink,
 
-  // те же цвета, что у трассера: горящий фосфор и раскалённое ядро
-  color: 0xff9a4a,
-  coreColor: 0xfff4e0,
+  // те же цвета, что у трассера (phosphorColors)
+  ...phosphorColors,
 };
 
 // разрыв снаряда в точке попадания hitscan: та же вспышка, что у дула
 // (`MuzzleFlashEffect`), но языки веером обратно к стрелку — пламя
-// выбрасывает из поверхности навстречу выстрелу. Поля — как у `muzzleFlash`
+// выбрасывает из поверхности навстречу выстрелу. Поля — как у `muzzleFlash`;
+// боковых выбросов нет (`sideLength: 0`)
 export const impactFlash = {
   duration: 110,
   spikes: 6,
@@ -488,17 +503,17 @@ export const impactFlash = {
   spread: 1.1,
   jitter: 0.5,
   sideLength: 0,
-  sideWidth: 0,
   ball: { radius: 3.4 },
-  ring: { radius: 10, width: 0.8, alpha: 0.3, duration: 150, color: 0xffe2b0 },
-  layers: [
-    { scale: 1.35, alpha: 0.18 },
-    { scale: 1, alpha: 0.45 },
-    { scale: 0.55, alpha: 0.95, core: true },
-  ],
-  shrink: 0.3,
-  color: 0xff9a4a,
-  coreColor: 0xfff4e0,
+  ring: {
+    radius: 10,
+    width: 0.8,
+    alpha: 0.3,
+    duration: 150,
+    color: shockRingColor,
+  },
+  layers: flameLayers,
+  shrink: flameShrink,
+  ...phosphorColors,
 };
 
 // клуб дыма разрыва (`src/client/parts/effects/shot/PuffEffect.js`): клубы

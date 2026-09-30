@@ -43,9 +43,10 @@ describe('rollMuzzleFlash', () => {
     expect(a.forward[0].length).not.toBe(b.forward[0].length);
   });
 
-  it('без sideLength боковых выбросов нет (вспышка разрыва)', () => {
-    expect(impactFlash.sideLength).toBe(0);
-    expect(rollMuzzleFlash(impactFlash, fixed(0.5)).sides).toEqual([]);
+  it('sideLength 0 — боковых выбросов нет', () => {
+    const roll = rollMuzzleFlash({ ...muzzleFlash, sideLength: 0 }, fixed(0.5));
+
+    expect(roll.sides).toEqual([]);
   });
 });
 

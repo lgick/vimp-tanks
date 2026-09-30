@@ -1,4 +1,4 @@
-# Этап 5. Эффекты: тригонометрия огненного шара и `rng` клуба дыма (К2, К3)
+# Этап 5. Эффекты: тригонометрия огненного шара и `rng` клуба дыма (К2, К3) ✅ выполнен
 
 **Файлы:** `src/client/parts/effects/shot/MuzzleFlashEffect.js`, `src/client/parts/effects/shot/PuffEffect.js`,
 `tests/client/parts/effects/PuffEffect.test.js`. Рефакторинг и тестируемость: docs и CHANGELOG не трогать.

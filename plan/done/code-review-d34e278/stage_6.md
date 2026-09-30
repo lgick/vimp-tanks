@@ -1,4 +1,4 @@
-# Этап 6. Ослабленные проверки и история в комментариях (Т1–Т3)
+# Этап 6. Ослабленные проверки и история в комментариях (Т1–Т3) ✅ выполнен
 
 **Файлы:** `tests/core/core.test.js`, `src/data/weapons.js`, `tests/client/parts/effects/MuzzleFlashEffect.test.js`.
 Тесты и комментарии: docs и CHANGELOG не трогать.

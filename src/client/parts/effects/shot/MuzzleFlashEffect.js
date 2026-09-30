@@ -39,6 +39,14 @@ export function rollMuzzleFlash(config, rng = Math.random) {
 // граней не видно
 const BALL_SIDES = 12;
 
+// единичный круг шара: вершины не меняются от кадра к кадру — считаются раз
+// на модуль, а не каждый кадр на каждый слой
+const BALL_UNIT = Array.from({ length: BALL_SIDES }, (_, i) => {
+  const angle = (i / BALL_SIDES) * Math.PI * 2;
+
+  return [Math.cos(angle), Math.sin(angle)];
+});
+
 /**
  * Полная длительность вспышки, мс: языки или ударное кольцо — что дольше.
  *
@@ -99,6 +107,7 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
   const glow = life * life;
   const size = 1 - config.shrink * (1 - life);
   const baseAngle = Math.atan2(dirY, dirX);
+  const layerColor = layer => (layer.core ? config.coreColor : config.color);
   const polygons = [];
 
   // язык: треугольник от дула вдоль угла `angle`
@@ -119,7 +128,7 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
 
   for (const layer of config.layers) {
     const scale = layer.scale * size;
-    const color = layer.core ? config.coreColor : config.color;
+    const color = layerColor(layer);
     const alpha = layer.alpha * glow;
 
     if (alpha <= 0) {
@@ -162,15 +171,13 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
       const radius = config.ball.radius * layer.scale * size;
       const points = [];
 
-      for (let i = 0; i < BALL_SIDES; i += 1) {
-        const angle = (i / BALL_SIDES) * Math.PI * 2;
-
-        points.push(Math.cos(angle) * radius, Math.sin(angle) * radius);
+      for (const [unitX, unitY] of BALL_UNIT) {
+        points.push(unitX * radius, unitY * radius);
       }
 
       polygons.push({
         points,
-        color: layer.core ? config.coreColor : config.color,
+        color: layerColor(layer),
         alpha,
       });
     }

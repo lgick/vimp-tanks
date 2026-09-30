@@ -1,6 +1,6 @@
 import { Sprite } from 'pixi.js';
 import BaseEffect from '../BaseEffect.js';
-import { clamp, randomRange } from 'vimp-engine/lib/math.js';
+import { clamp } from 'vimp-engine/lib/math.js';
 import { impactSmoke as impactSmokeConfig } from '../../../../config/render.js';
 
 /**
@@ -105,7 +105,7 @@ export default class PuffEffect extends BaseEffect {
 
       sprite.anchor.set(0.5);
       sprite.tint = puff.color;
-      sprite.rotation = randomRange(0, Math.PI * 2);
+      sprite.rotation = rng() * Math.PI * 2;
       this.addChild(sprite);
 
       return sprite;

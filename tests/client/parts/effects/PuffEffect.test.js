@@ -101,4 +101,23 @@ describe('PuffEffect', () => {
     expect(done).toBe(true);
     expect(effect.sprites.every(sprite => !sprite.visible)).toBe(true);
   });
+
+  // поворот клуба — из внедрённого rng, а не из Math.random: эффект
+  // детерминирован в тестах
+  it('поворот спрайтов берётся из rng', () => {
+    const effect = new PuffEffect(
+      0,
+      0,
+      1,
+      0,
+      () => {},
+      assets,
+      impactSmoke,
+      fixed(0.5),
+    );
+
+    effect.sprites.forEach(sprite =>
+      expect(sprite.rotation).toBeCloseTo(Math.PI, 10),
+    );
+  });
 });
