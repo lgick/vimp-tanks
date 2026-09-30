@@ -142,7 +142,10 @@ The ray is moved WHOLE with the muzzle (`TracerEffect.shiftTo`): same
 direction and length. Re-aiming it at the fixed impact point is wrong —
 against a wall the muzzle is already inside it, the ray is near zero, and
 driving along the wall stretched it backwards. The impact debris still
-appears at the original hit point. One effect is
+appears at the original hit point, and so does the shell burst
+(`ShotEffectController._burst`: an `impactFlash` fanning back toward the
+shooter plus an `impactSmoke` puff, drawn at the tracer's visible end); the
+effect is not removed until the burst has finished. One effect is
 created per shot — the local one is predicted and the authoritative echo is
 filtered by the core — so every shot kicks exactly once. Ids are compared as
 strings: the part context and the tracer row may carry different types.
@@ -486,8 +489,10 @@ live tank carries a faint `tankGlow`), the radar does not change, and
   too: at night every tracer piece goes into a sibling container at
   `levelZ(45, L)` of its own level (that level's projection and
   transparency), otherwise a long shot faded to `ambient` beyond the
-  headlights and never showed; the debris and the muzzle flash stay under
-  the light map.
+  headlights and never showed; the debris, the muzzle flash and the
+  impact burst (flash and smoke) stay under the light map — a short
+  light flash (`lighting.flash.shot` at the muzzle, `lighting.flash.hit`
+  at the hit point) lights them.
 - **Lamp heads.** Lights set into the road: per level a container at
   `levelZ(1.5, L)` (`LAMP_HEAD_BASE_Z`) — above the road and the track marks,
   below the effects and the tank, so a tank driving over a lamp covers it.
@@ -718,8 +723,9 @@ knows nothing about them.
   instances, since `Particle` has no `customData`. `ParticlePool.js` pools
   `Particle` instances for reuse; callers are responsible for calling
   `container.removeParticle(...)` before returning a particle to the pool.
-  `ImpactEffect.js` stays on a plain `Container` + `Sprite` — at 2-4
-  particles per shot, `ParticleContainer` overhead isn't worth it.
+  `ImpactEffect.js` and `PuffEffect.js` stay on a plain `Container` +
+  `Sprite` — at 5-9 debris and ~5 smoke puffs per hit, `ParticleContainer`
+  overhead isn't worth it.
   `WreckFire.js` runs two such channels through `parts/ParticleChannel.js`
   (container + simulation array + pool + a hard cap): additive fire
   (fireball, sparks, flame tongues) and normal smoke — a `ParticleContainer`

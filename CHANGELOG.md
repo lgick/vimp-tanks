@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A `w1` hit now bursts like a tank shell: a flame burst fanning back toward
+  the shooter with a short shock ring (`impactFlash`), a puff of smoke
+  (`impactSmoke`, `src/client/parts/effects/shot/PuffEffect.js`), more and
+  faster debris, and a night light flash at the hit point
+  (`lighting.flash.hit`, `src/config/render.js`).
+
+### Changed
+
+- The `w1` shot looks like a tank gun rather than a pistol: the muzzle
+  flash is about twice as long and lasts longer, with stronger muzzle-brake
+  jets, a fireball at the muzzle and an expanding shock ring
+  (`muzzleFlash.ball`, `muzzleFlash.ring`); the night shot flash is wider and
+  brighter (`lighting.flash.shot`); the tracer stays a thin line whose tail
+  now narrows toward the muzzle (`tracer.taper`).
+- Tank is twice as slow (`maxForwardSpeed` 130, `maxReverseSpeed` −65) and the
+  turret turns at half rate (`gunRotationSpeed` 1.5) for finer aiming
+  (`src/data/models.js`).
+- Boost plates are retuned for the slower tank so the `downtown` jump onto
+  the parking roof still works: from full speed the push still reaches 480
+  (`boostDv` 350) and the hold ceiling stays 468 (`boostSpeedFactor` 3.6,
+  `coreParams.surfaces.types.boost`).
+- The default map is `downtown` (`currentMap`, `src/config/game.js`).
+- Visual recoil of a `w1` shot is sharper and stronger (`duration` 80,
+  `gunKick` 1.8, `bodyKick` 0.3, `rock` 0.13, `src/config/render.js`).
+- Hitscan bullet (`w1`) fire rate lowered: cooldown 0.01 s → 0.3 s
+  (`fireRate`, `src/data/weapons.js`).
+- Bomb (`w2`) fuse raised from 0.3 s to 1 s (`time` 1000,
+  `src/data/weapons.js`).
+- Hull turns about half as fast (`baseTurnTorqueFactor` 110,
+  `src/data/models.js`).
+- Hitscan bullet (`w1`) hit impulse lowered 5× (`impulseMagnitude` 1500000) so
+  a hit no longer spins the tank around (`src/data/weapons.js`).
+
 ## [0.22.14] - 2026-09-30
 
 ### Changed

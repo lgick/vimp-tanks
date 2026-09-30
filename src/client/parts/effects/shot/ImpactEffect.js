@@ -37,14 +37,16 @@ export default class ImpactEffect extends BaseEffect {
     // по нарисованному кругу текстуры, а не по холсту с запасом под размытие
     this._textureContentSize = contentSize;
 
+    // осколков и разлёт — снаряда пушки, а не пули; вспышку и дым разрыва
+    // рисует контроллер (`ShotEffectController._burst`)
     this.config = {
-      particleCount: randomRange(2, 4), // количество осколков
+      particleCount: randomRange(5, 9), // количество осколков
       particleMinSize: 0.8, // минимальный размер осколка
-      particleMaxSize: 2.4, // максимальный размер осколка
+      particleMaxSize: 2.8, // максимальный размер осколка
 
       // начальная скорость разлета
       minInitialSpeed: 10, // пикселей в секунду
-      maxInitialSpeed: 300, // пикселей в секунду
+      maxInitialSpeed: 380, // пикселей в секунду
 
       // жизненный цикл осколков
       minLifetime: 8000, // мс

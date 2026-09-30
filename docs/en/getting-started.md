@@ -313,7 +313,7 @@ Most of them run with the same drift thresholds as `movement.json`. Two set
 `divergence: null` on purpose, and for the same reason: **an explosion is
 not something the client replica predicts.** `bots_bridge.json` — over 1800
 ticks the bots ram the player and blow him up. `selfblast.json` — the player
-drops a bomb under himself, and 300 ms later the host throws him with an
+drops a bomb under himself, and a second later the host throws him with an
 impulse of its own; the client predicts only the bomb's *visual* spawn
 (`client/shot.rs`), while the detonation, the damage and the impulses are
 authoritative. `crosslevel.json` is that same run **without** the last

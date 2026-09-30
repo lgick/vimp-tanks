@@ -4796,8 +4796,9 @@ mod parity {
         }
     }
 
-    // конфиг с бустером удержания (значения `src/config/game.js`); общий
-    // фикстурный — старая плита без удержания
+    // конфиг с бустером удержания; общий фикстурный — старая плита без
+    // удержания. Числа — под скорость фикстуры 260: то же, что
+    // `src/config/game.js` при 130 (разгон до 480, потолок удержания 468)
     fn held_boost_config() -> crate::config::TanksConfig {
         let mut cfg = core_config();
         let boost = cfg.surfaces.types.get_mut("boost").unwrap();

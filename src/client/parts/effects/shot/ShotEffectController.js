@@ -3,6 +3,7 @@ import TracerEffect from './TracerEffect.js';
 import { tracerPieces } from './tracerPieces.js';
 import ImpactEffect from './ImpactEffect.js';
 import MuzzleFlashEffect from './MuzzleFlashEffect.js';
+import PuffEffect from './PuffEffect.js';
 import { OCCLUDER_BASE_Z, levelZ } from '../../../levelZ.js';
 import { cameraCenter } from '../../../camera.js';
 import { applyParallax, reproject } from '../../../parallax.js';
@@ -12,6 +13,8 @@ import {
   parallax as parallaxConfig,
   lighting as lightingConfig,
   tracer as tracerConfig,
+  impactFlash as impactFlashConfig,
+  impactSmoke as impactSmokeConfig,
 } from '../../../../config/render.js';
 import {
   W1_START_X,
@@ -158,6 +161,13 @@ export default class ShotEffectController extends Container {
     // вспышка у дула; пока её нет, ждать нечего
     this.flash = null;
     this._flashComplete = true;
+    // разрыв в точке попадания (`_burst`): вспышка и клуб дыма; счётчик
+    // незавершённых частей
+    this.hitFlash = null;
+    this.hitSmoke = null;
+    this._burstPending = 0;
+    // видимый конец трассера `{ x, y, dist, stopLine }` (run): там же разрыв
+    this._visibleEnd = null;
     this._isDestroyed = false;
 
     // флаги для управления жизненным циклом
@@ -223,6 +233,9 @@ export default class ShotEffectController extends Container {
     // пули, у попадания в стену или грань насыпи — на грани. Точка удара
     // (`endPositionX/Y`) остаётся исходной
     const end = this._slopeEnd(dist) ?? this._wallEnd(dx, dy, dist);
+
+    this._visibleEnd = end;
+
     const pieces = tracerPieces(
       this._shots?.path?.(
         this.startPositionX,
@@ -514,8 +527,9 @@ export default class ShotEffectController extends Container {
   // Осколки попадания в стену: пока они падают перед видимой гранью,
   // контроллер над перекрывателем (иначе грань закрыла бы их). Лежащие
   // на полу и за отвёрнутой гранью — под ним, под крышей, как всё на
-  // полу. Сторона — каждый кадр: осколки лежат 6–15 с, камера за это
-  // время уходит далеко
+  // полу. Разрыв (`_burst`) висит на грани на высоте ствола — пока он
+  // идёт, контроллер тоже над перекрывателем. Сторона — каждый кадр:
+  // осколки лежат 6–15 с, камера за это время уходит далеко
   _placeImpactZ(camera) {
     const impact = this.impact;
 
@@ -534,7 +548,9 @@ export default class ShotEffectController extends Container {
     );
 
     this.zIndex = levelZ(
-      front && impact.isFalling() ? WALL_HIT_BASE_Z : SHOT_BASE_Z,
+      front && (impact.isFalling() || this._burstPending > 0)
+        ? WALL_HIT_BASE_Z
+        : SHOT_BASE_Z,
       this.endLevel,
     );
   }
@@ -686,6 +702,7 @@ export default class ShotEffectController extends Container {
 
       this.addChild(this.impact);
       this.impact.run();
+      this._burst(impactX, impactY, impactDirectionX, impactDirectionY);
 
       // иначе, если попадания не было,
       // то после завершения трассера эффект считается завершенным
@@ -694,6 +711,53 @@ export default class ShotEffectController extends Container {
       this._visualsComplete = true;
       this._tryDestroy();
     }
+  }
+
+  // Разрыв снаряда в точке попадания: вспышка веером к стрелку
+  // (`impactFlash` — та же MuzzleFlashEffect), клуб дыма (`impactSmoke`) и
+  // ночной блик (`lighting.flash.hit`). Стоит на видимом конце трассера —
+  // на грани стены или склоне рампы; если ящик уехал за пролёт, — в
+  // пересчитанной точке удара, как осколки. `dirX/dirY` — к стрелку
+  _burst(impactX, impactY, dirX, dirY) {
+    const end = this._visibleEnd;
+    const moved =
+      impactX !== this.endPositionX || impactY !== this.endPositionY;
+    const x = end && !moved ? end.x : impactX;
+    const y = end && !moved ? end.y : impactY;
+    const partDone = () => {
+      this._burstPending -= 1;
+      this._tryDestroy();
+    };
+
+    if (lightingConfig.flash.hit) {
+      this._lighting?.flash({
+        ...lightingConfig.flash.hit,
+        level: this.endLevel,
+        x: impactX,
+        y: impactY,
+        z: this.endLevel,
+      });
+    }
+
+    // дым под вспышкой: аддитивное пламя поверх клубов
+    if (this._assets?.smokeTexture && impactSmokeConfig.count > 0) {
+      this._burstPending += 1;
+      this.hitSmoke = new PuffEffect(x, y, dirX, dirY, partDone, this._assets);
+      this.addChild(this.hitSmoke);
+      this.hitSmoke.run();
+    }
+
+    this._burstPending += 1;
+    this.hitFlash = new MuzzleFlashEffect(
+      x,
+      y,
+      dirX,
+      dirY,
+      partDone,
+      impactFlashConfig,
+    );
+    this.addChild(this.hitFlash);
+    this.hitFlash.run();
   }
 
   _onImpactComplete() {
@@ -708,7 +772,12 @@ export default class ShotEffectController extends Container {
 
   // проверяет, завершены ли звук и визуал, и если да, уничтожает объект
   _tryDestroy() {
-    if (this._visualsComplete && this._soundComplete && this._flashComplete) {
+    if (
+      this._visualsComplete &&
+      this._soundComplete &&
+      this._flashComplete &&
+      this._burstPending === 0
+    ) {
       this.destroy();
     }
   }
@@ -746,6 +815,16 @@ export default class ShotEffectController extends Container {
     if (this.flash) {
       this.flash.destroy();
       this.flash = null;
+    }
+
+    if (this.hitFlash) {
+      this.hitFlash.destroy();
+      this.hitFlash = null;
+    }
+
+    if (this.hitSmoke) {
+      this.hitSmoke.destroy();
+      this.hitSmoke = null;
     }
 
     if (this.parent) {

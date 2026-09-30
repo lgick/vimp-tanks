@@ -657,7 +657,7 @@ the authoritative one.
   up on landing) while the turret and the gun keep working, and the body
   carries the `STATIC_LEVEL_GROUP` mask while coasting on inertia: the walls
   of every level still stop it (at `maxForwardSpeed` a fall covers some
-  seven tiles, and without them the tank would land inside a building),
+  three and a half tiles, and without them the tank would land inside a building),
   while tanks, crates, rays and blasts do not reach it. While `z` stays
   `jumpClearance` above the take-off level the mask is empty altogether — a
   jump clears obstacles (`LevelState::clear_walls`: the threshold comes from

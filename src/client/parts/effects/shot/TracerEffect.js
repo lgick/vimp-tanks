@@ -188,12 +188,14 @@ export default class TracerEffect extends BaseEffect {
     }
   }
 
-  // хвост гаснет к дулу: подотрезки с растущей к голове альфой (по квадрату). Сначала
-  // все слои свечения, потом ядро — иначе свечение следующего подотрезка
-  // легло бы поверх ядра предыдущего. Подотрезок, пересекающий границу
-  // уровней, режется по ней: каждая часть — в графику своего уровня
+  // хвост гаснет к дулу: подотрезки с растущей к голове альфой (по квадрату)
+  // и шириной (линейно от доли `taper`). Сначала все слои свечения, потом
+  // ядро — иначе свечение следующего подотрезка легло бы поверх ядра
+  // предыдущего. Подотрезок, пересекающий границу уровней, режется по ней:
+  // каждая часть — в графику своего уровня
   _drawTrail(tail, head, alpha) {
     const { color, coreColor, coreWidth, glowWidth, glowAlpha } = this.config;
+    const taper = this.config.taper ?? 1;
     const steps = Math.max(1, this.config.fadeSteps);
     const pieces = [];
 
@@ -205,29 +207,34 @@ export default class TracerEffect extends BaseEffect {
       // так выглядит смазанная в движении точка, а не ровная полоса
       const share = (i + 1) / steps;
 
-      pieces.push({ from, to, fade: share * share });
+      pieces.push({
+        from,
+        to,
+        fade: share * share,
+        thin: lerp(taper, 1, share),
+      });
     }
 
     const parts = this._split(pieces);
 
-    for (const { graphics, from, to, fade } of parts) {
+    for (const { graphics, from, to, fade, thin } of parts) {
       graphics
         .moveTo(from[0], from[1])
         .lineTo(to[0], to[1])
         .stroke({
-          width: glowWidth,
+          width: glowWidth * thin,
           color,
           alpha: alpha * glowAlpha * fade,
           cap: 'round',
         });
     }
 
-    for (const { graphics, from, to, fade } of parts) {
+    for (const { graphics, from, to, fade, thin } of parts) {
       graphics
         .moveTo(from[0], from[1])
         .lineTo(to[0], to[1])
         .stroke({
-          width: coreWidth,
+          width: coreWidth * thin,
           color: coreColor,
           alpha: alpha * fade,
           cap: 'round',
@@ -235,8 +242,8 @@ export default class TracerEffect extends BaseEffect {
     }
   }
 
-  // подотрезки `[{ from, to, fade }]` (дистанции от дула) → части по кускам
-  // уровней `{ graphics, from: [x, y], to: [x, y], fade }`
+  // подотрезки `[{ from, to, fade, thin }]` (дистанции от дула) → части по
+  // кускам уровней `{ graphics, from: [x, y], to: [x, y], fade, thin }`
   _split(segments) {
     const point = distance => [
       this.startPositionX + this.nx * distance,
@@ -244,7 +251,7 @@ export default class TracerEffect extends BaseEffect {
     ];
     const parts = [];
 
-    for (const { from, to, fade } of segments) {
+    for (const { from, to, fade, thin } of segments) {
       for (const piece of this.pieces) {
         const a = Math.max(from, piece.from);
         const b = Math.min(to, piece.to);
@@ -255,6 +262,7 @@ export default class TracerEffect extends BaseEffect {
             from: point(a),
             to: point(b),
             fade,
+            thin,
           });
         }
       }

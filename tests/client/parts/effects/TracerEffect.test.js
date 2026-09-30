@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import TracerEffect, {
   tracerSpan,
 } from '../../../../src/client/parts/effects/shot/TracerEffect.js';
@@ -92,6 +92,46 @@ describe('TracerEffect', () => {
     effect._update(tracer.maxDuration);
 
     expect(done).toBe(true);
+  });
+});
+
+// хвост — штрих смазанной в движении точки: сужается к дулу (`taper`), а не
+// лента равной ширины
+describe('TracerEffect: сужение хвоста', () => {
+  // ширины обводок одного кадра: сначала свечение, потом ядро
+  const strokeWidths = config => {
+    const effect = new TracerEffect(0, 0, 500, 0, () => {}, config);
+    const graphics = effect._graphics.get(null);
+    const stroke = vi.spyOn(graphics, 'stroke');
+
+    effect._update(effect.animationDuration / 2);
+
+    const widths = stroke.mock.calls.map(([style]) => style.width);
+    const steps = config.fadeSteps;
+
+    effect.destroy();
+
+    return { glow: widths.slice(0, steps), core: widths.slice(steps) };
+  };
+
+  it('к голове шире, у головы — полная ширина, у хвоста — доля taper', () => {
+    const { glow, core } = strokeWidths(tracer);
+
+    for (let i = 1; i < glow.length; i += 1) {
+      expect(glow[i]).toBeGreaterThan(glow[i - 1]);
+    }
+
+    expect(glow.at(-1)).toBeCloseTo(tracer.glowWidth, 6);
+    expect(core.at(-1)).toBeCloseTo(tracer.coreWidth, 6);
+    expect(core[0]).toBeGreaterThanOrEqual(tracer.coreWidth * tracer.taper);
+    expect(core[0]).toBeLessThan(tracer.coreWidth);
+  });
+
+  it('taper 1 — ширина везде одна', () => {
+    const { glow, core } = strokeWidths({ ...tracer, taper: 1 });
+
+    expect(new Set(glow)).toEqual(new Set([tracer.glowWidth]));
+    expect(new Set(core)).toEqual(new Set([tracer.coreWidth]));
   });
 });
 

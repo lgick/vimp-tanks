@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import MuzzleFlashEffect, {
+  muzzleFlashLife,
   muzzleFlashShape,
+  muzzleRingShape,
   rollMuzzleFlash,
 } from '../../../../src/client/parts/effects/shot/MuzzleFlashEffect.js';
-import { muzzleFlash } from '../../../../src/config/render.js';
+import { muzzleFlash, impactFlash } from '../../../../src/config/render.js';
 
 // детерминированный «случай»: одно и то же число
 const fixed = value => () => value;
@@ -39,6 +41,11 @@ describe('rollMuzzleFlash', () => {
     const b = rollMuzzleFlash(muzzleFlash, rng);
 
     expect(a.forward[0].length).not.toBe(b.forward[0].length);
+  });
+
+  it('без sideLength боковых выбросов нет (вспышка разрыва)', () => {
+    expect(impactFlash.sideLength).toBe(0);
+    expect(rollMuzzleFlash(impactFlash, fixed(0.5)).sides).toEqual([]);
   });
 });
 
@@ -98,10 +105,85 @@ describe('muzzleFlashShape', () => {
     expect(tipOf(middle.points).x).toBeLessThan(tipOf(start.points).x);
     expect(shape({ t: 1 })).toEqual([]);
   });
+
+  it('огненный шар: круг в дуле на каждый слой, после языков всех слоёв', () => {
+    const polygons = shape();
+    const balls = polygons.slice(perLayer * muzzleFlash.layers.length);
+
+    expect(balls).toHaveLength(muzzleFlash.layers.length);
+
+    balls.forEach(({ points, alpha }, i) => {
+      const layer = muzzleFlash.layers[i];
+      const radius = Math.hypot(points[0], points[1]);
+
+      expect(radius).toBeCloseTo(muzzleFlash.ball.radius * layer.scale, 6);
+      expect(alpha).toBeCloseTo(layer.alpha, 6);
+
+      // центр — дуло
+      const xs = points.filter((_, k) => k % 2 === 0);
+
+      expect(xs.reduce((sum, x) => sum + x, 0) / xs.length).toBeCloseTo(0, 6);
+    });
+  });
+
+  it('без ball шара нет', () => {
+    const polygons = shape({ config: { ...muzzleFlash, ball: null } });
+
+    expect(polygons).toHaveLength(perLayer * muzzleFlash.layers.length);
+  });
+});
+
+describe('muzzleRingShape', () => {
+  const { ring } = muzzleFlash;
+
+  it('растёт быстро в начале и гаснет по квадрату', () => {
+    const start = muzzleRingShape(0, muzzleFlash);
+    const half = muzzleRingShape(ring.duration / 2, muzzleFlash);
+
+    expect(start.radius).toBe(0);
+    expect(start.alpha).toBeCloseTo(ring.alpha, 6);
+    // ease-out: к половине времени — три четверти радиуса
+    expect(half.radius).toBeCloseTo(ring.radius * 0.75, 6);
+    expect(half.alpha).toBeCloseTo(ring.alpha * 0.25, 6);
+    expect(half.color).toBe(ring.color);
+  });
+
+  it('после duration и без ring — null', () => {
+    expect(muzzleRingShape(ring.duration, muzzleFlash)).toBeNull();
+    expect(muzzleRingShape(0, { ...muzzleFlash, ring: null })).toBeNull();
+  });
+
+  it('muzzleFlashLife — по более долгой из частей', () => {
+    expect(muzzleFlashLife(muzzleFlash)).toBe(
+      Math.max(muzzleFlash.duration, ring.duration),
+    );
+    expect(muzzleFlashLife({ duration: 50, ring: null })).toBe(50);
+  });
 });
 
 describe('MuzzleFlashEffect', () => {
-  it('стоит в дуле и завершается через duration', () => {
+  it('языки гаснут через duration, кольцо — через ring.duration', () => {
+    const flash = new MuzzleFlashEffect(
+      0,
+      0,
+      1,
+      0,
+      () => {},
+      muzzleFlash,
+      fixed(0.5),
+    );
+
+    flash._update(muzzleFlash.duration);
+
+    // языков уже нет, кольцо ещё рисуется
+    expect(flash.isComplete).toBe(false);
+    expect(flash.graphics.bounds.width).toBeGreaterThan(0);
+
+    flash._update(muzzleFlash.ring.duration);
+    expect(flash.isComplete).toBe(true);
+  });
+
+  it('стоит в дуле и завершается через muzzleFlashLife', () => {
     let done = false;
     const flash = new MuzzleFlashEffect(
       10,
@@ -121,7 +203,7 @@ describe('MuzzleFlashEffect', () => {
     flash._update(muzzleFlash.duration / 2);
     expect(done).toBe(false);
 
-    flash._update(muzzleFlash.duration);
+    flash._update(muzzleFlashLife(muzzleFlash));
     expect(done).toBe(true);
   });
 });

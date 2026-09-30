@@ -27,18 +27,64 @@ export function rollMuzzleFlash(config, rng = Math.random) {
     });
   }
 
-  // боковые выбросы тоже неровные
-  const sides = [1 - rng() * config.jitter, 1 - rng() * config.jitter];
+  // боковые выбросы тоже неровные; без `sideLength` их нет
+  const sides = config.sideLength
+    ? [1 - rng() * config.jitter, 1 - rng() * config.jitter]
+    : [];
 
   return { forward, sides };
+}
+
+// вершин у многоугольника огненного шара: на радиусе в пару единиц мира
+// граней не видно
+const BALL_SIDES = 12;
+
+/**
+ * Полная длительность вспышки, мс: языки или ударное кольцо — что дольше.
+ *
+ * @param {object} config  `muzzleFlash`/`impactFlash` из src/config/render.js
+ * @returns {number}
+ */
+export function muzzleFlashLife(config) {
+  return Math.max(config.duration || 0, config.ring?.duration || 0);
+}
+
+/**
+ * Ударное кольцо вспышки в момент `elapsed` (мс): радиус растёт быстро в
+ * начале (ease-out по квадрату), яркость гаснет по квадрату. null — кольца
+ * нет в конфиге или оно уже погасло.
+ *
+ * @param {number} elapsed
+ * @param {object} config  `muzzleFlash`/`impactFlash` из src/config/render.js
+ * @returns {{ radius: number, width: number, alpha: number,
+ *   color: number } | null}
+ */
+export function muzzleRingShape(elapsed, config) {
+  const ring = config.ring;
+
+  if (!ring || !(ring.duration > 0) || elapsed >= ring.duration) {
+    return null;
+  }
+
+  const t = clamp(elapsed / ring.duration, 0, 1);
+  const grow = 1 - (1 - t) * (1 - t);
+  const life = 1 - t;
+
+  return {
+    radius: ring.radius * grow,
+    width: ring.width,
+    alpha: ring.alpha * life * life,
+    color: ring.color ?? config.coreColor,
+  };
 }
 
 /**
  * Полигоны вспышки в её собственных осях: дуло в (0, 0), выстрел вдоль
  * `(dirX, dirY)`. Каждый язык — узкий треугольник; каждый слой (`layers`)
  * рисует все языки в своём масштабе и со своей яркостью, так край выходит
- * мягким без текстур и фильтров. С `t` от 0 до 1 вспышка быстро гаснет
- * (яркость по квадрату) и немного сжимается.
+ * мягким без текстур и фильтров. Огненный шар (`ball`) — круг в дуле теми
+ * же слоями; его полигоны идут после языков всех слоёв. С `t` от 0 до 1
+ * вспышка быстро гаснет (яркость по квадрату) и немного сжимается.
  *
  * @param {object} p
  * @param {number} p.dirX
@@ -105,6 +151,31 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
     });
   }
 
+  if (config.ball?.radius > 0) {
+    for (const layer of config.layers) {
+      const alpha = layer.alpha * glow;
+
+      if (alpha <= 0) {
+        continue;
+      }
+
+      const radius = config.ball.radius * layer.scale * size;
+      const points = [];
+
+      for (let i = 0; i < BALL_SIDES; i += 1) {
+        const angle = (i / BALL_SIDES) * Math.PI * 2;
+
+        points.push(Math.cos(angle) * radius, Math.sin(angle) * radius);
+      }
+
+      polygons.push({
+        points,
+        color: layer.core ? config.coreColor : config.color,
+        alpha,
+      });
+    }
+  }
+
   return polygons;
 }
 
@@ -144,6 +215,12 @@ export default class MuzzleFlashEffect extends BaseEffect {
     this.elapsedTime += deltaMs;
     this.graphics.clear();
 
+    if (this.elapsedTime >= muzzleFlashLife(this.config)) {
+      this._completeEffect();
+
+      return;
+    }
+
     const t = this.config.duration
       ? this.elapsedTime / this.config.duration
       : 1;
@@ -160,8 +237,14 @@ export default class MuzzleFlashEffect extends BaseEffect {
       for (const { points, color, alpha } of polygons) {
         this.graphics.poly(points).fill({ color, alpha });
       }
-    } else {
-      this._completeEffect();
+    }
+
+    const ring = muzzleRingShape(this.elapsedTime, this.config);
+
+    if (ring && ring.radius > 0 && ring.alpha > 0) {
+      this.graphics
+        .circle(0, 0, ring.radius)
+        .stroke({ width: ring.width, color: ring.color, alpha: ring.alpha });
     }
   }
 

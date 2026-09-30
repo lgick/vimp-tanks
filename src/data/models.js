@@ -23,13 +23,13 @@ export default {
     brakingFactor: 0.3,
 
     // целевая максимальная скорость вперед (юнитов/с)
-    maxForwardSpeed: 260,
+    maxForwardSpeed: 130,
     // целевая максимальная скорость назад (юнитов/с)
     // (значение должно быть отрицательным)
-    maxReverseSpeed: -130,
+    maxReverseSpeed: -65,
 
     // коэффициент желаемой интенсивности поворота (зависит от инерции)
-    baseTurnTorqueFactor: 215,
+    baseTurnTorqueFactor: 110,
     // сопротивление движению
     // (чем выше значение, тем больше сопротивление)
     damping: {
@@ -64,7 +64,7 @@ export default {
     // максимальный угол поворота башни
     maxGunAngle: 1.4,
     // скорость поворота башни
-    gunRotationSpeed: 3.0,
+    gunRotationSpeed: 1.5,
     // скорость поворота башни в центр
     gunCenterSpeed: 10.0,
   },

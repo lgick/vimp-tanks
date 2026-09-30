@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Container, Texture } from 'pixi.js';
 import ShotEffectController from '../../../../src/client/parts/effects/shot/ShotEffectController.js';
-import { parallax, tracer } from '../../../../src/config/render.js';
+import { muzzleFlashLife } from '../../../../src/client/parts/effects/shot/MuzzleFlashEffect.js';
+import {
+  parallax,
+  tracer,
+  impactFlash,
+  impactSmoke,
+  lighting as lightingConfig,
+} from '../../../../src/config/render.js';
 import { cameraCenter } from '../../../../src/client/camera.js';
 import { OCCLUDER_BASE_Z, levelZ } from '../../../../src/client/levelZ.js';
 import { offsetPoint, reproject } from '../../../../src/client/parallax.js';
@@ -166,6 +173,9 @@ describe('ShotEffectController: попадание в динамику карт�
 
     expect(controller.impact.x).toBeCloseTo(50, 6);
     expect(controller.impact.y).toBeCloseTo(60, 6);
+    // разрыв — там же, где осколки, а не в точке из данных трассера
+    expect(controller.hitFlash.x).toBeCloseTo(50, 6);
+    expect(controller.hitFlash.y).toBeCloseTo(60, 6);
   });
 
   // осколки должны остаться там, где пуля встретила препятствие,
@@ -309,8 +319,122 @@ describe('ShotEffectController: вспышка у дула', () => {
     // шагает отдельно
     expect(controller._isDestroyed).toBe(false);
 
+    // языки уже погасли, ударное кольцо ещё идёт
     controller.flash._update(controller.flash.config.duration);
+    expect(controller._isDestroyed).toBe(false);
 
+    controller.flash._update(muzzleFlashLife(controller.flash.config));
+    expect(controller._isDestroyed).toBe(true);
+  });
+});
+
+// разрыв снаряда в точке попадания: вспышка веером к стрелку, клуб дыма и
+// ночной блик
+describe('ShotEffectController: разрыв при попадании', () => {
+  const hitRow = [10, 20, 110, 20, 0, 0, true, 1, 0, 0];
+  const withSmoke = {
+    ...assets,
+    smokeTexture: { texture: Texture.EMPTY, contentSize: 8 },
+  };
+  const makeWithAssets = (data, extraAssets, dependencies = {}) => {
+    const controller = new ShotEffectController(data, extraAssets, {
+      soundManager,
+      ...dependencies,
+    });
+
+    new Container().addChild(controller);
+    created.push(controller);
+
+    return controller;
+  };
+
+  it('попадание: вспышка разрыва в точке удара, языки к стрелку', () => {
+    const controller = makeController(hitRow);
+
+    controller.run();
+    finishTracer(controller);
+
+    expect(controller.hitFlash.parent).toBe(controller);
+    expect(controller.hitFlash.config).toBe(impactFlash);
+    expect(controller.hitFlash.x).toBe(110);
+    expect(controller.hitFlash.y).toBe(20);
+    expect(controller.hitFlash.dirX).toBeCloseTo(-1, 6);
+    expect(controller.hitFlash.dirY).toBeCloseTo(0, 6);
+  });
+
+  it('промах: разрыва нет', () => {
+    const controller = makeController([10, 20, 110, 20, 0, 0, false, 1, 0, 0]);
+
+    controller.run();
+    finishTracer(controller);
+
+    expect(controller.hitFlash).toBeNull();
+    expect(controller.hitSmoke).toBeNull();
+  });
+
+  it('клуб дыма — при текстуре дыма, в той же точке, к стрелку', () => {
+    const controller = makeWithAssets(hitRow, withSmoke);
+
+    controller.run();
+    finishTracer(controller);
+
+    expect(controller.hitSmoke.parent).toBe(controller);
+    expect(controller.hitSmoke.x).toBe(110);
+    expect(controller.hitSmoke.puffs).toHaveLength(impactSmoke.count);
+
+    for (const puff of controller.hitSmoke.puffs) {
+      expect(puff.vx).toBeLessThan(0);
+    }
+
+    // дым под аддитивным пламенем
+    expect(controller.getChildIndex(controller.hitSmoke)).toBeLessThan(
+      controller.getChildIndex(controller.hitFlash),
+    );
+  });
+
+  it('без текстуры дыма — только вспышка', () => {
+    const controller = makeController(hitRow);
+
+    controller.run();
+    finishTracer(controller);
+
+    expect(controller.hitSmoke).toBeNull();
+    expect(controller.hitFlash).not.toBeNull();
+  });
+
+  it('ночь: блик разрыва на уровне конца в точке удара', () => {
+    const lighting = { flash: vi.fn(), isNight: () => true };
+    const controller = makeController([10, 20, 110, 20, 0, 0, true, 1, 1, 1], {
+      lighting,
+    });
+
+    controller.run();
+    finishTracer(controller);
+
+    expect(lighting.flash).toHaveBeenLastCalledWith({
+      ...lightingConfig.flash.hit,
+      level: 1,
+      x: 110,
+      y: 20,
+      z: 1,
+    });
+  });
+
+  it('контроллер ждёт конца разрыва', () => {
+    soundManager.registerSound = vi.fn(() => null);
+
+    const controller = makeWithAssets(hitRow, withSmoke);
+
+    controller.run();
+    finishTracer(controller);
+    controller.flash._update(muzzleFlashLife(controller.flash.config));
+
+    // осколки легли и погасли, но дым ещё тает
+    controller.impact._completeEffect();
+    controller.hitFlash._update(muzzleFlashLife(impactFlash));
+    expect(controller._isDestroyed).toBe(false);
+
+    controller.hitSmoke._update(impactSmoke.lifetime.max);
     expect(controller._isDestroyed).toBe(true);
   });
 });
@@ -525,6 +649,11 @@ describe('ShotEffectController: попадание в грань стены', ()
     expect(controller.tracer.endPositionY).toBeCloseTo(end.y, 6);
     // точка удара для искр — исходная
     expect(controller.endPositionX).toBe(96);
+
+    // разрыв — на видимом конце, на грани, а не у подножия
+    finishTracer(controller);
+    expect(controller.hitFlash.x).toBeCloseTo(end.x, 6);
+    expect(controller.hitFlash.y).toBeCloseTo(end.y, 6);
   });
 
   it('грань от камеры: трассер обрывается на силуэте крыши', () => {
@@ -596,9 +725,15 @@ describe('ShotEffectController: попадание в грань стены', ()
     controller.onRender();
     expect(controller.zIndex).toBe(SHOT_Z);
 
-    // камера вернулась, но осколки уже на полу
+    // камера вернулась, осколки уже на полу, но разрыв ещё на грани на
+    // высоте ствола: над перекрывателем
     stage.position.x = 400 - 0;
     controller.impact._update(300);
+    controller.onRender();
+    expect(controller.zIndex).toBe(WALL_HIT_Z);
+
+    // разрыв погас: под перекрывателем, как осколки на полу
+    controller.hitFlash._update(muzzleFlashLife(impactFlash));
     controller.onRender();
     expect(controller.zIndex).toBe(SHOT_Z);
 

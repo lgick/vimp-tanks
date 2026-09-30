@@ -170,12 +170,15 @@ tank into the air, and two `coreParams.levels` numbers decide how far:
   does not forbid that, it only demands the intent be written into the
   config.
 - The landing pad has to be wide enough: the jump's horizontal reach is
-  roughly `speed × 2·vz/g` — up to about six tiles at `maxForwardSpeed` and
-  the full `maxLaunchVz`. That ceiling is not what a real ramp delivers: on
-  `overpass` the take-off is weaker and the measured reach is 3.5 tiles.
-  That is exactly why the bridge carries FIVE tiles of slab rather than
-  three — five leaves room on both sides, while on a three-tile deck a
-  take-off from row 31 put the tank right into the far railing.
+  roughly `speed × 2·vz/g` — up to about three tiles at `maxForwardSpeed`
+  (130) and the full `maxLaunchVz`. That ceiling is not what a real ramp
+  delivers: the take-off speed itself grows with the driving speed, so at
+  130 the `overpass` ramp gives only a hop well under a tile. The bridge's
+  FIVE tiles of slab were sized back when the tank drove at 260 and the
+  measured reach there was 3.5 tiles — five left room on both sides, while
+  on a three-tile deck a take-off from row 31 put the tank right into the
+  far railing. A boost plate before the ramp brings the long jump back
+  (the `downtown` parking roof).
 
 The core validates the same structure at load time and refuses a broken
 map, so a mistake is loud rather than silent — see
@@ -459,8 +462,8 @@ parallel array (not `customData`, which `Particle` doesn't have), and
 [architecture.md](architecture.md#texture-and-particle-lifecycle). Several
 channels (e.g. additive fire and normal smoke — a `ParticleContainer` has one
 blend mode) are simplest as one `ParticleChannel.js` each, as in `WreckFire`.
-For a handful of sprites per effect (like `ImpactEffect`'s 2-4 shrapnel
-particles), a plain `Container` + `Sprite` is simpler and cheap enough.
+For a handful of sprites per effect (like `ImpactEffect`'s 5-9 shrapnel
+particles or `PuffEffect`'s smoke puffs), a plain `Container` + `Sprite` is simpler and cheap enough.
 
 ## Tests
 
