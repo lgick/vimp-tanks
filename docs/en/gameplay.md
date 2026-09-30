@@ -56,15 +56,15 @@ and creates dynamic votes (e.g. `/bot`) via
 
 Plain text is a message to the team/everyone (length capped by the host, 60 characters). Messages starting with `/` are commands. The engine parses none of its own: the `CommandProcessor` registry is filled entirely by the game through `HostPlugin.chatCommands` (`src/host/metaCommands.js` for the portable ones, `src/host/botCommand.js` for `/bot`), so the same `/timeleft` may be missing in another game:
 
-| Command | Owner | Action |
-| --- | --- | --- |
-| `/name <nick>` | this game | Change name (with validation and a system message) |
-| `/timeleft` | this game | Time remaining on the map |
-| `/mapname` | this game | Current map's name |
-| `/rank` | this game | Your current rank (loaded from the auth service) |
-| `/bot <N> [team]` | this game | Spawn N bots (into a team, or spread evenly); `/bot 0 [team]` — remove bots |
-| `/nr` | this game | New round — **dev mode only** |
-| `/like <reason>` · `/unlike <reason>` | engine | Vote for/against the room's hoster (server rating) — **does not reach the host**, see below |
+| Command                               | Owner     | Action                                                                                      |
+| ------------------------------------- | --------- | ------------------------------------------------------------------------------------------- |
+| `/name <nick>`                        | this game | Change name (with validation and a system message)                                          |
+| `/timeleft`                           | this game | Time remaining on the map                                                                   |
+| `/mapname`                            | this game | Current map's name                                                                          |
+| `/rank`                               | this game | Your current rank (loaded from the auth service)                                            |
+| `/bot <N> [team]`                     | this game | Spawn N bots (into a team, or spread evenly); `/bot 0 [team]` — remove bots                 |
+| `/nr`                                 | this game | New round — **dev mode only**                                                               |
+| `/like <reason>` · `/unlike <reason>` | engine    | Vote for/against the room's hoster (server rating) — **does not reach the host**, see below |
 
 `/bot` is only available to active players. If more than one human is
 active, a vote runs instead of immediate execution; executing the command
@@ -134,7 +134,7 @@ A map may carry up to eight levels: the ground (0) and overhead floors
   Driving along it lifts the tank smoothly; the level snaps to the nearest
   whole one (0.5 is the border between floors). A single ramp may span
   several floors at once (0 → 2): while CLIMBING it the tank collides with
-  the geometry of *every* level the run connects, so it neither falls
+  the geometry of _every_ level the run connects, so it neither falls
   through the bridge nor clips into the wall at the top. A tank merely
   driving under the run's cells (a `1 → 2` ramp sits above ordinary ground)
   stays on its own level with its own walls: a ground wall under a ramp
@@ -253,18 +253,18 @@ A map may carry up to eight levels: the ground (0) and overhead floors
 A bullet flies at the shooter's gun height, as in GTA 2, and hits only what
 reaches that height:
 
-| Situation | Rule |
-| --- | --- |
-| **Slab to slab** | While the ray is over a floor of its level it only hits targets of that level; railings block it. A shot over another slab of the same level (a second bridge) travels on it just the same. |
-| **Off a slab** | The bullet does not drop to the level below. Over a cell without a floor of its level it flies on at gun height: it passes over tanks, crates and walls lower than itself and hits only what reaches it — a wall taller than the bullet or a tank at the very top of a ramp. The tracer stays at the height of the level it was fired from. |
-| **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it. |
-| **Upwards** | A bullet from below never reaches a tank on a slab above, not even on its very edge: it flies under the slab. Only a ramp leads up. |
-| **Tank on a ramp** | Visible to bullets of every level the run connects, if the bullet reaches it over the embankment and does not pass above it. |
-| **Ramp embankment** | A bullet flies at the shooter's gun height; on a slope the barrel follows the slope. A ramp's slope and sides stop it wherever the embankment is higher than the bullet. So a tank high up a ramp cannot be hit from the ground, a tank at its foot can, and a side shot hits the embankment face at gun height. A shot fired up the slope flies on over the slab the ramp leads to. |
-| **Tank on a slope** | Its bullet flies at its own gun height above the slope, so shooting sideways it passes over tanks standing on the ground below — the mirror of the embankment rule. Its bullet never passes through a slab: fired down a ramp that stands on a terrace, it stays on the terrace. |
-| **Tank in the air** | Invulnerable: while airborne neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. It does SHOOT, though: only driving is locked in flight. |
-| **Explosion** | Only hits targets on its own level — the slab shields it both upwards and downwards. |
-| **Bomb** | Lands on its owner's level; if there is no floor of that level under the drop point (on a ramp, for instance), the bomb comes to rest on the nearest floor below it — on a three-level map that is the level 1 slab, not the ground. |
+| Situation            | Rule                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Slab to slab**     | While the ray is over a floor of its level it only hits targets of that level; railings block it. A shot over another slab of the same level (a second bridge) travels on it just the same.                                                                                                                                                                                          |
+| **Off a slab**       | The bullet does not drop to the level below. Over a cell without a floor of its level it flies on at gun height: it passes over tanks, crates and walls lower than itself and hits only what reaches it — a wall taller than the bullet or a tank at the very top of a ramp. The tracer stays at the height of the level it was fired from.                                          |
+| **Ground to ground** | The ray travels at level 0; it passes freely under the bridge, and ground walls block it.                                                                                                                                                                                                                                                                                            |
+| **Upwards**          | A bullet from below never reaches a tank on a slab above, not even on its very edge: it flies under the slab. Only a ramp leads up.                                                                                                                                                                                                                                                  |
+| **Tank on a ramp**   | Visible to bullets of every level the run connects, if the bullet reaches it over the embankment and does not pass above it.                                                                                                                                                                                                                                                         |
+| **Ramp embankment**  | A bullet flies at the shooter's gun height; on a slope the barrel follows the slope. A ramp's slope and sides stop it wherever the embankment is higher than the bullet. So a tank high up a ramp cannot be hit from the ground, a tank at its foot can, and a side shot hits the embankment face at gun height. A shot fired up the slope flies on over the slab the ramp leads to. |
+| **Tank on a slope**  | Its bullet flies at its own gun height above the slope, so shooting sideways it passes over tanks standing on the ground below — the mirror of the embankment rule. Its bullet never passes through a slab: fired down a ramp that stands on a terrace, it stays on the terrace.                                                                                                     |
+| **Tank in the air**  | Invulnerable: while airborne neither rays nor explosions reach it. This is a rule, not a side effect — only map walls still stop it. It does SHOOT, though: only driving is locked in flight.                                                                                                                                                                                        |
+| **Explosion**        | Only hits targets on its own level — the slab shields it both upwards and downwards.                                                                                                                                                                                                                                                                                                 |
+| **Bomb**             | Lands on its owner's level; if there is no floor of that level under the drop point (on a ramp, for instance), the bomb comes to rest on the nearest floor below it — on a three-level map that is the level 1 slab, not the ground.                                                                                                                                                 |
 
 On a miss the tracer's end is drawn at the height the bullet flies at the
 **end** of the ray: a shot from a bridge over the ground ends at bridge

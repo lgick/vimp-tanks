@@ -21,6 +21,7 @@
 
 **Замеры** (JS-харнесс `tests/core/helpers.js → makeCore()`, реальный конфиг, `downtown`, `tile = 12.8`,
 `cell(v) = (v + 0.5)·tile`, полный газ вперёд):
+
 - пиковая скорость по стартовой клетке x: `3: 491, 5: 491, 8: 484, 8.5: 484, 9: 138, 9.25: 490, 10: 484, 12: 484`;
 - развёртка по 200 стартам от `cell(8.5)` = 115.2 с шагом 0.006: импульс теряют 5 стартов подряд,
   x = 115.998…116.022. Это окно шириной ≈0.03 на шаге пути ≈1.1 ед., то есть **≈2.5 % всех въездов на полном
@@ -61,18 +62,18 @@ p_N − p_{N−1} = v_start(N) · (1 + linear·dt) · dt
 `tests/core/core.test.js`, тест `'с бустера на полном газу танк приземляется на плиту парковки'`. Заменить
 
 ```js
-      // полтайла до респауна «бустер → рампа → крыша-парковка» (cell(9)):
-      // с самого респауна на maxForwardSpeed 130 танк въезжает на плиту так,
-      // что `p − v·dt` (surface::boost_dv) уже на ней, и импульса нет —
-      // граничный случай ядра, не правило этого теста
-      core.spawn_actor(1, 'm1', 1, cell(8.5), cell(35), 0);
+// полтайла до респауна «бустер → рампа → крыша-парковка» (cell(9)):
+// с самого респауна на maxForwardSpeed 130 танк въезжает на плиту так,
+// что `p − v·dt` (surface::boost_dv) уже на ней, и импульса нет —
+// граничный случай ядра, не правило этого теста
+core.spawn_actor(1, 'm1', 1, cell(8.5), cell(35), 0);
 ```
 
 на
 
 ```js
-      // респаун «бустер → рампа → крыша-парковка»
-      core.spawn_actor(1, 'm1', 1, cell(9), cell(35), 0);
+// респаун «бустер → рампа → крыша-парковка»
+core.spawn_actor(1, 'm1', 1, cell(9), cell(35), 0);
 ```
 
 `npx vitest run tests/core/core.test.js --reporter=dot` должен упасть: пик ниже 1.05.
@@ -280,7 +281,7 @@ fn boost_fires_for_every_entry_phase() {
 
      > The factor `1 + linear·dt` (`linear` is the body's own linear damping: the tank model's `damping.linear`,
      > a map body's damping) is there because Rapier — and the client's `rigid_body::integrate` after it — moves a
-     > body with the velocity *before* damping and stores the damped one: the step-start velocity times
+     > body with the velocity _before_ damping and stores the damped one: the step-start velocity times
      > `1 + linear·dt` is exactly the velocity that moved the body over the previous step. With plain `p − v·dt`
      > the look-back fell short by `v·linear·dt²` (≈ 0.03 units at 130 u/s), and a body whose previous centre lay
      > in that strip before the plate's edge lost the impulse — about 2.5 % of entries, and every straight
@@ -296,7 +297,7 @@ fn boost_fires_for_every_entry_phase() {
 
      > Множитель `1 + linear·dt` (`linear` — линейное демпфирование самого тела: `damping.linear` модели танка,
      > демпфирование тела карты) нужен потому, что Rapier — и вслед за ним клиентский `rigid_body::integrate` —
-     > сдвигает тело скоростью *до* демпфирования, а хранит задемпфированную: скорость начала шага, умноженная
+     > сдвигает тело скоростью _до_ демпфирования, а хранит задемпфированную: скорость начала шага, умноженная
      > на `1 + linear·dt`, и есть скорость, с которой тело прошло прошлый шаг. С простым `p − v·dt` проекция
      > недолетала на `v·linear·dt²` (≈ 0.03 ед. при 130 ед/с), и тело, чей прошлый центр лежал в этой полосе
      > перед кромкой плиты, теряло импульс — около 2.5 % въездов и каждый прямой проезд на полном газу с
@@ -334,6 +335,7 @@ npx vitest run --reporter=dot
 ```
 
 Должны остаться зелёными, в частности:
+
 - `core/src/surface.rs`: `boost_fires_on_entry_only`, `boost_entry_from_off_the_grid_fires`,
   `adjacent_plates_with_different_dirs_are_different_boosts`, `plate_without_hold_starts_nothing`,
   `held_boost_raises_the_ceiling_until_it_expires`;

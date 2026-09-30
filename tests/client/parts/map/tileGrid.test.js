@@ -22,8 +22,12 @@ const camera = { x: 0, y: 0 };
 
 describe('tileGrid: coversPoint', () => {
   it('точка над тайлом закрыта, вне тайла — нет', () => {
-    expect(coversPoint(grid, tiles, { x: 15, y: 5 }, camera, [0], 0)).toBe(true);
-    expect(coversPoint(grid, tiles, { x: 5, y: 5 }, camera, [0], 0)).toBe(false);
+    expect(coversPoint(grid, tiles, { x: 15, y: 5 }, camera, [0], 0)).toBe(
+      true,
+    );
+    expect(coversPoint(grid, tiles, { x: 5, y: 5 }, camera, [0], 0)).toBe(
+      false,
+    );
   });
 
   it('у края тайла решает запас margin', () => {
@@ -46,7 +50,14 @@ describe('tileGrid: coversPoint', () => {
   it('без камеры или грида — не закрыта', () => {
     expect(coversPoint(grid, tiles, { x: 15, y: 5 }, null, [0], 0)).toBe(false);
     expect(
-      coversPoint(tileGrid(null, { x: 1, y: 1 }, 10), tiles, { x: 15, y: 5 }, camera, [0], 0),
+      coversPoint(
+        tileGrid(null, { x: 1, y: 1 }, 10),
+        tiles,
+        { x: 15, y: 5 },
+        camera,
+        [0],
+        0,
+      ),
     ).toBe(false);
   });
 });
@@ -56,9 +67,17 @@ describe('tileGrid: cellsCoverPoint', () => {
     const cells = new Set(['1,0']);
     const scale = { x: 1, y: 1 };
 
-    expect(cellsCoverPoint(cells, 10, scale, { x: 15, y: 5 }, camera, [0], 0)).toBe(true);
-    expect(cellsCoverPoint(cells, 10, scale, { x: 9, y: 5 }, camera, [0], 0)).toBe(false);
-    expect(cellsCoverPoint(cells, 10, scale, { x: 9, y: 5 }, camera, [0], 2)).toBe(true);
-    expect(cellsCoverPoint(new Set(), 10, scale, { x: 15, y: 5 }, camera, [0], 0)).toBe(false);
+    expect(
+      cellsCoverPoint(cells, 10, scale, { x: 15, y: 5 }, camera, [0], 0),
+    ).toBe(true);
+    expect(
+      cellsCoverPoint(cells, 10, scale, { x: 9, y: 5 }, camera, [0], 0),
+    ).toBe(false);
+    expect(
+      cellsCoverPoint(cells, 10, scale, { x: 9, y: 5 }, camera, [0], 2),
+    ).toBe(true);
+    expect(
+      cellsCoverPoint(new Set(), 10, scale, { x: 15, y: 5 }, camera, [0], 0),
+    ).toBe(false);
   });
 });

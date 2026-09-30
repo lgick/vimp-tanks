@@ -2,11 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Container, Texture } from 'pixi.js';
 import Tracks from '../../../src/client/parts/tracks/Tracks.js';
 import { createLevelView } from '../../../src/client/levelView.js';
-import {
-  seeThrough,
-  parallax,
-  surfaceFx,
-} from '../../../src/config/render.js';
+import { seeThrough, parallax, surfaceFx } from '../../../src/config/render.js';
 
 // Следы были единственной сущностью 2.5D, не читавшей levelView: на плите
 // над игроком они оставались непрозрачными, хотя дым, ящики, танки и бомбы

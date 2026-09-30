@@ -65,13 +65,10 @@ exhaust: {
 // отсекает «напряжение» (> 1): упёршийся в стену танк дымит не сильнее,
 // чем едущий на полном газу, — за упор отвечает пыль из-под гусениц
 const gas = Math.min(this._engineLoad, 1);
-const exhaustRate = gas < SMOKE_CONFIG.exhaust.minLoad
-  ? 0
-  : lerp(
-      SMOKE_CONFIG.exhaust.idleSpawnRate,
-      SMOKE_CONFIG.exhaust.spawnRate,
-      gas,
-    );
+const exhaustRate =
+  gas < SMOKE_CONFIG.exhaust.minLoad
+    ? 0
+    : lerp(SMOKE_CONFIG.exhaust.idleSpawnRate, SMOKE_CONFIG.exhaust.spawnRate, gas);
 ```
 
 Отдельный аккумулятор `this._timeSinceExhaust` и отдельный цикл спавна,
@@ -98,7 +95,7 @@ const exhaustRate = gas < SMOKE_CONFIG.exhaust.minLoad
 `src/client/parts/Dust.js`, по образцу `Smoke.js`:
 
 ```js
-const DUST_BASE_Z = 2;   // над следами гусениц (1), под танком (3)
+const DUST_BASE_Z = 2; // над следами гусениц (1), под танком (3)
 ```
 
 Читает: `M1_X, M1_Y, M1_ANGLE, M1_VX, M1_VY, M1_ENGINE_LOAD, M1_SIZE,

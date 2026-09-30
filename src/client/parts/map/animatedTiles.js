@@ -62,7 +62,9 @@ export function buildAnimatedTiles(data, sheet, defs) {
       continue;
     }
 
-    const textures = (def.frames || []).map(frame => sheet.textures[`frame${frame}`]).filter(Boolean);
+    const textures = (def.frames || [])
+      .map(frame => sheet.textures[`frame${frame}`])
+      .filter(Boolean);
 
     if (textures.length === 0) {
       console.warn(`Animated tile ${id}: no frames found in the sprite sheet`);
@@ -140,6 +142,10 @@ export function updateAnimatedTiles(groups, t, isVisible = () => true) {
 // Текстуры принадлежат тайл-листу слоя: спрайты их не освобождают
 export function destroyAnimatedTiles(built) {
   built.container.parent?.removeChild(built.container);
-  built.container.destroy({ children: true, texture: false, textureSource: false });
+  built.container.destroy({
+    children: true,
+    texture: false,
+    textureSource: false,
+  });
   built.groups.length = 0;
 }

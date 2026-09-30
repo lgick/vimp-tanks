@@ -248,28 +248,28 @@ pub fn level_at_distance(segments: &[RaySegment], t: f32) -> Option<u8> {
 Фикстура — слоёная карта из `tests/core/fixtures/layered.json` (этап 3), с
 рампой и мостом.
 
-| Файл | Тест | Что проверяет |
-| --- | --- | --- |
-| `bots/controller.rs` | `bot_path_crosses_the_ramp` | Бот на земле, цель на мосту → путь содержит точку уровня 1 |
-| `bots/controller.rs` | `bot_prefers_the_enemy_on_its_level` | Два врага, ближний — на чужом уровне → выбран дальний свой |
-| `bots/controller.rs` | `bot_holds_fire_through_the_slab` | Цель под мостом, бот на мосту не в кромке → выстрела нет |
-| `bots/controller.rs` | `bot_fires_at_the_enemy_on_the_open_edge` | Бот на земле, цель уровня 1 в кромке без перил → стреляет |
-| `bots/controller.rs` | `falling_bot_releases_keys_and_does_not_get_stuck` | В `Falling` все клавиши отпущены, `stuck_timer` не растёт |
-| `bots/controller.rs` | `combat_reposition_stays_on_the_level` | Точка перепозиционирования проходима на уровне бота |
-| `shot_levels.rs` | `level_at_distance_prefers_the_upper_segment` | В зоне перекрытия сегментов возвращается уровень 1 |
+| Файл                 | Тест                                               | Что проверяет                                              |
+| -------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
+| `bots/controller.rs` | `bot_path_crosses_the_ramp`                        | Бот на земле, цель на мосту → путь содержит точку уровня 1 |
+| `bots/controller.rs` | `bot_prefers_the_enemy_on_its_level`               | Два врага, ближний — на чужом уровне → выбран дальний свой |
+| `bots/controller.rs` | `bot_holds_fire_through_the_slab`                  | Цель под мостом, бот на мосту не в кромке → выстрела нет   |
+| `bots/controller.rs` | `bot_fires_at_the_enemy_on_the_open_edge`          | Бот на земле, цель уровня 1 в кромке без перил → стреляет  |
+| `bots/controller.rs` | `falling_bot_releases_keys_and_does_not_get_stuck` | В `Falling` все клавиши отпущены, `stuck_timer` не растёт  |
+| `bots/controller.rs` | `combat_reposition_stays_on_the_level`             | Точка перепозиционирования проходима на уровне бота        |
+| `shot_levels.rs`     | `level_at_distance_prefers_the_upper_segment`      | В зоне перекрытия сегментов возвращается уровень 1         |
 
 Плюс сценарий `tests/scenarios/bots_bridge.json` (создаётся в этапе 8).
 
 ## 7.5 Changelog и документация
 
-* `CHANGELOG.md` → `### Added`: боты пользуются рампами и мостами,
+- `CHANGELOG.md` → `### Added`: боты пользуются рампами и мостами,
   выбирают цель и стреляют по правилам уровней.
   `### Changed`: форма внутреннего дампа `BotBrain` (путь стал списком
   точек с уровнем).
-* `docs/en|ru/gameplay.md`: раздел про ботов — что они умеют на
+- `docs/en|ru/gameplay.md`: раздел про ботов — что они умеют на
   многоуровневых картах и чего не умеют (не прыгают ради сокращения пути,
   если здоровья меньше урона от падения — если такое правило внедрено).
-* `docs/en|ru/core.md`: `BotView.levels`, `level_at_distance`.
+- `docs/en|ru/core.md`: `BotView.levels`, `level_at_distance`.
 
 ## Критерии готовности этапа
 

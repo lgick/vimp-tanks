@@ -74,14 +74,14 @@
      - снять флаг, оставить производные данные пустыми (`surfaces = None` → нейтральный путь);
      - `ctx.events.push(CoreEvent::Custom { data: json!({ "type": "mapDerivedError", "message": err }) })`;
      - ни `unwrap`/паники, ни молчаливого проглатывания.
-     Сейчас `onCoreEvent` в `src/host/index.js` не задан (там комментарий ≈22), поэтому на этом этапе завести его:
-     событие `type: 'mapDerivedError'` → `console.warn` с сообщением; прочие `custom` — игнорировать, как раньше.
-     Обработчик должен остаться Worker-safe. Документация: в `docs/en|ru/core.md` фраза «this game doesn't use it —
-     `onCoreEvent` is left unset» заменяется описанием `mapDerivedError`.
-     Форма события: `CoreEvent` сериализуется с `#[serde(tag = "type")]`, поэтому на проводе оно
-     `{ "type": "custom", "data": { "type": "mapDerivedError", "message": … } }`, а `GameCoreAdapter._drainEvents`
-     передаёт в `onCoreEvent` **только** `event.data`. Обработчик проверяет `data.type`.
-     Тесты:
+       Сейчас `onCoreEvent` в `src/host/index.js` не задан (там комментарий ≈22), поэтому на этом этапе завести его:
+       событие `type: 'mapDerivedError'` → `console.warn` с сообщением; прочие `custom` — игнорировать, как раньше.
+       Обработчик должен остаться Worker-safe. Документация: в `docs/en|ru/core.md` фраза «this game doesn't use it —
+       `onCoreEvent` is left unset» заменяется описанием `mapDerivedError`.
+       Форма события: `CoreEvent` сериализуется с `#[serde(tag = "type")]`, поэтому на проводе оно
+       `{ "type": "custom", "data": { "type": "mapDerivedError", "message": … } }`, а `GameCoreAdapter._drainEvents`
+       передаёт в `onCoreEvent` **только** `event.data`. Обработчик проверяет `data.type`.
+       Тесты:
      - Rust (`core/tests/sim.rs`) — повреждённый `game` после `deserialize` не роняет шаг, движение нейтральное; события
        читать тем же вызовом, что существующие тесты (`serde_json::from_str(&core.take_events())`, ≈349), и проверять
        оба уровня: внешний `type == "custom"` и `data.type == "mapDerivedError"`. (`take_events_json()` — имя метода
@@ -91,8 +91,8 @@
    - `reset_round_state(ctx)` — сбрасывает состояние, живущее внутри раунда: пропы (этап 5). Вызывается **только**
      из `on_map_loaded`. Не из отпечатка: при рестарте раунда карта та же и отпечаток не меняется, а сброс нужен.
      Не после `deserialize`: там это состояние восстановлено из дампа, и сброс стёр бы разрушения при эстафете.
-   На этапе 1 `reset_round_state` пустая. Тесты: хук вызывает обе функции; после `deserialize` первый шаг вызывает
-   только `rebuild_map_derived`, и ровно один раз (второй шаг — ни одной), в том числе на плоской карте.
+     На этапе 1 `reset_round_state` пустая. Тесты: хук вызывает обе функции; после `deserialize` первый шаг вызывает
+     только `rebuild_map_derived`, и ровно один раз (второй шаг — ни одной), в том числе на плоской карте.
 3. Клиент: `ClientMapConfig` (`core/src/client/mod.rs` ≈34) получает `#[serde(default)] game: MapGame`, а элементы
    `physicsDynamic` — `#[serde(default)] game: PropGame`. `TanksClient::set_map` (≈469) сохраняет разобранное.
 4. Тесты: Rust unit — `MapGame` разбирает пустой, отсутствующий и полный объект, неизвестные ключи игнорируются;

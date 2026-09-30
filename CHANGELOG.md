@@ -1011,7 +1011,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Client prediction now matches the server on a tangential hit.** Grazing
   a railing with the corner of the hull at full speed cost a frame of jerk:
-  the replica resolved contacts *after* integrating the position, so at
+  the replica resolved contacts _after_ integrating the position, so at
   148 u/s it was already 1.24 units inside the wall before it reacted, and
   it put the single contact point in the middle of the hull's face — no
   lever, so the hull did not turn where the server turned it (`angle` off by

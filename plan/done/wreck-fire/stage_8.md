@@ -3,7 +3,7 @@
 1. Форматирование изменённых JS/MD по `~/.prettierrc.mjs` (semi, singleQuote, trailingComma
    `all`, printWidth 80, arrowParens `avoid`; для `*.md` — printWidth 100, proseWrap `preserve`).
    Prettier в проекте не установлен: `npx --yes prettier@3 --config ~/.prettierrc.mjs --write
-   <файлы> --log-level warn` (если сети нет — форматировать вручную по этим правилам).
+<файлы> --log-level warn` (если сети нет — форматировать вручную по этим правилам).
 2. `npx eslint . --quiet` — зелёный.
 3. `npm test -- --silent` — зелёный (проекты `tanks` и `integration`).
 4. `npm run build` (нужен `core/pkg-web/`; нет — `npm run core:build:web`), вывод не раздувать.

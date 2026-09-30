@@ -158,13 +158,41 @@ const level0 = (function () {
   rect(map, jumpBoost.x0, jumpBoost.y0, jumpBoost.x1, jumpBoost.y1, T.BOOST_E);
 
   // рампы лежат в гриде уровня 0
-  rect(map, overpassRampWest.x0, overpass.railNorth + 1, overpassRampWest.x1, overpass.railSouth - 1, T.RAMP_E);
-  rect(map, overpassRampEast.x0, overpass.railNorth + 1, overpassRampEast.x1, overpass.railSouth - 1, T.RAMP_W);
+  rect(
+    map,
+    overpassRampWest.x0,
+    overpass.railNorth + 1,
+    overpassRampWest.x1,
+    overpass.railSouth - 1,
+    T.RAMP_E,
+  );
+  rect(
+    map,
+    overpassRampEast.x0,
+    overpass.railNorth + 1,
+    overpassRampEast.x1,
+    overpass.railSouth - 1,
+    T.RAMP_W,
+  );
   rect(map, jumpRamp.x0, jumpRamp.y0, jumpRamp.x1, jumpRamp.y1, T.RAMP_E);
 
   for (const bridge of bridges) {
-    rect(map, bridge.x0 + 1, bridgeRampNorth.y0, bridge.x1 - 1, bridgeRampNorth.y1, T.RAMP_S);
-    rect(map, bridge.x0 + 1, bridgeRampSouth.y0, bridge.x1 - 1, bridgeRampSouth.y1, T.RAMP_N);
+    rect(
+      map,
+      bridge.x0 + 1,
+      bridgeRampNorth.y0,
+      bridge.x1 - 1,
+      bridgeRampNorth.y1,
+      T.RAMP_S,
+    );
+    rect(
+      map,
+      bridge.x0 + 1,
+      bridgeRampSouth.y0,
+      bridge.x1 - 1,
+      bridgeRampSouth.y1,
+      T.RAMP_N,
+    );
   }
 
   // периметр
@@ -189,13 +217,28 @@ const level1 = (function () {
 
   // эстакада: торцы — выходы рамп во всю ширину плиты, перила по длинным
   // сторонам кроме разрывов
-  rect(map, overpass.x0, overpass.railNorth + 1, overpass.x1, overpass.railSouth - 1, T.SLAB);
+  rect(
+    map,
+    overpass.x0,
+    overpass.railNorth + 1,
+    overpass.x1,
+    overpass.railSouth - 1,
+    T.SLAB,
+  );
 
   for (let x = overpass.x0; x <= overpass.x1; x += 1) {
-    map[overpass.railNorth][x] = inRange(x, overpassLedgeNorth.x0, overpassLedgeNorth.x1)
+    map[overpass.railNorth][x] = inRange(
+      x,
+      overpassLedgeNorth.x0,
+      overpassLedgeNorth.x1,
+    )
       ? T.SLAB
       : T.RAILING;
-    map[overpass.railSouth][x] = inRange(x, overpassLedgeSouth.x0, overpassLedgeSouth.x1)
+    map[overpass.railSouth][x] = inRange(
+      x,
+      overpassLedgeSouth.x0,
+      overpassLedgeSouth.x1,
+    )
       ? T.SLAB
       : T.RAILING;
   }
@@ -215,7 +258,14 @@ const level1 = (function () {
 
   // мосты через канал: торцы — выходы рамп
   for (const bridge of bridges) {
-    rect(map, bridge.x0 + 1, bridgeDeck.y0, bridge.x1 - 1, bridgeDeck.y1, T.SLAB);
+    rect(
+      map,
+      bridge.x0 + 1,
+      bridgeDeck.y0,
+      bridge.x1 - 1,
+      bridgeDeck.y1,
+      T.SLAB,
+    );
     vline(map, bridge.x0, bridgeDeck.y0, bridgeDeck.y1, T.RAILING);
     vline(map, bridge.x1, bridgeDeck.y0, bridgeDeck.y1, T.RAILING);
   }
@@ -465,7 +515,9 @@ export default {
         lamp(15, 9, 0, { flicker: 0.35 }),
         lamp(80, 10, 0, { flicker: 0.35 }),
         // свои фонари уровня 1: эстакада, парковка, мосты
-        ...every(26, 70, 8, x => lamp(x, 23, 1, { radius: 90, color: 0xcfe0ff })),
+        ...every(26, 70, 8, x =>
+          lamp(x, 23, 1, { radius: 90, color: 0xcfe0ff }),
+        ),
         lamp(30, 35, 1, { radius: 100 }),
         lamp(29, 58, 1, { radius: 90 }),
         lamp(66, 58, 1, { radius: 90 }),
@@ -561,10 +613,38 @@ export default {
 
     // вентиляторы на крышах промзоны
     decals: [
-      { cell: [6, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 1.5 },
-      { cell: [8, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 1.1 },
-      { cell: [27, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 1.8 },
-      { cell: [29, 5], level: 1, layer: 2, frame: T.FAN, kind: 'rotate', rps: 0.9 },
+      {
+        cell: [6, 5],
+        level: 1,
+        layer: 2,
+        frame: T.FAN,
+        kind: 'rotate',
+        rps: 1.5,
+      },
+      {
+        cell: [8, 5],
+        level: 1,
+        layer: 2,
+        frame: T.FAN,
+        kind: 'rotate',
+        rps: 1.1,
+      },
+      {
+        cell: [27, 5],
+        level: 1,
+        layer: 2,
+        frame: T.FAN,
+        kind: 'rotate',
+        rps: 1.8,
+      },
+      {
+        cell: [29, 5],
+        level: 1,
+        layer: 2,
+        frame: T.FAN,
+        kind: 'rotate',
+        rps: 0.9,
+      },
     ],
   },
 

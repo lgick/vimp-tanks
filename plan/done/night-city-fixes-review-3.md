@@ -7,6 +7,7 @@
 ## Контекст
 
 Ревью охватывает задачу `plan/done/night-city-fixes-review-2.md` (этапы 1–8), коммит f9ba65d. Её суть:
+
 - `LevelLightMap` получил общие хелперы `growMeshPool`/`showLight`/`projectVertices`;
 - высоты засветки `wallWash` стали абсолютными;
 - мелкие дубли вынесены: `hasLevelMap`, `holeCenterAlpha`, `map.cellW/cellH`, `laneBounds`/`laneHeightAt`;
@@ -25,17 +26,17 @@
 
 ### Сводка находок
 
-| # | Важность | Критерий | Суть | Этап |
-| --- | --- | --- | --- | --- |
-| T1 | низкая (выше прочих) | тестируемость, поддерживаемость | Инвариант этапа 4 «свет и выстрел видят одни и те же стены» держится на одной строке `src/client/index.js`: `createLighting(undefined, { levelView, volumes })` и `volumes,` в объекте сервисов — один экземпляр. Тестом это не закреплено. Если кто-то вернёт `volumes: createVolumes()` или забудет передать `volumes` в `createLighting`, фары молча начнут светить сквозь стены: без `deps.volumes` сервис освещения стен не видит. Ни один тест не упадёт | 1 |
-| T2 | низкая | тестируемость | Новый модуль `src/client/lighting/rampLights.js` (два кеша: `quads` по источнику и `rampMeshes` по вееру, плюс `targets()`) не имеет своего теста. Прошлое ревью за то же самое отметило `occlusion.js` (L4). Тесты `createLighting.test.js` проверяют результат раскладки, но не то, что стоящий источник не пересобирает меши клина | 2 |
-| T3 | низкая | тестируемость, надёжность | Новый тест «wallWash: `level` прибавляется к высотам вершин» (`tests/client/lighting/lightGeometry.test.js`) сравнивает высоты `Float32Array` через `toBe(plain.heights[v] + 1)`. Проходит он по совпадению: при `height: 0.6` сумма точно представима во float32. При объёме стены 0.35 или высоте 0.7 тот же код даёт `false`, это проверено в Node: `f32(1.35) = 1.350000023841858`, а `f32(0.35) + 1 = 1.3499999940395355`. Любая безобидная правка данных теста уронит его | 3 |
-| R1 | низкая | DRY, читаемость | Условие «реестр `volumes` правили после последней сборки» записано дважды и по-разному: в `syncLevels` — `volumes && volumes.version !== volumesVersion`, в раннем выходе `render()` — `volumesVersion === (volumes ? volumes.version : null)`. Правка одного без другого даст либо лишнюю пересборку каждый кадр, либо задержку на тик | 4 |
-| R2 | низкая | читаемость | `occlusion.sync`: в цикле по `tops` переменная по-прежнему называется `byOwner`, и по ней зовётся `.values()`. После этапа 4 это массив вкладов, а не `Map(owner → …)`. Имя вводит в заблуждение, а `.values()` у массива работает случайно | 4 |
-| R3 | низкая | читаемость | Имя `rampLights` теперь значит две разные вещи рядом. Это контейнер `LevelLightMap.rampLights` и экземпляр модуля `createRampLights` в `createLighting.js`. Комментарий «…кладёт его источники в `rampLights`» стоит прямо над `rampLights.targets()` и читается как ссылка на модуль. Та же фраза есть в `rampLights.js` у `targets` | 4 |
-| S1 | низкая | структура, поддерживаемость | `frameOf` (раскладка текстуры источника, чистая функция) лежит в `occlusion.js`, и из-за неё `rampLights.js` зависит от модуля окклюзии. Все потребители её результата `frame` (`coneUv`, `fanUvs`, `rampLight`) — в `lightGeometry.js`. Своего теста у `frameOf` нет | 5 |
-| S2 | незначительная | простота | У `growMeshPool` параметр-фабрика `indices` ничего не делает. Все три вызывающих (`layoutFans`, `layoutWashes`, `layoutRampLights`) при первой раскладке нового меша заменяют все его буферы, потому что `mesh.shape`/`mesh.wash`/`mesh.ramp` у нового меша `undefined`. Начальные индексы ни разу не рисуются | 5 |
-| D1 | незначительная | стандартизация | В трёх абзацах `docs/` новая вставка не перенесена по ширине соседних строк (~80): в строке 110–137 символов. На рендер Markdown это не влияет, но диффы и чтение в редакторе хуже | 6 |
+| #   | Важность             | Критерий                        | Суть                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Этап |
+| --- | -------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| T1  | низкая (выше прочих) | тестируемость, поддерживаемость | Инвариант этапа 4 «свет и выстрел видят одни и те же стены» держится на одной строке `src/client/index.js`: `createLighting(undefined, { levelView, volumes })` и `volumes,` в объекте сервисов — один экземпляр. Тестом это не закреплено. Если кто-то вернёт `volumes: createVolumes()` или забудет передать `volumes` в `createLighting`, фары молча начнут светить сквозь стены: без `deps.volumes` сервис освещения стен не видит. Ни один тест не упадёт                  | 1    |
+| T2  | низкая               | тестируемость                   | Новый модуль `src/client/lighting/rampLights.js` (два кеша: `quads` по источнику и `rampMeshes` по вееру, плюс `targets()`) не имеет своего теста. Прошлое ревью за то же самое отметило `occlusion.js` (L4). Тесты `createLighting.test.js` проверяют результат раскладки, но не то, что стоящий источник не пересобирает меши клина                                                                                                                                           | 2    |
+| T3  | низкая               | тестируемость, надёжность       | Новый тест «wallWash: `level` прибавляется к высотам вершин» (`tests/client/lighting/lightGeometry.test.js`) сравнивает высоты `Float32Array` через `toBe(plain.heights[v] + 1)`. Проходит он по совпадению: при `height: 0.6` сумма точно представима во float32. При объёме стены 0.35 или высоте 0.7 тот же код даёт `false`, это проверено в Node: `f32(1.35) = 1.350000023841858`, а `f32(0.35) + 1 = 1.3499999940395355`. Любая безобидная правка данных теста уронит его | 3    |
+| R1  | низкая               | DRY, читаемость                 | Условие «реестр `volumes` правили после последней сборки» записано дважды и по-разному: в `syncLevels` — `volumes && volumes.version !== volumesVersion`, в раннем выходе `render()` — `volumesVersion === (volumes ? volumes.version : null)`. Правка одного без другого даст либо лишнюю пересборку каждый кадр, либо задержку на тик                                                                                                                                         | 4    |
+| R2  | низкая               | читаемость                      | `occlusion.sync`: в цикле по `tops` переменная по-прежнему называется `byOwner`, и по ней зовётся `.values()`. После этапа 4 это массив вкладов, а не `Map(owner → …)`. Имя вводит в заблуждение, а `.values()` у массива работает случайно                                                                                                                                                                                                                                     | 4    |
+| R3  | низкая               | читаемость                      | Имя `rampLights` теперь значит две разные вещи рядом. Это контейнер `LevelLightMap.rampLights` и экземпляр модуля `createRampLights` в `createLighting.js`. Комментарий «…кладёт его источники в `rampLights`» стоит прямо над `rampLights.targets()` и читается как ссылка на модуль. Та же фраза есть в `rampLights.js` у `targets`                                                                                                                                           | 4    |
+| S1  | низкая               | структура, поддерживаемость     | `frameOf` (раскладка текстуры источника, чистая функция) лежит в `occlusion.js`, и из-за неё `rampLights.js` зависит от модуля окклюзии. Все потребители её результата `frame` (`coneUv`, `fanUvs`, `rampLight`) — в `lightGeometry.js`. Своего теста у `frameOf` нет                                                                                                                                                                                                           | 5    |
+| S2  | незначительная       | простота                        | У `growMeshPool` параметр-фабрика `indices` ничего не делает. Все три вызывающих (`layoutFans`, `layoutWashes`, `layoutRampLights`) при первой раскладке нового меша заменяют все его буферы, потому что `mesh.shape`/`mesh.wash`/`mesh.ramp` у нового меша `undefined`. Начальные индексы ни разу не рисуются                                                                                                                                                                  | 5    |
+| D1  | незначительная       | стандартизация                  | В трёх абзацах `docs/` новая вставка не перенесена по ширине соседних строк (~80): в строке 110–137 символов. На рендер Markdown это не влияет, но диффы и чтение в редакторе хуже                                                                                                                                                                                                                                                                                              | 6    |
 
 ### Ответы на отступления исполнителя из отчёта
 
@@ -48,21 +49,22 @@
 
 ## Статус этапов
 
-| # | Этап | Находки | Статус |
-| --- | --- | --- | --- |
-| 1 | Тест связки сервисов: освещение и части карты делят один `volumes` | T1 | ✅ выполнен |
-| 2 | Свой тест модуля `rampLights.js` | T2 | ✅ выполнен |
-| 3 | Тест `wallWash` с `level`: сравнение float32 с допуском | T3 | ✅ выполнен |
-| 4 | Читаемость: предикат правки `volumes`, имя вкладов в `occlusion.sync`, `rampLights` в комментариях | R1, R2, R3 | ✅ выполнен |
-| 5 | Структура: `frameOf` → `lightGeometry.js`, `growMeshPool` без фабрики индексов | S1, S2 | ✅ выполнен |
-| 6 | Переносы строк в `docs/` | D1 | ✅ выполнен |
-| 7 | Итоговая проверка | — | ✅ выполнен |
+| #   | Этап                                                                                               | Находки    | Статус      |
+| --- | -------------------------------------------------------------------------------------------------- | ---------- | ----------- |
+| 1   | Тест связки сервисов: освещение и части карты делят один `volumes`                                 | T1         | ✅ выполнен |
+| 2   | Свой тест модуля `rampLights.js`                                                                   | T2         | ✅ выполнен |
+| 3   | Тест `wallWash` с `level`: сравнение float32 с допуском                                            | T3         | ✅ выполнен |
+| 4   | Читаемость: предикат правки `volumes`, имя вкладов в `occlusion.sync`, `rampLights` в комментариях | R1, R2, R3 | ✅ выполнен |
+| 5   | Структура: `frameOf` → `lightGeometry.js`, `growMeshPool` без фабрики индексов                     | S1, S2     | ✅ выполнен |
+| 6   | Переносы строк в `docs/`                                                                           | D1         | ✅ выполнен |
+| 7   | Итоговая проверка                                                                                  | —          | ✅ выполнен |
 
 Выполненный этап отметить «✅ выполнен» в заголовке и в таблице. Когда выполнены все этапы, перенести файл в
 `plan/done/` (`git mv plan/night-city-fixes-review-3.md plan/done/`, без коммита; если файл ещё не в git —
 обычный `mv`).
 
 **Порядок.** 1 → 2 → 3 → 4 → 5 → 6 → 7. Этапы независимы по файлам, кроме двух мест:
+
 - этапы 2 и 5 оба касаются `rampLights.js`. Тест этапа 2 мокает `lightGeometry.js` частично (`...actual`), поэтому
   переезд `frameOf` в `lightGeometry.js` на этапе 5 его не ломает;
 - этапы 4 и 5 оба правят `rampLights.js`: этап 4 — комментарий у `targets`, этап 5 — импорты.
@@ -79,7 +81,7 @@
    файлам целиком не запускать**: он переформатирует посторонний код.
 3. **Тесты**: Vitest, файлы в `tests/client/…`, импорты `../../../src/…` (проверять по соседним тестам).
    Частичный мок модуля — `vi.mock(path, async importOriginal => { const actual = await importOriginal();
-   return { ...actual, fn: vi.fn(actual.fn) }; })` на верхнем уровне файла, как в
+return { ...actual, fn: vi.fn(actual.fn) }; })` на верхнем уровне файла, как в
    `tests/client/lighting/occlusion.test.js`.
 4. **CHANGELOG.md**: записей **нет** ни у одного этапа. Это тесты, рефакторинг и документация, поведение игры не
    меняется.
@@ -127,7 +129,8 @@
 ### Решение
 
 1. **`tests/client/tanksClientPlugin.test.js`**. Сразу после строки `import { describe, it, expect, vi } from
-   'vitest';` и **до** `import clientPlugin from '../../src/client/index.js';` вставить:
+'vitest';` и **до** `import clientPlugin from '../../src/client/index.js';` вставить:
+
    ```js
    // шпион на фабрику освещения: тест связки сервисов смотрит, ЧТО ей
    // передал hooks.services. Поведение фабрики — настоящее
@@ -137,15 +140,19 @@
      return { ...actual, createLighting: vi.fn(actual.createLighting) };
    });
    ```
+
    После `import clientPlugin …` добавить:
+
    ```js
    import { createLighting } from '../../src/client/lighting/createLighting.js';
    ```
+
    `vi.mock` Vitest поднимает над импортами сам. Путь `../../src/client/lighting/createLighting.js` из
    `tests/client/` указывает на тот же файл, что `./lighting/createLighting.js` из `src/client/index.js`, поэтому
    `index.js` получит шпион.
 
 2. Там же, в `describe('ClientPlugin.hooks.services', …)` после теста «отдаёт levelView — …» добавить:
+
    ```js
    it('освещение получает те же levelView и volumes, что и части', () => {
      const services = clientPlugin.hooks.services(makeCore());
@@ -158,6 +165,7 @@
      expect(createLighting.mock.results.at(-1).value).toBe(services.lighting);
    });
    ```
+
    `makeCore` в файле уже есть (4 метода ядра): `services(core)` с ним работает, это видно по соседнему тесту.
 
 3. **`src/client/lighting/createLighting.js`**, шапка сервиса (≈ стр. 74–75):
@@ -189,6 +197,7 @@
 ### Проблема
 
 `src/client/lighting/rampLights.js` (132 строки) держит два кеша:
+
 - `quads: WeakMap(light → { key, texture, fan })` — прямоугольник текстуры источника. Пересчитывается, когда
   меняется ключ `kind,x,y,rotation,radius,spread` или текстура;
 - `rampMeshes: WeakMap(fan.points → Map(lane → меш | null))` — меши `rampLight`. Промах (`null`) тоже кешируется.
@@ -253,7 +262,7 @@ beforeEach(() => {
 
 1. **Без полос — ничего.** `setup()`; `target = new Map()`.
    `rampLights.push(target, 0, undefined, lamp(), item(), 1)` и `rampLights.push(target, 0, [], lamp(), item(),
-   1)` оба возвращают `false`. `target.size === 0`, `rampLight` не вызван.
+1)` оба возвращают `false`. `target.size === 0`, `rampLight` не вызван.
 2. **Свет задел клин — элемент в карту подножия.** `rampLights.push(target, 0, [lane], lamp(), item(), 0.5)` →
    `true`. `target.get(0)` длины 1. Элемент `toMatchObject({ texture: 'tex', color: 0xffcc88, alpha: 0.5 })`, его
    `ramp` не `null`. `rampLight` вызван 1 раз, а `rampLight.mock.calls[0][0]` —
@@ -320,9 +329,9 @@ src/client/lighting/rampLights.js` должен быть пуст (или сод
 483–506), в `describe('lightGeometry: coneFan (reaches/forward) / wallWash')`:
 
 ```js
-    for (let v = 0; v < plain.heights.length; v += 1) {
-      expect(withLevel.heights[v]).toBe(plain.heights[v] + 1);
-    }
+for (let v = 0; v < plain.heights.length; v += 1) {
+  expect(withLevel.heights[v]).toBe(plain.heights[v] + 1);
+}
 ```
 
 `heights` — `Float32Array`. `wallWash` пишет `heights[v] = level + h`: сумма в double, округлённая во float32
@@ -335,35 +344,35 @@ src/client/lighting/rampLights.js` должен быть пуст (или сод
 Тело теста заменить целиком (аргументы прежние, кроме `wallAt`, который теперь перебирается):
 
 ```js
-  it('wallWash: `level` прибавляется к высотам вершин', () => {
-    const args = {
-      x: 0,
-      y: 0,
-      points: new Float32Array([0, 0, 10, -5, 10, 5, 5, 10]),
-      reaches: new Float32Array([100, 100, 100]),
-      forward: 3,
-      uvOf,
-      cellW: CELL,
-      cellH: CELL,
-      height: 0.6,
-    };
+it('wallWash: `level` прибавляется к высотам вершин', () => {
+  const args = {
+    x: 0,
+    y: 0,
+    points: new Float32Array([0, 0, 10, -5, 10, 5, 5, 10]),
+    reaches: new Float32Array([100, 100, 100]),
+    forward: 3,
+    uvOf,
+    cellW: CELL,
+    cellH: CELL,
+    height: 0.6,
+  };
 
-    // объём 1 — верх засветки на `height`, объём 0.35 (перила) — на объёме
-    for (const wallAt of [() => 1, () => 0.35]) {
-      const plain = wallWash({ ...args, wallAt });
-      const withLevel = wallWash({ ...args, wallAt, level: 1 });
+  // объём 1 — верх засветки на `height`, объём 0.35 (перила) — на объёме
+  for (const wallAt of [() => 1, () => 0.35]) {
+    const plain = wallWash({ ...args, wallAt });
+    const withLevel = wallWash({ ...args, wallAt, level: 1 });
 
-      for (let v = 0; v < plain.heights.length; v += 1) {
-        // высоты во Float32Array: `level + h` округляется целиком и с
-        // `plain.heights[v] + 1` совпадает не при всех `h` (0.35 — нет)
-        expect(withLevel.heights[v]).toBeCloseTo(plain.heights[v] + 1, 6);
-      }
-
-      expect([...withLevel.base]).toEqual([...plain.base]);
-      expect([...withLevel.uvs]).toEqual([...plain.uvs]);
-      expect([...withLevel.indices]).toEqual([...plain.indices]);
+    for (let v = 0; v < plain.heights.length; v += 1) {
+      // высоты во Float32Array: `level + h` округляется целиком и с
+      // `plain.heights[v] + 1` совпадает не при всех `h` (0.35 — нет)
+      expect(withLevel.heights[v]).toBeCloseTo(plain.heights[v] + 1, 6);
     }
-  });
+
+    expect([...withLevel.base]).toEqual([...plain.base]);
+    expect([...withLevel.uvs]).toEqual([...plain.uvs]);
+    expect([...withLevel.indices]).toEqual([...plain.indices]);
+  }
+});
 ```
 
 `uvOf` и `CELL` уже объявлены в этом `describe` (`const CELL = 10;`, `const uvOf = (x, y) => [x, y];`). При ревью
@@ -384,38 +393,37 @@ src/client/lighting/rampLights.js` должен быть пуст (или сод
 ### 4.1. Одно условие «реестр `volumes` правили» (R1)
 
 `src/client/lighting/createLighting.js`:
+
 - `syncLevels` (≈ стр. 395–400):
   ```js
-      if (volumes && volumes.version !== volumesVersion) {
-        volumesVersion = volumes.version;
-        masksDirty = true;
-      }
+  if (volumes && volumes.version !== volumesVersion) {
+    volumesVersion = volumes.version;
+    masksDirty = true;
+  }
   ```
 - ранний выход `render()` (≈ стр. 1156–1157):
   ```js
-          !masksDirty &&
-          volumesVersion === (volumes ? volumes.version : null)
+  !masksDirty && volumesVersion === (volumes ? volumes.version : null);
   ```
 
 Решение:
+
 1. Сразу после `const volumeTops = () => volumes?.levels() ?? new Map();` (≈ стр. 325) добавить:
    ```js
-
    // реестр `volumes` правили после последней сборки вершин объёмов и
    // сетки препятствий фар (без реестра — никогда)
-   const volumesChanged = () =>
-     volumes !== null && volumes.version !== volumesVersion;
+   const volumesChanged = () => volumes !== null && volumes.version !== volumesVersion;
    ```
    `volumes` объявлен как `deps.volumes || null`, поэтому сравнение с `null` точное.
 2. В `syncLevels` условие `if (volumes && volumes.version !== volumesVersion) {` заменить на
    `if (volumesChanged()) {`. Тело и комментарий над ним не менять.
 3. В `render()` строку `volumesVersion === (volumes ? volumes.version : null)` заменить на `!volumesChanged()`:
    ```js
-          !masksDirty &&
-          !volumesChanged()
+   !masksDirty && !volumesChanged();
    ```
 
 Эквивалентность:
+
 - без реестра `volumesVersion` всегда `null` (его пишет только ветка `syncLevels` при `volumes !== null` и
   `clear()`), старое условие даёт `null === null`, новое — `!false`;
 - с реестром оба условия равны `volumes.version === volumesVersion`.
@@ -452,24 +460,24 @@ src/client/lighting/rampLights.js` должен быть пуст (или сод
 
 1. `src/client/lighting/createLighting.js`, `layoutLights` (≈ стр. 565–567):
    ```js
-       // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
-       // его источники в `rampLights`
-       const rampTargets = rampLights.targets();
+   // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
+   // его источники в `rampLights`
+   const rampTargets = rampLights.targets();
    ```
    комментарий заменить на
    ```js
-       // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
-       // его источники в свой контейнер `LevelLightMap.rampLights`
+   // клинья рамп: уровень вершины -> уровни подножия, чья карта кладёт
+   // его источники в свой контейнер `LevelLightMap.rampLights`
    ```
 2. `src/client/lighting/rampLights.js`, над `const targets = () => {` (≈ стр. 113–114):
    ```js
-     // уровень вершины -> уровни подножия: их карты кладут источники вершины
-     // в `rampLights`
+   // уровень вершины -> уровни подножия: их карты кладут источники вершины
+   // в `rampLights`
    ```
    заменить на
    ```js
-     // уровень вершины -> уровни подножия: их карты кладут источники вершины
-     // в контейнер `LevelLightMap.rampLights`
+   // уровень вершины -> уровни подножия: их карты кладут источники вершины
+   // в контейнер `LevelLightMap.rampLights`
    ```
 3. Имена переменной `rampLights` в `createLighting.js` и поля `LevelLightMap.rampLights` **не менять**: это
    лишний churn. Комментария хватает. Комментарий `LevelLightMap.js` (≈ стр. 234, «источники этих уровней идут в
@@ -487,6 +495,7 @@ src/client/lighting/rampLights.js` должен быть пуст (или сод
 
 Сейчас `src/client/lighting/occlusion.js` (≈ стр. 16–50) экспортирует `frameOf` — раскладку текстуры источника
 (`{ x, y, rotation, sx, sy, margin, width, height }`). Её используют:
+
 - `occlusion.js`: `occlusionOf`;
 - `rampLights.js`: `quadFanOf`, импорт `import { frameOf } from './occlusion.js';`.
 
@@ -495,7 +504,7 @@ src/client/lighting/rampLights.js` должен быть пуст (или сод
 
 1. **Перенести** из `occlusion.js` в `src/client/lighting/lightGeometry.js` комментарий
    «// Раскладка текстуры источника в мировых единицах — `coneUv`: …» и функцию `export function frameOf(light,
-   asset) { … }` целиком, без изменений тела. Вставить **перед** комментарием `coneUv`
+asset) { … }` целиком, без изменений тела. Вставить **перед** комментарием `coneUv`
    («// UV мировой точки `(px, py)` в текстуре конуса — …», ≈ стр. 291 `lightGeometry.js`), с пустой строкой
    после функции. В `occlusion.js` не должно остаться ни определения, ни пустых строк подряд на его месте.
 2. **`occlusion.js`**: в импорт из `./lightGeometry.js` добавить `frameOf`, сохранив алфавитный порядок:
@@ -603,6 +612,7 @@ function growMeshPool(pool, container, count, indices) {
 ```
 
 Почему фабрика не нужна: при первой раскладке нового меша каждый вызывающий заменяет все три буфера.
+
 - `layoutFans`: `mesh.shape !== shape` (у нового `undefined`) → `positions`/`uvs`; `mesh.topology !== topology` →
   `indices = fanIndices(rays, closed)`.
 - `layoutWashes`: `mesh.wash !== wash` → все три буфера новые.
@@ -634,7 +644,7 @@ function growMeshPool(pool, container, count, indices) {
    ```
 2. Вызовы:
    - `layoutWashes` (≈ стр. 305–310): многострочный `growMeshPool(this.washPool, this.lights, items.length, () =>
-     new Uint32Array(6));` → `growMeshPool(this.washPool, this.lights, items.length);`
+new Uint32Array(6));` → `growMeshPool(this.washPool, this.lights, items.length);`
    - `layoutRampLights` (≈ стр. 378–383) → `growMeshPool(this.rampLightPool, this.rampLights, items.length);`
    - `layoutFans` (≈ стр. 612) → `growMeshPool(pool, container, items.length);`
 3. `fanIndices` из импорта `LevelLightMap.js` **не убирать**: он нужен `layoutFans`
@@ -699,6 +709,7 @@ npm run build
 `npm run core:test` и `npm run sim:scenarios` не нужны.
 
 **Вручную** (коротко, `npm run dev`, карта `downtown`, ночь), потому что этапы 4–5 правят код рендера:
+
 1. Фары у стен: веер обрывается на стене, грань засвечена (4.1, 4.2, 5.2).
 2. Фонари и фары у рамп: свет на клине в его проекции (4.3, 5.1).
 3. Консоль без ошибок.
@@ -769,7 +780,7 @@ npm run build
 
 - **Форматирование.** Своего конфига prettier в репозитории нет, в CI форматирование не проверяется (как и в
   прошлом плане). Новая строка `createLighting.js` ≈ 660 (`rampLights.push(perRamp, level, lanes, light, item,
-  item.alpha * spill)`) — 81 символ. Строка `laneBounds(...)` в `rampWedgePolygon` (`lightGeometry.js` ≈ 40) — 86
+item.alpha * spill)`) — 81 символ. Строка `laneBounds(...)` в `rampWedgePolygon` (`lightGeometry.js` ≈ 40) — 86
   символов, но вся эта функция и до правки шире 80. Решение о форматтере проекта — отдельная задача.
 - **Размер клетки через `step · scale`** в `LevelLightMap.setMask/setTops/setRamps`, `lightArea` и
   `rampWedgePolygon`. Прошлый план оставил их сознательно: они работают до `initMap` и получают `step`/`scale`

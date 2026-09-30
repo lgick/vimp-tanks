@@ -16,10 +16,28 @@
     { "tick": 20, "op": "key", "who": "p3", "action": "down", "name": "right" },
     { "tick": 60, "op": "key", "who": "p1", "action": "up", "name": "left" },
     { "tick": 80, "op": "key", "who": "p2", "action": "up", "name": "right" },
-    { "tick": 80, "op": "key", "who": "p2", "action": "down", "name": "forward" },
+    {
+      "tick": 80,
+      "op": "key",
+      "who": "p2",
+      "action": "down",
+      "name": "forward"
+    },
     { "tick": 137, "op": "key", "who": "p3", "action": "up", "name": "right" },
-    { "tick": 137, "op": "key", "who": "p3", "action": "down", "name": "forward" },
-    { "tick": 170, "op": "key", "who": "p2", "action": "up", "name": "forward" },
+    {
+      "tick": 137,
+      "op": "key",
+      "who": "p3",
+      "action": "down",
+      "name": "forward"
+    },
+    {
+      "tick": 170,
+      "op": "key",
+      "who": "p2",
+      "action": "up",
+      "name": "forward"
+    },
     { "tick": 200, "op": "key", "who": "p1", "action": "down", "name": "fire" },
     { "tick": 204, "op": "key", "who": "p1", "action": "up", "name": "fire" },
     { "tick": 260, "op": "key", "who": "p1", "action": "down", "name": "fire" },

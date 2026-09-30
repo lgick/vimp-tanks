@@ -46,7 +46,9 @@ describe('animatedTiles', () => {
       ]),
     );
     expect(cells).toHaveLength(3);
-    expect(built.groups.every(group => group.sprites.every(s => s.cullable))).toBe(true);
+    expect(
+      built.groups.every(group => group.sprites.every(s => s.cullable)),
+    ).toBe(true);
   });
 
   it('тайл, которого нет в tiles слоя, этому слою не достаётся', () => {

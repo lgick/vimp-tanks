@@ -10,8 +10,14 @@ const TEAMS = { team1: 1, team2: 2, spectators: 3 };
 const SCRIPTED = { namePrefix: 'Bot', defaultModel: 'm1' };
 
 const RESPAWNS = {
-  team1: [[0, 0, 0], [1, 1, 0]],
-  team2: [[2, 2, 0], [3, 3, 0]],
+  team1: [
+    [0, 0, 0],
+    [1, 1, 0],
+  ],
+  team2: [
+    [2, 2, 0],
+    [3, 3, 0],
+  ],
 };
 
 let participants;

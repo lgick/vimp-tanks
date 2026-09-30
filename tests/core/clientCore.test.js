@@ -44,7 +44,12 @@ const push = (client, buffer, localNow) =>
   client.push_frame(new Uint8Array(buffer), localNow);
 
 // кадр ядра: pack_body + pack_frame → ArrayBuffer
-const packFrame = (core, serverTime, seq, { camera = null, playerId = -1 } = {}) => {
+const packFrame = (
+  core,
+  serverTime,
+  seq,
+  { camera = null, playerId = -1 } = {},
+) => {
   core.pack_body();
   core.pack_frame(
     serverTime,
@@ -101,7 +106,10 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
 
       core.spawn_actor(1, 'm1', 1, 100.123, 200.456, 0);
 
-      const decoded = decodeFrame(client, packFrame(core, 0, 1, { playerId: 1 }));
+      const decoded = decodeFrame(
+        client,
+        packFrame(core, 0, 1, { playerId: 1 }),
+      );
 
       expect(decoded.player.gameId).toBe(1);
       expect(decoded.player.state).toHaveLength(8);
@@ -390,7 +398,6 @@ describe.skipIf(!coreAvailable)('ClientCore (клиентское ядро)', ()
       expect(frames).toHaveLength(1);
       expect(frames[0].game.w1).toEqual([]); // свой дубль вычищен
     });
-
   });
 
   describe('поверхности (surface_at / surface_types / surface_dir_at)', () => {

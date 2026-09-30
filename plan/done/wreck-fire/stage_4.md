@@ -12,7 +12,11 @@ import { applyParallax, offsetPoint, reproject } from '../parallax.js';
 import { flicker, lightLevels } from '../lighting/lightMath.js';
 import { colorRamp, lerpColor } from '../colorRamp.js';
 import { fireIntensity, smokeRate, emissionEnd, smokeAlpha } from '../wreckTimeline.js';
-import { parallax as parallaxConfig, wreckFx, lighting as lightingConfig } from '../../config/render.js';
+import {
+  parallax as parallaxConfig,
+  wreckFx,
+  lighting as lightingConfig,
+} from '../../config/render.js';
 import { M1_X, M1_Y, M1_ANGLE, M1_CONDITION, M1_SIZE, M1_Z, M1_LEVEL } from '../snapshotFields.js';
 
 // как дым (Smoke): над корпусом (3), под перекрывателем объёма (5)
@@ -110,13 +114,26 @@ _ignite() {
 
 ```js
 if (wreckFx.sound && this._soundManager) {
-  this._soundId = this._soundManager.registerSound(wreckFx.sound, { position: { x: this._x, y: this._y } });
+  this._soundId = this._soundManager.registerSound(wreckFx.sound, {
+    position: { x: this._x, y: this._y },
+  });
 }
 // ночь: вспышка на уровне остова (no-op днём)
-this._lighting?.flash({ ...lightingConfig.flash.wreck, level: this._level, x: this._x, y: this._y, z: this._z });
+this._lighting?.flash({
+  ...lightingConfig.flash.wreck,
+  level: this._level,
+  x: this._x,
+  y: this._y,
+  z: this._z,
+});
 // толчок: остов под «взрывом» подпрыгивает, соседи качаются (src/client/blastJolt.js)
 if (wreckFx.joltRadius > 0) {
-  this._blasts?.exploded({ x: this._x, y: this._y, radius: wreckFx.joltRadius * this._scale, level: this._physLevel });
+  this._blasts?.exploded({
+    x: this._x,
+    y: this._y,
+    radius: wreckFx.joltRadius * this._scale,
+    level: this._physLevel,
+  });
 }
 ```
 
@@ -155,9 +172,9 @@ h, rise, age, life, size0, grow, aspectX, aspectY, spin, alpha, tint, scaleX, sc
 случайный.
 
 - `_spawnFlame(intensity)` (канал `_fire`, `kind: 'flame'`): точка `_hullPoint(fire.points,
-  fire.spread)`; скорость `wind × 0.5 + randomRange(−jitter, jitter) × _scale` по каждой оси,
+fire.spread)`; скорость `wind × 0.5 + randomRange(−jitter, jitter) × _scale` по каждой оси,
   `drag: 0` (живёт полсекунды — сопротивление не нужно); `size0 = randomRange(size) × _scale ×
-  (0.6 + 0.4 × intensity)` — стихающий пожар даёт языки мельче; `life = randomRange(lifetime)`;
+(0.6 + 0.4 × intensity)` — стихающий пожар даёт языки мельче; `life = randomRange(lifetime)`;
   `rise: fire.rise`, `grow: fire.grow`, `alpha: fire.alpha`, `aspectX/Y ∈ [0.8, 1.2]`,
   `spin ∈ [−1, 1]` рад/с.
 - `_spawnFireball()` (`kind: 'fireball'`): точка `_hullPoint([[0, 0]], 0.8)`; радиальная
@@ -168,13 +185,13 @@ h, rise, age, life, size0, grow, aspectX, aspectY, spin, alpha, tint, scaleX, sc
   длина/ширина штриха `sparks.length/width × _scale × _fireUnit`.
 - `_spawnSmoke(heat, burst)` (канал `_smoke`, `kind: 'smoke'`): точка
   `_hullPoint(fire.points, fire.spread)`; угол случайный, модуль — `burst ?
-  randomRange(smoke.burst.speed) : randomRange(0, smoke.speed)` (× `_scale`), к скорости
+randomRange(smoke.burst.speed) : randomRange(0, smoke.speed)` (× `_scale`), к скорости
   прибавить ветер; `windX/Y = wind`, `drag: smoke.drag`; `r = Math.random()`,
   `tint = lerpColor(lerpColor(cooling[0], cooling[1], r), lerpColor(burning[0], burning[1], r), heat)`
   (задаётся один раз); пик прозрачности `burst ? smoke.burst.alpha : lerp(smoke.tailAlpha,
-  smoke.alpha, heat)`; `life = randomRange(smoke.lifetime) × (burst ? 0.8 : 1)`;
+smoke.alpha, heat)`; `life = randomRange(smoke.lifetime) × (burst ? 0.8 : 1)`;
   `size0 = randomRange(smoke.size) × _scale × (burst ? 1.3 : 1) × _smokeUnit`; `aspectX/Y ∈
-  [0.7, 1.3]`, `spin ∈ [−0.3, 0.3]`, `rise: smoke.rise`, `grow: smoke.grow`.
+[0.7, 1.3]`, `spin ∈ [−0.3, 0.3]`, `rise: smoke.rise`, `grow: smoke.grow`.
 
 ## 4.5 `_tick(deltaMs)` — симуляция (Ticker.shared)
 
@@ -223,7 +240,7 @@ _tick(deltaMs) {
   `p.h = p.rise × (1 − (1 − t)²)`; `view.rotation += p.spin × sec`;
   `view.alpha = smokeAlpha(t, p.alpha)`; `tint` не меняется.
 - В конце — непроецированный вид: `view.x = p.x; view.y = p.y; view.scaleX = p.scaleX;
-  view.scaleY = p.scaleY` (проекцию наложит `_render`; без камеры — например, в тестах — вид
+view.scaleY = p.scaleY` (проекцию наложит `_render`; без камеры — например, в тестах — вид
   остаётся мировым).
 
 `_stepFlash(dt)`: если `!this._flash.visible` — выход; `_flashAge += dt`;
@@ -326,14 +343,35 @@ const assets = {
 };
 // полный ряд m1: [x, y, angle, gunRotation, vx, vy, engineLoad, condition,
 //  size, team, angvel, z, level, vz, pitch, roll]
-const row = ({ x = 100, y = 100, condition = 3, z = 0, level = 0, size = 3 } = {}) =>
-  [x, y, 0, 0, 0, 0, 0, condition, size, 1, 0, z, level, 0, 0, 0];
+const row = ({ x = 100, y = 100, condition = 3, z = 0, level = 0, size = 3 } = {}) => [
+  x,
+  y,
+  0,
+  0,
+  0,
+  0,
+  0,
+  condition,
+  size,
+  1,
+  0,
+  z,
+  level,
+  0,
+  0,
+  0,
+];
 const makeDeps = () => ({
   renderer: { screen: { width: 800, height: 600 } },
   levelView: { alphaFor: () => 1, tintFor: () => 0xffffff },
   soundManager: { registerSound: vi.fn(() => 's1'), releaseSound: vi.fn() },
-  lighting: { enabled: true, addLight: vi.fn(light => ({ ...light })), updateLight: vi.fn(),
-              removeLight: vi.fn(), flash: vi.fn() },
+  lighting: {
+    enabled: true,
+    addLight: vi.fn(light => ({ ...light })),
+    updateLight: vi.fn(),
+    removeLight: vi.fn(),
+    flash: vi.fn(),
+  },
   blasts: { exploded: vi.fn() },
 });
 // парт на сцене (Container), созданные — в массив, afterEach → destroy() (снимает Ticker.shared)

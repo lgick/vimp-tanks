@@ -83,12 +83,12 @@ audio:check` зелёный. Уровни не сдвинулись, поэто�
 
 Порт в `src/client/parts/Tank.js` (числа — как в референсе):
 
-| Константа | Было | Стало |
-| --- | --- | --- |
-| `MAX_ENGINE_RATE` | 1.1 | 1.15 |
-| `STRAIN_ENGINE_RATE` | 1.18 | 1.25 |
-| `MIN_ENGINE_VOLUME_FACTOR` | 0.9 | 0.6 |
-| `IDLE_WOBBLE_DEPTH` / `IDLE_WOBBLE_HZ` | — | 0.015 / 2.5 |
+| Константа                              | Было | Стало       |
+| -------------------------------------- | ---- | ----------- |
+| `MAX_ENGINE_RATE`                      | 1.1  | 1.15        |
+| `STRAIN_ENGINE_RATE`                   | 1.18 | 1.25        |
+| `MIN_ENGINE_VOLUME_FACTOR`             | 0.9  | 0.6         |
+| `IDLE_WOBBLE_DEPTH` / `IDLE_WOBBLE_HZ` | —    | 0.015 / 2.5 |
 
 `calculateEngineSoundParams` экспортирована, принимает `timeMs`
 (`performance.now()` из `_getSoundData`) и сама защищена
@@ -121,7 +121,7 @@ audio:check` зелёный. Уровни не сдвинулись, поэто�
 
 - [x] `npm run audio:check` зелёный, `tank-engine` — `-16.0` в обоих кодеках.
 - [x] `npx eslint .` + `npm test` (T, 303) и `npx eslint .` + `npx vitest
-      run` (E, 2332) зелёные.
+    run` (E, 2332) зелёные.
 - [ ] На деве: стоя на месте — двигатель слышен как двигатель (лёгкое
       покачивание тона), без гула и без щелчка при появлении танка; чужие
       танки панорамируются. Приёмка на слух за пользователем.

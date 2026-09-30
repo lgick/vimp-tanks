@@ -16,8 +16,8 @@
 После строки `this._physLevel = …` добавить
 
 ```js
-    // полёт: 0 на земле и на склоне рампы (как Tank/Dust)
-    this._vz = data[M1_VZ] || 0;
+// полёт: 0 на земле и на склоне рампы (как Tank/Dust)
+this._vz = data[M1_VZ] || 0;
 ```
 
 ## 1.3. Конструктор
@@ -34,14 +34,14 @@
 вставить
 
 ```js
-    // в полёте земли под остовом ещё нет: копоть ляжет там, где он
-    // приземлится (update), а не повиснет в воздухе на высоте гибели
-    if (this._vz !== 0) {
-      this._scorchPending = true;
-      return;
-    }
+// в полёте земли под остовом ещё нет: копоть ляжет там, где он
+// приземлится (update), а не повиснет в воздухе на высоте гибели
+if (this._vz !== 0) {
+  this._scorchPending = true;
+  return;
+}
 
-    this._scorchPending = false;
+this._scorchPending = false;
 ```
 
 Остальное тело не менять: оно берёт текущие `_x/_y/_z/_level`, то есть уже точку приземления. Комментарий над
@@ -52,10 +52,10 @@
 После блока `if (this._active) { … follow … }` и ДО чтения `condition` с ранним `return` вставить
 
 ```js
-    // погиб в полёте: копоть — в первом ряду на земле
-    if (this._scorchPending && this._vz === 0) {
-      this._addScorch();
-    }
+// погиб в полёте: копоть — в первом ряду на земле
+if (this._scorchPending && this._vz === 0) {
+  this._addScorch();
+}
 ```
 
 Если в том же ряду пришёл респаун, `_reset()` ниже снимет только что положенную копоть, это безвредно.
@@ -118,6 +118,7 @@
 
      Респаун именно в полёте: с `vz: 0` в ряду респауна копоть кладётся и тут же снимается `_reset`, и тест не
      ловит потерю сброса из 1.7.
+
   4. «свет в полёте — только уровень отрисовки, на рампе — два уровня»:
      - `ignited({ z: 0.5, vz: -1 })`, `part._tick(100)`;
      - последний вызов `deps.lighting.updateLight` получает патч с `levels: [0]`;
@@ -130,6 +131,7 @@
 ## 1.10. Документация
 
 en и ru в одном изменении. В таблице `wreckFx`, строка `scorch`:
+
 - `docs/en/configuration.md`: «The mark on the ground at the point of death, lasting until the respawn» →
   «The mark on the ground at the point of death (a tank killed in flight — where the wreck lands), lasting until
   the respawn»;

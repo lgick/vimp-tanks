@@ -130,11 +130,11 @@ slope: rise / span.max(f32::EPSILON),
 2. Фильтрация. Правило Rapier: пара взаимодействует, если
    `(a.memberships & b.filter) != 0 && (b.memberships & a.filter) != 0`.
 
-   | Кто | memberships | filter |
-   | --- | --- | --- |
-   | страж | `RAMP_GUARD_GROUP` | `level_group(low)` — уровень, с которого прогон начинается |
-   | тело `Grounded` / тело карты | `level_group(level)` (как сейчас) | `level_group(level) \| RAMP_GUARD_GROUP` |
-   | тело `Ramp { climbing: true }` | объединение уровней прогона (как сейчас) | то же **без** `RAMP_GUARD_GROUP` |
+   | Кто                            | memberships                              | filter                                                     |
+   | ------------------------------ | ---------------------------------------- | ---------------------------------------------------------- |
+   | страж                          | `RAMP_GUARD_GROUP`                       | `level_group(low)` — уровень, с которого прогон начинается |
+   | тело `Grounded` / тело карты   | `level_group(level)` (как сейчас)        | `level_group(level) \| RAMP_GUARD_GROUP`                   |
+   | тело `Ramp { climbing: true }` | объединение уровней прогона (как сейчас) | то же **без** `RAMP_GUARD_GROUP`                           |
 
    Так законный въезд с нижнего торца свободен (там стража нет), бок и
    верхний торец закрыты, а поднявшийся танк выезжает наверх, не задев
@@ -197,7 +197,8 @@ slope: rise / span.max(f32::EPSILON),
 В `validate_levels` добавить проверку: множества клеток разных прогонов не
 пересекаются; сообщение — с координатами первой общей клетки и индексами
 рамп. Фикстура `packages/engine/contract/fixtures/layered/bad-ramps-overlap.json`
-+ тест правила `e4`.
+
+- тест правила `e4`.
 
 ---
 
@@ -255,8 +256,11 @@ schema.fields[3].name == "z" && schema.fields[4].name == "level"
 двигатель попадает в ветку `_updateSpatialSound` (`:429-432`):
 
 ```js
-if (distance > MIN_SPATIAL_DISTANCE) { sound.pos(x - lx, 0, y - ly, soundId); }
-else { sound.pos(0, 0, 0, soundId); }   // "отключение панорамирования" — неправда
+if (distance > MIN_SPATIAL_DISTANCE) {
+  sound.pos(x - lx, 0, y - ly, soundId);
+} else {
+  sound.pos(0, 0, 0, soundId);
+} // "отключение панорамирования" — неправда
 ```
 
 Панорама не отключается: источник ставится ровно на слушателя, и браузер
@@ -287,6 +291,7 @@ else { sound.pos(0, 0, 0, soundId); }   // "отключение панорам�
 
    `pannerAttr` ставится один раз на экземпляр звука — не звать каждый кадр
    (флаг в регистрации `_pannerApplied`).
+
 3. Ту же ветку применить в `processAudibility` (`:305-311`), где
    одноразовые звуки позиционируются при старте, иначе свой выстрел
    останется панорамным.
@@ -302,6 +307,7 @@ else { sound.pos(0, 0, 0, soundId); }   // "отключение панорам�
 ### Тесты
 
 `tests/client/SoundManager.test.js` (создать, если нет):
+
 - `spatial: false` не зовёт `sound.pos(x, y)` с ненулевыми аргументами;
 - `spatial: false` ставит `equalpower` ровно один раз;
 - повторный `updateActiveSounds` с тем же `rate` не зовёт `sound.rate`.
@@ -348,15 +354,15 @@ else { sound.pos(0, 0, 0, soundId); }   // "отключение панорам�
 
 Всё в `/Users/dmitry/Sites/my/vimp`, рабочее дерево, без коммита.
 
-| Пункт | Файлы |
-| --- | --- |
-| 2.1 `levelHeight` | `core/src/map.rs` (`MapConfig::level_height`, `MapLevels::level_height`, `build` +1 аргумент, уклон `rise * level_height / span`, валидация), `src/client/main.js` (payload `set_map` + контекст парта), `src/host/meta/core/RoundManager.js` (`scaleMapData`), `src/lib/capabilities.js`, `contract/surface.json`, правило `e4-map-layers.js`, фикстура `bad-level-height.json` |
-| 2.2 стражи прогона | `core/src/map.rs`: `RAMP_GUARD_GROUP`, `body_filter`, `levels_interaction_on_ramp`, `ramp_guard_interaction`, `GameMap::create_ramp_guards`; `ramps` в контексте парта (`main.js`) |
-| 2.3 пересечение прогонов | `core/src/map.rs` (`validate_levels`), `e4-map-layers.js`, фикстура `bad-ramps-overlap.json` |
-| 2.4 `with_levels` | `core/src/config.rs` (`FieldRole`, `BlockSchema::with_levels`, `validate_level_roles`), `core/src/game.rs` (проверка в `load_map`, чтение ролей) |
-| 2.5 длительность падения | `src/lib/coreConfig.js`, `tests/lib/coreConfig.test.js` |
-| 2.6 звук | `src/client/SoundManager.js`, `tests/client/SoundManager.test.js` |
-| 2.7 документация | `docs/{en,ru}/{plugin-api,core,configuration,client,network,debugging}.md`, `packages/engine/CHANGELOG.md`, `packages/engine/core/CHANGELOG.md` |
+| Пункт                    | Файлы                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1 `levelHeight`        | `core/src/map.rs` (`MapConfig::level_height`, `MapLevels::level_height`, `build` +1 аргумент, уклон `rise * level_height / span`, валидация), `src/client/main.js` (payload `set_map` + контекст парта), `src/host/meta/core/RoundManager.js` (`scaleMapData`), `src/lib/capabilities.js`, `contract/surface.json`, правило `e4-map-layers.js`, фикстура `bad-level-height.json` |
+| 2.2 стражи прогона       | `core/src/map.rs`: `RAMP_GUARD_GROUP`, `body_filter`, `levels_interaction_on_ramp`, `ramp_guard_interaction`, `GameMap::create_ramp_guards`; `ramps` в контексте парта (`main.js`)                                                                                                                                                                                               |
+| 2.3 пересечение прогонов | `core/src/map.rs` (`validate_levels`), `e4-map-layers.js`, фикстура `bad-ramps-overlap.json`                                                                                                                                                                                                                                                                                     |
+| 2.4 `with_levels`        | `core/src/config.rs` (`FieldRole`, `BlockSchema::with_levels`, `validate_level_roles`), `core/src/game.rs` (проверка в `load_map`, чтение ролей)                                                                                                                                                                                                                                 |
+| 2.5 длительность падения | `src/lib/coreConfig.js`, `tests/lib/coreConfig.test.js`                                                                                                                                                                                                                                                                                                                          |
+| 2.6 звук                 | `src/client/SoundManager.js`, `tests/client/SoundManager.test.js`                                                                                                                                                                                                                                                                                                                |
+| 2.7 документация         | `docs/{en,ru}/{plugin-api,core,configuration,client,network,debugging}.md`, `packages/engine/CHANGELOG.md`, `packages/engine/core/CHANGELOG.md`                                                                                                                                                                                                                                  |
 
 ## Отклонения от плана
 

@@ -96,14 +96,14 @@ Rust `TankRow::fields()` кладёт `vz` как `FieldValue::F32` — тип �
 вернуть `lerp` можно будет молча:
 
 ```js
-  // `vz` — детектор касания, а не плавная величина: сглаженная выборка
-  // точного нуля не даёт, и приземление чужого танка перестаёт
-  // детектироваться (см. src/client/landing.js)
-  it('vz не интерполируется', () => {
-    expect(snapshot.m1.fields[fields.M1_VZ].interp).toBe('discrete');
-    expect(snapshot.m1.fields[fields.M1_PITCH].interp).toBe('lerp');
-    expect(snapshot.m1.fields[fields.M1_ROLL].interp).toBe('lerp');
-  });
+// `vz` — детектор касания, а не плавная величина: сглаженная выборка
+// точного нуля не даёт, и приземление чужого танка перестаёт
+// детектироваться (см. src/client/landing.js)
+it('vz не интерполируется', () => {
+  expect(snapshot.m1.fields[fields.M1_VZ].interp).toBe('discrete');
+  expect(snapshot.m1.fields[fields.M1_PITCH].interp).toBe('lerp');
+  expect(snapshot.m1.fields[fields.M1_ROLL].interp).toBe('lerp');
+});
 ```
 
 ### Шаг 3.2. Один детектор на обе части
@@ -144,28 +144,28 @@ export function landingImpact(prevVz, vz) {
 **`src/client/parts/Tank.js`**, `update` — заменить блок детектора на:
 
 ```js
-    const impact = landingImpact(this._prevVz, this._vz);
+const impact = landingImpact(this._prevVz, this._vz);
 
-    if (impact > 0) {
-      this._landImpact = impact;
-      this._landTimer = landingConfig.duration;
-      this._onLanded?.(impact);
-    }
+if (impact > 0) {
+  this._landImpact = impact;
+  this._landTimer = landingConfig.duration;
+  this._onLanded?.(impact);
+}
 
-    this._prevVz = this._vz;
+this._prevVz = this._vz;
 ```
 
 **`src/client/parts/Dust.js`**, `update`:
 
 ```js
-    const impact = landingImpact(this._prevVz, this._vz);
+const impact = landingImpact(this._prevVz, this._vz);
 
-    if (impact > 0) {
-      this._triggerLandingBurst(impact);
-      this._playLandingSound(impact);
-    }
+if (impact > 0) {
+  this._triggerLandingBurst(impact);
+  this._playLandingSound(impact);
+}
 
-    this._prevVz = this._vz;
+this._prevVz = this._vz;
 ```
 
 Импорт `landing as landingConfig` в `Dust.js` после этого нужен только

@@ -186,13 +186,13 @@ npm run dev     # приёмка: картинка не изменилась н�
 Сделано по шагам 5.4 (по одному за раз, `eslint` + `npm test` после
 каждого):
 
-| Файл | Строк | Что внутри |
-| --- | --- | --- |
-| `src/client/parts/Map.js` | 81 | диспетчер: проверка `assetsBase`, выбор стратегии, `onRender`, `update`, `destroy` |
-| `src/client/parts/map/MapLayer.js` | 576 | статический слой: запёк, параллакс, экструзия, перекрыватель, see-through |
-| `src/client/parts/map/MapObject.js` | 154 | динамическое тело (ящик) |
-| `src/client/parts/map/extrusion.js` | 309 | чистая геометрия: срезы объёма, клин рампы, юбка, сдвиг вершин |
-| `src/client/parts/map/holeOverlay.js` | 80 | «дыра»: состояние, `advance`/`apply`/`dispose` |
+| Файл                                  | Строк | Что внутри                                                                         |
+| ------------------------------------- | ----- | ---------------------------------------------------------------------------------- |
+| `src/client/parts/Map.js`             | 81    | диспетчер: проверка `assetsBase`, выбор стратегии, `onRender`, `update`, `destroy` |
+| `src/client/parts/map/MapLayer.js`    | 576   | статический слой: запёк, параллакс, экструзия, перекрыватель, see-through          |
+| `src/client/parts/map/MapObject.js`   | 154   | динамическое тело (ящик)                                                           |
+| `src/client/parts/map/extrusion.js`   | 309   | чистая геометрия: срезы объёма, клин рампы, юбка, сдвиг вершин                     |
+| `src/client/parts/map/holeOverlay.js` | 80    | «дыра»: состояние, `advance`/`apply`/`dispose`                                     |
 
 Инварианты 5.4 сохранены дословно: `OCCLUDER_BASE_Z = 5` и `zIndex`
 перекрывателя, сортировка срезов по `k`, срезы объёма — в перекрыватель, а

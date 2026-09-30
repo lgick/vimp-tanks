@@ -62,7 +62,9 @@ describe('neonFlicker', () => {
       const from = window * DROPOUT_WINDOW;
 
       for (let step = 0; step < 60; step += 1) {
-        if (inDropout(from + (step / 60) * DROPOUT_WINDOW, cellSeed(1, 2), 0.2)) {
+        if (
+          inDropout(from + (step / 60) * DROPOUT_WINDOW, cellSeed(1, 2), 0.2)
+        ) {
           hits += 1;
           break;
         }

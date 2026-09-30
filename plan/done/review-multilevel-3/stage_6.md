@@ -55,8 +55,7 @@ npm run sim:scenarios     # 12 из 12, пороги НЕ тронуты
    `## [Unreleased]` переименовывается в `## [X.Y.Z] - YYYY-MM-DD` и над
    ним открывается пустая `## [Unreleased]`.
 8. **Закрытие плана:** все этапы «✅ выполнен» → `git mv plan/review-multilevel-3.md
-   plan/done/review-multilevel-3.md`, без коммита.
-
+plan/done/review-multilevel-3.md`, без коммита.
 
 ---
 

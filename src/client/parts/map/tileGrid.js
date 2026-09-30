@@ -58,9 +58,16 @@ function covers(test, point, camera, ks, margin) {
     return false;
   }
 
-  const offsets = margin > 0
-    ? [[0, 0], [margin, 0], [-margin, 0], [0, margin], [0, -margin]]
-    : [[0, 0]];
+  const offsets =
+    margin > 0
+      ? [
+          [0, 0],
+          [margin, 0],
+          [-margin, 0],
+          [0, margin],
+          [0, -margin],
+        ]
+      : [[0, 0]];
 
   for (const k of ks) {
     const scale = 1 + k;
@@ -97,7 +104,15 @@ export function coversPoint(grid, tileSet, point, camera, ks, margin) {
 
 // вариант по набору клеток `Set('col,row')`: у сервиса освещения нет грида
 // слоя, только объединённые клетки масок
-export function cellsCoverPoint(cellSet, step, scale, point, camera, ks, margin) {
+export function cellsCoverPoint(
+  cellSet,
+  step,
+  scale,
+  point,
+  camera,
+  ks,
+  margin,
+) {
   if (!cellSet || cellSet.size === 0) {
     return false;
   }

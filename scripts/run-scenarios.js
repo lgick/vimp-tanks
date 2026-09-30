@@ -15,7 +15,13 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scenarioDir = path.join(root, 'tests', 'scenarios');
-const sim = path.join(root, 'node_modules', 'vimp-engine', 'bin', 'vimp-sim.js');
+const sim = path.join(
+  root,
+  'node_modules',
+  'vimp-engine',
+  'bin',
+  'vimp-sim.js',
+);
 const extraArgs = process.argv.slice(2);
 
 const scenarios = readdirSync(scenarioDir)

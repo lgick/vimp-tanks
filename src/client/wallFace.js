@@ -37,7 +37,16 @@ export function faceIsFront(face, x, y, camera) {
 // Расстояние вдоль луча (x0, y0) + (dx, dy)·t, на котором его рисунок в
 // проекции `kBase` пересекает линию грани, нарисованную на высоте `kLine`
 // (силуэт верха стены). null — луч параллелен грани
-export function crossingDistance({ x0, y0, dx, dy, face, camera, kBase, kLine }) {
+export function crossingDistance({
+  x0,
+  y0,
+  dx,
+  dy,
+  face,
+  camera,
+  kBase,
+  kLine,
+}) {
   const alongX = face.axis === 'x';
   const origin = alongX ? x0 : y0;
   const direction = alongX ? dx : dy;
@@ -50,5 +59,7 @@ export function crossingDistance({ x0, y0, dx, dy, face, camera, kBase, kLine })
   // линия грани в проекции `kLine`: X = coord + (coord − cam)·kLine
   const line = face.coord + (face.coord - cam) * kLine;
 
-  return (line + cam * kBase - origin * (1 + kBase)) / (direction * (1 + kBase));
+  return (
+    (line + cam * kBase - origin * (1 + kBase)) / (direction * (1 + kBase))
+  );
 }

@@ -18,7 +18,13 @@ const assets = {
 
 // [x, y, angle, gunRotation, vX, vY, engineLoad, condition, size, teamId,
 //  angvel, z, level, vz, pitch, roll]
-const row = ({ engineLoad = 0, vx = 0, vy = 0, vz = 0, condition = 3 } = {}) => [
+const row = ({
+  engineLoad = 0,
+  vx = 0,
+  vy = 0,
+  vz = 0,
+  condition = 3,
+} = {}) => [
   0,
   0,
   0,
@@ -219,9 +225,7 @@ describe('Dust: поверхности', () => {
 
     expect(dust._particles.length).toBeGreaterThan(0);
     expect(dust._particles[0].view.tint).toBe(surfaceFx.mud.color);
-    expect(dust._particles[0].startSizeFactor).toBeGreaterThan(
-      DUST_START_SIZE,
-    );
+    expect(dust._particles[0].startSizeFactor).toBeGreaterThan(DUST_START_SIZE);
   });
 
   it('стоящий танк на песке не пылит', () => {

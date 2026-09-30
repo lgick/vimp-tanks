@@ -8,13 +8,21 @@ import gameConfig from '../../src/config/game.js';
 // обновляется она тем же сериализатором, что и dist/maps/*.json
 // (scripts/export-maps.js).
 describe('tests/core/fixtures/*.json', () => {
-  it.each(['overpass', 'terraces', 'downtown'])('%s.json совпадает с модулем карты', name => {
-    const fixture = JSON.parse(
-      readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8'),
-    );
+  it.each(['overpass', 'terraces', 'downtown'])(
+    '%s.json совпадает с модулем карты',
+    name => {
+      const fixture = JSON.parse(
+        readFileSync(
+          new URL(`./fixtures/${name}.json`, import.meta.url),
+          'utf8',
+        ),
+      );
 
-    expect(fixture).toEqual(JSON.parse(JSON.stringify(gameConfig.maps[name])));
-  });
+      expect(fixture).toEqual(
+        JSON.parse(JSON.stringify(gameConfig.maps[name])),
+      );
+    },
+  );
 
   // пресеты ботов продублированы в core/src/config.rs (default_bot_presets):
   // Rust-тест bot_rules_default_matches_game_js сверяет их с этой фикстурой.

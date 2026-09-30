@@ -16,6 +16,7 @@
 
   `PuffEffect` (`src/client/parts/effects/shot/PuffEffect.js`) читает `assets.smokeTexture` и ждёт объект
   `{ texture, contentSize }`.
+
 - Движок раздаёт запечённые ассеты **по полю `component`** записи. В `vimp-engine/src/client/providers/BakingProvider.js`
   (`bakeAll`) это `this._collection.get(componentName)[assetName] = bakedAsset`. Part получает коллекцию по имени
   своего класса: `vimp-engine/src/client/components/model/Game.js`, `this._assets.get(constructor)`.
@@ -93,17 +94,17 @@ const smokeTextureParams = {
 `'WreckFire зарегистрирован и получает свои сервисы и ассеты'` (тот же `describe`) добавить:
 
 ```js
-  // клуб дыма разрыва: ассеты раздаются по компоненту — без своей записи
-  // ShotEffect молча остаётся без дыма, и ошибок при этом нет
-  it('ShotEffect получает текстуру дыма разрыва', () => {
-    const names = clientConfig.parts.bakedAssets.vimp
-      .filter(asset => asset.component === 'ShotEffect')
-      .map(asset => asset.name);
+// клуб дыма разрыва: ассеты раздаются по компоненту — без своей записи
+// ShotEffect молча остаётся без дыма, и ошибок при этом нет
+it('ShotEffect получает текстуру дыма разрыва', () => {
+  const names = clientConfig.parts.bakedAssets.vimp
+    .filter(asset => asset.component === 'ShotEffect')
+    .map(asset => asset.name);
 
-    expect(names).toContain('impactParticleTexture');
-    expect(names).toContain('smokeTexture');
-    names.forEach(name => expect(bakers[name]).toBeTypeOf('function'));
-  });
+  expect(names).toContain('impactParticleTexture');
+  expect(names).toContain('smokeTexture');
+  names.forEach(name => expect(bakers[name]).toBeTypeOf('function'));
+});
 ```
 
 `bakers` и `clientConfig` в файле уже импортированы (стр. 2 и 4).

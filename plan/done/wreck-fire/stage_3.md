@@ -21,14 +21,20 @@ export default class ParticleChannel {
     this.container.blendMode = blendMode;
   }
 
-  get size() { return this.items.length; }
+  get size() {
+    return this.items.length;
+  }
 
   // область частиц едет за эмиттером (как boundsArea в Smoke.update)
-  follow(x, y) { /* boundsArea.x = x - padding; boundsArea.y = y - padding */ }
+  follow(x, y) {
+    /* boundsArea.x = x - padding; boundsArea.y = y - padding */
+  }
 
   // sim — состояние частицы; view берётся из пула и добавляется в контейнер
   spawn(sim) {
-    if (this.items.length >= this.max) { return null; }
+    if (this.items.length >= this.max) {
+      return null;
+    }
     const view = ParticlePool.get(this.texture);
     sim.view = view;
     this.container.addParticle(view);
@@ -37,10 +43,14 @@ export default class ParticleChannel {
   }
 
   // сначала из контейнера, потом в пул — контракт ParticlePool
-  removeAt(index) { /* splice(index, 1); container.removeParticle(view); ParticlePool.release(view) */ }
+  removeAt(index) {
+    /* splice(index, 1); container.removeParticle(view); ParticlePool.release(view) */
+  }
 
   // всё в пул; контейнер остаётся пригодным для нового пожара
-  clear() { /* container.removeParticles(); release каждой view; items.length = 0 */ }
+  clear() {
+    /* container.removeParticles(); release каждой view; items.length = 0 */
+  }
 }
 ```
 

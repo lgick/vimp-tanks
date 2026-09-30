@@ -368,7 +368,7 @@ struct TankRow {
 > **Проще:** держать `levels_fingerprint: (String, usize, usize)` —
 > `set_id`, число строк и число колонок грида уровня 0. Если отпечаток
 > текущей `ctx.map` отличается — пересобрать `self.levels =
-> Some(map.levels().clone())` и выставить `levels_dirty = true`.
+Some(map.levels().clone())` и выставить `levels_dirty = true`.
 > `MapLevels` — `Clone`, копия делается раз на карту, не на тик.
 
 ### `update_levels` — новый метод `TanksSim`
@@ -440,7 +440,7 @@ struct TankRow {
 
 > **Проверить перед реализацией:** как движковая мета (`RoundManager` /
 > статистика) обрабатывает `Death { victim, killer }` при `victim ==
-> killer`. Если она начисляет фраг самому себе — либо она уже трактует это
+killer`. Если она начисляет фраг самому себе — либо она уже трактует это
 > как самоубийство (тогда ничего не делаем), либо в этап 8 добавляется тест
 > и правка меты движка. Смотреть обработчик события `death` в
 > `packages/engine/src/host/GameCoreAdapter.js` и в мете статистики.
@@ -503,8 +503,8 @@ struct TankRow {
 
 ### `clear` / `serialize` / `deserialize`
 
-* `clear`: `self.levels = None; self.levels_fingerprint = None; self.levels_dirty = false;`
-* `TanksDump`/`TanksDumpOwned`: `Tank` сериализуется целиком, `level_state`
+- `clear`: `self.levels = None; self.levels_fingerprint = None; self.levels_dirty = false;`
+- `TanksDump`/`TanksDumpOwned`: `Tank` сериализуется целиком, `level_state`
   поедет сам (он `Serialize`/`Deserialize`). `MapLevels` в дамп **не
   включать** — карта восстанавливается своим путём (`restoreMap` меты), а
   дублирование гридов раздуло бы дамп эстафеты Worker'ов.
@@ -543,45 +543,45 @@ struct TankRow {
 
 ### Rust (`core/src/...`)
 
-| Файл | Тест | Что проверяет |
-| --- | --- | --- |
-| `level.rs` | `flat_map_keeps_level_zero` | Неслоёная `MapLevels` → состояние всегда дефолтное |
-| `level.rs` | `ramp_raises_z_and_snaps_level_at_half` | Прогресс 0.2 → z 0.2, level 0; прогресс 0.7 → z 0.7, level 1 |
-| `level.rs` | `ramp_sets_both_level_masks` | На рампе `collision_mask()` содержит оба бита |
-| `level.rs` | `leaving_slab_starts_falling` | Уровень 1, точка без плиты → `Falling`, маска пустая, ввод заблокирован |
-| `level.rs` | `falling_lands_after_fall_time` | Через `fallTime` — `Landed`, level 0, z 0 |
-| `level.rs` | `slab_keeps_the_tank_grounded` | Уровень 1 на плите → `Grounded`, z 1 |
-| `tank.rs` | `falling_tank_ignores_input` | `update` при `Falling` возвращает `None` и не даёт импульсов |
-| `tank.rs` | `snapshot_row_carries_level_and_z` | Кортеж содержит округлённый z и level |
-| `tanks.rs` | `spawn_on_slab_starts_on_level_one` | Спавн в точке плиты → `level == 1` |
-| `tanks.rs` | `set_actor_level_overrides_geometry` | Явный `set_actor_level(id, 0)` под мостом → level 0 |
-| `tanks.rs` | `landing_applies_fall_damage` | Здоровье падает на `fallDamage`, при добивании — `Death{victim==killer}` |
-| `tanks.rs` | `tanks_on_different_levels_do_not_collide` | Два танка в одной точке на разных уровнях: `world.step()` не порождает контакта |
-| `tanks.rs` | `players_json_matches_schema_width` | Длина массива строки == числу полей схемы `m1` |
-| `config.rs` | `level_rules_default_when_absent` | `game` без `levels` → `fallTime 0.35`, `fallDamage 0` |
-| `config.rs` | `validate_rejects_zero_fall_time` | |
+| Файл        | Тест                                       | Что проверяет                                                                   |
+| ----------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `level.rs`  | `flat_map_keeps_level_zero`                | Неслоёная `MapLevels` → состояние всегда дефолтное                              |
+| `level.rs`  | `ramp_raises_z_and_snaps_level_at_half`    | Прогресс 0.2 → z 0.2, level 0; прогресс 0.7 → z 0.7, level 1                    |
+| `level.rs`  | `ramp_sets_both_level_masks`               | На рампе `collision_mask()` содержит оба бита                                   |
+| `level.rs`  | `leaving_slab_starts_falling`              | Уровень 1, точка без плиты → `Falling`, маска пустая, ввод заблокирован         |
+| `level.rs`  | `falling_lands_after_fall_time`            | Через `fallTime` — `Landed`, level 0, z 0                                       |
+| `level.rs`  | `slab_keeps_the_tank_grounded`             | Уровень 1 на плите → `Grounded`, z 1                                            |
+| `tank.rs`   | `falling_tank_ignores_input`               | `update` при `Falling` возвращает `None` и не даёт импульсов                    |
+| `tank.rs`   | `snapshot_row_carries_level_and_z`         | Кортеж содержит округлённый z и level                                           |
+| `tanks.rs`  | `spawn_on_slab_starts_on_level_one`        | Спавн в точке плиты → `level == 1`                                              |
+| `tanks.rs`  | `set_actor_level_overrides_geometry`       | Явный `set_actor_level(id, 0)` под мостом → level 0                             |
+| `tanks.rs`  | `landing_applies_fall_damage`              | Здоровье падает на `fallDamage`, при добивании — `Death{victim==killer}`        |
+| `tanks.rs`  | `tanks_on_different_levels_do_not_collide` | Два танка в одной точке на разных уровнях: `world.step()` не порождает контакта |
+| `tanks.rs`  | `players_json_matches_schema_width`        | Длина массива строки == числу полей схемы `m1`                                  |
+| `config.rs` | `level_rules_default_when_absent`          | `game` без `levels` → `fallTime 0.35`, `fallDamage 0`                           |
+| `config.rs` | `validate_rejects_zero_fall_time`          |                                                                                 |
 
 ### JS (`tests/`)
 
-| Файл | Тест |
-| --- | --- |
-| `tests/config/game.test.js` | `coreParams.levels присутствует и валиден` |
-| `tests/core/core.test.js` | сквозной: загрузить слоёную карту-фикстуру, заспавнить танк на плите, шагнуть, прочитать кадр — `level == 1` в блоке `m1` |
+| Файл                        | Тест                                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tests/config/game.test.js` | `coreParams.levels присутствует и валиден`                                                                                |
+| `tests/core/core.test.js`   | сквозной: загрузить слоёную карту-фикстуру, заспавнить танк на плите, шагнуть, прочитать кадр — `level == 1` в блоке `m1` |
 
 Фикстуру слоёной карты положить в `tests/core/fixtures/layered.json`
 (маленькая, 6×6) и переиспользовать в этапах 4–7.
 
 ## 3.8 Changelog и документация
 
-* `CHANGELOG.md` → `### Added`: уровни танка (`level`, `z`), рампы,
+- `CHANGELOG.md` → `### Added`: уровни танка (`level`, `z`), рампы,
   падение с обрыва с уроном, поля `z`/`level` в блоке `m1`,
   `coreParams.levels`. Пункт «`players_data()` теперь отдаёт строку полной
   ширины схемы» — в `### Fixed`.
-* `docs/en|ru/core.md`: раздел про `core/src/level.rs`, порядок
+- `docs/en|ru/core.md`: раздел про `core/src/level.rs`, порядок
   `on_fixed_step`, маски коллизий, падение.
-* `docs/en|ru/configuration.md`: `coreParams.levels` и схема `m1` с новыми
+- `docs/en|ru/configuration.md`: `coreParams.levels` и схема `m1` с новыми
   полями.
-* `docs/en|ru/gameplay.md`: как игрок заезжает на мост и что происходит при
+- `docs/en|ru/gameplay.md`: как игрок заезжает на мост и что происходит при
   падении.
 
 ## Критерии готовности этапа

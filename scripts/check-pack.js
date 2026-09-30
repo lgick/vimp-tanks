@@ -37,7 +37,9 @@ const output = execFileSync(
 // Пакет здесь ровно один (npm pack в корне игры), поэтому берём первую
 // запись любой из форм, а не индекс
 const parsed = JSON.parse(output);
-const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed ?? {})[0];
+const entry = Array.isArray(parsed)
+  ? parsed[0]
+  : Object.values(parsed ?? {})[0];
 
 if (!entry?.files) {
   throw new Error(

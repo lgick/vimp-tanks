@@ -22,11 +22,16 @@ export function buildDecals(items, sheet, step, animated) {
 
   for (const item of items) {
     const [col, row] = item.cell || [0, 0];
-    const frames = item.kind === 'frames' ? item.frames || [item.frame] : [item.frame];
-    const textures = frames.map(frame => sheet.textures[`frame${frame}`]).filter(Boolean);
+    const frames =
+      item.kind === 'frames' ? item.frames || [item.frame] : [item.frame];
+    const textures = frames
+      .map(frame => sheet.textures[`frame${frame}`])
+      .filter(Boolean);
 
     if (textures.length === 0) {
-      console.warn(`Decal at [${col}, ${row}]: frame not found in the sprite sheet`);
+      console.warn(
+        `Decal at [${col}, ${row}]: frame not found in the sprite sheet`,
+      );
       continue;
     }
 

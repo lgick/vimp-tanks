@@ -66,22 +66,21 @@ npm run sim:scenarios       # ожидается 12/12, exit 0
 vimp-engine-core = { path = "/Users/dmitry/Sites/my/vimp/packages/engine/core" }
 ```
 
-   и, если нужен локальный движок в JS — `npm link vimp-engine`.
-   **Оба снимаются на этапе 6.**
+и, если нужен локальный движок в JS — `npm link vimp-engine`.
+**Оба снимаются на этапе 6.**
 
-   **Отклонение от плана.** `[patch.crates-io]` положен не в
-   `T core/Cargo.toml`, а в корневой `T Cargo.toml`. Причина: `core` —
-   member воркспейса, и cargo такой патч молча игнорирует с предупреждением
-   «patch for the non root package will be ignored, specify patch at the
-   workspace root». В корне патч применяется: `cargo metadata` пишет
-   `Adding vimp-engine-core v0.15.0 (/Users/dmitry/Sites/my/vimp/packages/engine/core)`,
-   `Cargo.lock` обновлён. На этапе 6 снимать из корневого `Cargo.toml`.
+**Отклонение от плана.** `[patch.crates-io]` положен не в
+`T core/Cargo.toml`, а в корневой `T Cargo.toml`. Причина: `core` —
+member воркспейса, и cargo такой патч молча игнорирует с предупреждением
+«patch for the non root package will be ignored, specify patch at the
+workspace root». В корне патч применяется: `cargo metadata` пишет
+`Adding vimp-engine-core v0.15.0 (/Users/dmitry/Sites/my/vimp/packages/engine/core)`,
+`Cargo.lock` обновлён. На этапе 6 снимать из корневого `Cargo.toml`.
 
-   `npm link vimp-engine` уже стоял: `node_modules/vimp-engine ->
+`npm link vimp-engine` уже стоял: `node_modules/vimp-engine ->
    ../../vimp/packages/engine`.
 
-   После подключения патча `npm run core:test` перепрогнан — те же
-   **238 + 45 passed**, 0 failed.
+После подключения патча `npm run core:test` перепрогнан — те же
+**238 + 45 passed**, 0 failed.
 
 Критерий этапа: все команды зелёные, числа записаны.
-

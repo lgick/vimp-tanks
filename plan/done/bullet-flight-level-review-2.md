@@ -238,6 +238,7 @@ fn offset_decks() -> MapLevels {
    Ожидание:
    `vec![seg(0.0, 35.0, 2, 2), seg(35.0, 65.0, 1, 1), seg(65.0, RANGE, 0, 0)]`.
    До правки было `vec![seg(0.0, 35.0, 2, 2), seg(35.0, RANGE, 0, 0)]`: пуля проходила сквозь плиту 1.
+
 2. `held_bullet_does_not_climb_onto_the_upper_deck_from_below`. Старт `[5.0, 5.0]` (колонка 0), восток, `RANGE`,
    уровень 0, `BulletLine { base: 0.1, rate: 0.065 }`. Комментарий: «в x = 10 пуля 0.43 входит под плиту 1; к
    x = 40 она уже 2.38, но прижата снизу плитой 1 и в плиту 2 выходит из-под настила: под плитой 2 — воздух
@@ -301,6 +302,7 @@ fn offset_decks() -> MapLevels {
    - `docs/ru/core.md` ≈ 958 и ≈ 973 — то же.
 
    Ключ конфига `turretTop` и упоминания `turretTop` модели не менять: это имя поля данных.
+
 7. Контроль: `grep -rn "hull_top\|fn turret_top\|\.turret_top()\|turret_top_per_size" core/src docs` ничего не
    находит. Поле `ModelConfig::turret_top` и его использование в `hit_top` остаются.
 

@@ -32,7 +32,13 @@ describe('HostPlugin танков: поверхность', () => {
     // движок своих команд не разбирает — весь набор объявляет игра
     expect(names).toContain('/bot');
     expect(names).toEqual(
-      expect.arrayContaining(['/name', '/nr', '/timeleft', '/mapname', '/rank']),
+      expect.arrayContaining([
+        '/name',
+        '/nr',
+        '/timeleft',
+        '/mapname',
+        '/rank',
+      ]),
     );
     expect(new Set(names).size).toBe(names.length);
   });

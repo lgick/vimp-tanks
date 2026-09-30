@@ -48,9 +48,9 @@
 pub fn ramp_runs(&self) -> String
 ```
 
-   Источник — `MapLevels` предиктора (`Predictor::levels()`,
-   `core/src/client/predictor.rs:367`). Если у карты нет уровней, вернуть
-   `"[]"`.
+Источник — `MapLevels` предиктора (`Predictor::levels()`,
+`core/src/client/predictor.rs:367`). Если у карты нет уровней, вернуть
+`"[]"`.
 
 2. **Сервис.** В `src/client/index.js`:
    - `serviceNames: ['levelView', 'mapDynamics', 'rampRuns']`;
@@ -70,10 +70,10 @@ rampRuns: {
 },
 ```
 
-   Точный предикат фильтра выбрать по тому, какой слой рисует клин: сейчас
-   его строит слой, в чьих тайлах лежит рампа, то есть уровень `from`
-   (`packages/engine/src/client/main.js:667` фильтрует `ramps` по
-   `ramp.from === level`). Значит фильтр — `run.from === level`.
+Точный предикат фильтра выбрать по тому, какой слой рисует клин: сейчас
+его строит слой, в чьих тайлах лежит рампа, то есть уровень `from`
+(`packages/engine/src/client/main.js:667` фильтрует `ramps` по
+`ramp.from === level`). Значит фильтр — `run.from === level`.
 
 3. **Конфиг.** В `src/config/client.js`, `componentDependencies`, добавить
 
@@ -83,8 +83,8 @@ rampRuns: {
 rampRuns: ['Map'],
 ```
 
-   Контрактный чекер (правило C4) сверяет `componentDependencies` со
-   `serviceNames` — оба списка обязаны знать имя.
+Контрактный чекер (правило C4) сверяет `componentDependencies` со
+`serviceNames` — оба списка обязаны знать имя.
 
 4. **Парт.** `src/client/parts/Map.js:315-317`:
 
@@ -92,9 +92,9 @@ rampRuns: ['Map'],
 const runs = this._ramps.length ? buildRampRuns(this._map, this._ramps) : [];
 ```
 
-   заменяется на чтение сервиса и перевод мировых координат в клетки
-   (у парта `this._step` — НЕмасштабированный шаг, `this._baseScaleX/Y` —
-   масштаб карты; в ядре `tile_size == step * scale`):
+заменяется на чтение сервиса и перевод мировых координат в клетки
+(у парта `this._step` — НЕмасштабированный шаг, `this._baseScaleX/Y` —
+масштаб карты; в ядре `tile_size == step * scale`):
 
 ```js
 // прогоны приходят из ядра в МИРОВЫХ единицах, а грид слоя не
@@ -102,8 +102,8 @@ const runs = this._ramps.length ? buildRampRuns(this._map, this._ramps) : [];
 const toCell = (world, scale) => Math.round(world / scale / this._step);
 ```
 
-   `col0 = toCell(run.min, this._baseScaleX)` и так далее по оси прогона;
-   поперёк — из `crossMin`/`crossMax`.
+`col0 = toCell(run.min, this._baseScaleX)` и так далее по оси прогона;
+поперёк — из `crossMin`/`crossMax`.
 
 5. **`rampRuns.js`.** Обход грида (`buildRampRuns`, строки 30-116) и таблица
    `DIRS` удаляются целиком. Остаётся `mergeLanes` — визуальная склейка
@@ -217,8 +217,6 @@ npm run build && npx vimp-contract --strict && npm run sim:scenarios
 
 `CHANGELOG.md`: `### Changed` — источник прогонов рампы для клина;
 `### Fixed` — нисходящая рампа не рисовалась.
-
-
 
 ---
 

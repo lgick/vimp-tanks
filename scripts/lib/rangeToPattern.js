@@ -38,7 +38,9 @@ function digitGroupPattern(lo, hi) {
   const restLen = lo.length - 1;
   const zeros = '0'.repeat(restLen);
   const nines = '9'.repeat(restLen);
-  const parts = [lo[0] + wrapAlternation(digitGroupPattern(lo.slice(1), nines))];
+  const parts = [
+    lo[0] + wrapAlternation(digitGroupPattern(lo.slice(1), nines)),
+  ];
 
   const midLo = Number(lo[0]) + 1;
   const midHi = Number(hi[0]) - 1;

@@ -19,15 +19,15 @@ and `docs/ru/` (identical structure, ToC at `docs/ru/README.md`). **Rule**:
 any functional change updates the matching `docs/en/` and `docs/ru/` pages
 in the same change. Area → page:
 
-| Change | Page |
-| --- | --- |
-| `src/config/*` (game.js, client.js, auth.js, sounds.js, snapshot.js), `src/data/*` | `configuration.md` |
-| game rules (rounds, stats, votes, chat commands, controls, weapons, bots) | `gameplay.md` |
-| `core/` (Rust: tanks.rs, tank.rs, motion.rs, bomb.rs, bots/, client/, WASM ABI) | `core.md` |
-| `src/host/*`, `src/client/*` plugin wiring | `architecture.md` |
-| new maps/weapons/sounds/images/client entities | `extending.md` |
-| `assets/*` and the scripts that stage it into `build/`/`dist/` | `extending.md`, `getting-started.md` |
-| build/link/test setup, debug scenarios (`tests/scenarios/`) | `getting-started.md` |
+| Change                                                                             | Page                                 |
+| ---------------------------------------------------------------------------------- | ------------------------------------ |
+| `src/config/*` (game.js, client.js, auth.js, sounds.js, snapshot.js), `src/data/*` | `configuration.md`                   |
+| game rules (rounds, stats, votes, chat commands, controls, weapons, bots)          | `gameplay.md`                        |
+| `core/` (Rust: tanks.rs, tank.rs, motion.rs, bomb.rs, bots/, client/, WASM ABI)    | `core.md`                            |
+| `src/host/*`, `src/client/*` plugin wiring                                         | `architecture.md`                    |
+| new maps/weapons/sounds/images/client entities                                     | `extending.md`                       |
+| `assets/*` and the scripts that stage it into `build/`/`dist/`                     | `extending.md`, `getting-started.md` |
+| build/link/test setup, debug scenarios (`tests/scenarios/`)                        | `getting-started.md`                 |
 
 Engine-side concepts (transport, master, Worker infra, generic core traits,
 the plugin contract itself) are documented in the engine's own repo, not
@@ -61,6 +61,7 @@ npm run dev                # standalone match in a browser tab (no master, no OA
 npm run audio:process      # sounds → build/sounds/ (ffmpeg); build needs it, or there is no sound
 npm run build              # full plugin build → dist/ (client+host bundles, assets, manifest.json)
 npm run art:placeholders   # regenerate downtown placeholder art → assets/img/
+npx prettier --write <files> # format modified JS/TS/MD/JSON files
 npx eslint .               # lint
 npm test                   # Vitest, single run
 npm run test:watch
@@ -85,13 +86,14 @@ Node globals.
 ## Testing
 
 Vitest (`tanks` + `integration` projects, see `vitest.config.js`) +
-`@vitest/coverage-v8`. Every change ends with a green `npx eslint .` and
+`@vitest/coverage-v8`. Every change ends with
+`npx prettier --write <modified-files>`, and a green `npx eslint .` and
 `npm test`. Rust: unit tests per module plus the `client::predictor::parity`
 cargo suite — run `npm run core:test` after any change to `core/`'s motion
 or `src/data/models.js`.
 
 Two rules: a part relying on a PixiJS callback (`onRender` — an accessor on
-`Container.prototype`) must be tested for *registration* (`part._onRender`),
+`Container.prototype`) must be tested for _registration_ (`part._onRender`),
 not only by calling the body; and debug scenarios (`tests/scenarios/*.json`)
 assert no game rules — such claims belong in `core/tests/sim.rs`.
 

@@ -62,7 +62,7 @@ direct import.
   engine `overpass` would load without its second level and without a single
   error, so the capability is a hard requirement rather than a hint.
   The full list is `['map.layers', 'map.levelsN', 'map.gameData',
-  'map.bodyState']`: `map.gameData` delivers the map's `game` field (and
+'map.bodyState']`: `map.gameData` delivers the map's `game` field (and
   `physicsDynamic[i].game`) to the core on both sides, `map.bodyState` —
   the `state` byte in the `c1`/`c2` row.
 
@@ -336,7 +336,7 @@ The consequences the parts implement themselves:
   on the stage** (its `zIndex` is that of the level the tank hangs over, and
   the stage is flat) drawn ON THE SUPPORT — at the tank's world point taken
   through the same 2.5D projection as the slab underneath, `groundZ *
-  shear`, while the hull rides its own height `z`. The gap that opens
+shear`, while the hull rides its own height `z`. The gap that opens
   between them is the RISE above the support, and that is what reads as
   height. On the ground the shadow is shifted away from the light by
   `shadow.groundOffset` (in screen axes): unshifted it would lie exactly
@@ -374,6 +374,7 @@ The consequences the parts implement themselves:
   rather than the tank's own: that is what makes the rise visible. Nothing
   recomputes vertices: a container carries the whole shift in its own
   transform.
+
 - **Volumes shift with the camera and occlude.** A render layer with a
   height (`volumes` in the map, `data.volume` in the part) is extruded by
   `Map` itself: side walls as a mesh (`buildVolumeWalls` — one quad per
@@ -388,7 +389,7 @@ The consequences the parts implement themselves:
   height, so walls open up as the player moves and read as one solid block.
   Faces turned away from the camera are drawn first (`orderWallMesh`
   rewrites the index order only when a face changes side). `volume.faces =
-  false` falls back to `slices` stacked sprites. They live in an **occluder container** — a sibling
+false` falls back to `slices` stacked sprites. They live in an **occluder container** — a sibling
   of the part on the stage whose `zIndex` sits ABOVE the dynamics of its own
   level (`OCCLUDER_BASE_Z`, still far below `parallax.levelZStride`), so a
   tank standing behind a wall is drawn behind it instead of climbing onto

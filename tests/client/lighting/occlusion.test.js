@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // шпион на обход лучей: короткий путь его не зовёт
-vi.mock('../../../src/client/lighting/lightGeometry.js', async importOriginal => {
-  const actual = await importOriginal();
+vi.mock(
+  '../../../src/client/lighting/lightGeometry.js',
+  async importOriginal => {
+    const actual = await importOriginal();
 
-  return { ...actual, coneFan: vi.fn(actual.coneFan) };
-});
+    return { ...actual, coneFan: vi.fn(actual.coneFan) };
+  },
+);
 
 import { coneFan } from '../../../src/client/lighting/lightGeometry.js';
 import { createOcclusion } from '../../../src/client/lighting/occlusion.js';

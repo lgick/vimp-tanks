@@ -215,7 +215,7 @@ npm run dev                   # глазами: room.map в src/standalone.js
    оставались различимы
    ([configuration.md](configuration.md#ночное-освещение-gamelighting)).
 2. Расставьте фонари по клеткам сетки: `lamps: [{ cell: [col, row], level,
-   radius, color, intensity, head, flicker }]`. Клетка — внутри сетки, уровень
+radius, color, intensity, head, flicker }]`. Клетка — внутри сетки, уровень
    должен существовать. Фонарь светит только своему уровню: фонарь уровня 0
    под мостом не освещает плиту, а фонарь моста не выливается за плиту.
    Фонарь с `head: true` ещё и получает лучи в воздухе, которые режут тени
@@ -251,8 +251,8 @@ npm run dev                   # глазами: room.map в src/standalone.js
    светится поверх темноты и подсвечивает окружение, днём рисуется в слое.
 4. **Декаль (вентилятор на крыше).** Добавьте `game.decals[]` с `cell`,
    `level`, `layer`, `frame` и `kind: 'rotate'` + `rps` (или `kind: 'frames'`
-   + `frames` + `fps`). Вентиляторы ставьте на плиты крыш уровня ≥ 1, а не на
-   верх экструзии объёмов.
+   - `frames` + `fps`). Вентиляторы ставьте на плиты крыш уровня ≥ 1, а не на
+     верх экструзии объёмов.
 5. Прогоните `npm test` (правила — в `tests/config/game.test.js`) и посмотрите
    карту ещё и с `render.js → animations.enabled = false`.
 
@@ -341,6 +341,7 @@ npm run dev                   # глазами: room.map в src/standalone.js
    на уже очищенной сцене уничтожает его сам — иначе звук, зарегистрированный
    в конструкторе, останется висеть. Повторный `run()` игнорируется: он
    поднял бы вторую пару эффектов поверх первой, потеряв ссылки на неё.
+
 4. Зарегистрируйте сущность в `src/config/client.js`: `parts.gameSets`
    (snapshot-ключ → классы) и `parts.entitiesOnCanvas` (класс →
    полотно).
@@ -369,7 +370,7 @@ npm run dev                   # глазами: room.map в src/standalone.js
 1. Добавьте запись в `src/config/sounds.js`: `file`, `priority`,
    `volume`, опционально `loop`.
 2. Положите исходный файл в `assets/audio-raw/` и выполните `npm run
-   build:assets` — `audio:process` нормализует его (ffmpeg) и выпускает
+build:assets` — `audio:process` нормализует его (ffmpeg) и выпускает
    **`.webm` и `.mp3`** (список кодеков — `codecList`) в `dist/sounds/`,
    раздаваемый через `assetsBase`.
 3. Флаг `loop` выбирает и цепочку фильтров в `scripts/process-audio.js`:

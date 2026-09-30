@@ -27,6 +27,7 @@ const SPARK_SHRINK = 0.5;
 ```
 
 Заменить литералы:
+
 - `0.6 + 0.4 * intensity` → `lerp(FLAME_MIN_SCALE, 1, intensity)`. Значение то же;
 - `wind.x * 0.5` / `wind.y * 0.5` → `* FLAME_WIND_SHARE`;
 - `randomRange(0.8, 1.2)` → `pick(FIRE_ASPECT)`;
@@ -76,6 +77,7 @@ const particleSim = fields => ({
 
 `ParticleChannel.spawn` дописывает `view`, одинаково для всех. В `_spawnFlame`, `_spawnFireball` и `_spawnSpark`
 передавать в `this._fire.spawn(particleSim({ … }))` только поля, отличные от нейтральных:
+
 - пламя: `kind`, `x`, `y`, `vx`, `vy`, `windX`, `windY`, `rise`, `life`, `size0`, `grow`, `aspectX`, `aspectY`,
   `spin`, `alpha`;
 - огненный шар: то же плюс `drag`;
@@ -86,6 +88,7 @@ const particleSim = fields => ({
 ## 3.3. Дым без булева флага (Д3)
 
 `_spawnSmoke(heat, burst)` разделить на два тонких метода над общим `_emitSmoke`:
+
 - `_emitSmoke({ heat, speed, lifeScale, sizeScale, alpha })`. Перенести сюда тело нынешнего `_spawnSmoke`,
   заменив ветвления по `burst` на параметры:
   - `speed` — сырая скорость из конфига, на `this._sizeScale` она умножается внутри `_emitSmoke`, как сейчас;
@@ -95,10 +98,11 @@ const particleSim = fields => ({
 
   Состояние собирать через `particleSim({ kind: 'smoke', … })`, без поля `tint`. Локальная `tint` остаётся и
   пишется в `p.view.tint`, как сейчас;
+
 - `_spawnSmoke(heat)` → `this._emitSmoke({ heat, speed: randomRange(0, smoke.speed),
-  lifeScale: 1, sizeScale: 1, alpha: lerp(smoke.tailAlpha, smoke.alpha, heat) })`;
+lifeScale: 1, sizeScale: 1, alpha: lerp(smoke.tailAlpha, smoke.alpha, heat) })`;
 - `_spawnBurstSmoke()` → `this._emitSmoke({ heat: 1, speed: pick(smoke.burst.speed),
-  lifeScale: BURST_LIFE_SCALE, sizeScale: BURST_SIZE_SCALE, alpha: smoke.burst.alpha })`;
+lifeScale: BURST_LIFE_SCALE, sizeScale: BURST_SIZE_SCALE, alpha: smoke.burst.alpha })`;
 - вызовы: в `_explode` — `this._spawnBurstSmoke()`, в `_tick` — `this._spawnSmoke(intensity)`.
 
 Сверить с нынешним телом: какие выражения зависят от `burst` (скорость, альфа, жизнь, размер) — ровно они и

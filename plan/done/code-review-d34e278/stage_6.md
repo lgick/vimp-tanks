@@ -26,25 +26,25 @@
 В тесте заменить
 
 ```js
-      stepTicks(core, 120);
+stepTicks(core, 120);
 
-      const [x, y] = core.position_of(1);
+const [x, y] = core.position_of(1);
 
-      expect(x).toBeGreaterThan(50);
+expect(x).toBeGreaterThan(50);
 ```
 
 на
 
 ```js
-      const ticks = 120;
+const ticks = 120;
 
-      stepTicks(core, ticks);
+stepTicks(core, ticks);
 
-      const [x, y] = core.position_of(1);
+const [x, y] = core.position_of(1);
 
-      // за секунду разгона с места танк проходит заметную долю пути на полном
-      // ходу — порог из модели, а не число под текущую скорость
-      expect(x).toBeGreaterThan(models.m1.maxForwardSpeed * ticks * DT * 0.4);
+// за секунду разгона с места танк проходит заметную долю пути на полном
+// ходу — порог из модели, а не число под текущую скорость
+expect(x).toBeGreaterThan(models.m1.maxForwardSpeed * ticks * DT * 0.4);
 ```
 
 `models` импортирован (стр. 3), `DT = 1 / 120` объявлен (стр. 21). Порог при 130 — 52, факт ≈97. Остальные
@@ -55,9 +55,9 @@
 В `src/data/weapons.js` комментарий над `impulseMagnitude: 1500000,` заменить на
 
 ```js
-    // сила импульса (кг*м/с); не масштабируется дальностью выстрела в ядре
-    // (TanksSim::process_hitscan). Прикладывается в точке попадания и
-    // разворачивает танк, поэтому держится малой относительно массы танка
+// сила импульса (кг*м/с); не масштабируется дальностью выстрела в ядре
+// (TanksSim::process_hitscan). Прикладывается в точке попадания и
+// разворачивает танк, поэтому держится малой относительно массы танка
 ```
 
 Значение не менять.
@@ -67,11 +67,11 @@
 Тест заменить на
 
 ```js
-  it('sideLength 0 — боковых выбросов нет', () => {
-    const roll = rollMuzzleFlash({ ...muzzleFlash, sideLength: 0 }, fixed(0.5));
+it('sideLength 0 — боковых выбросов нет', () => {
+  const roll = rollMuzzleFlash({ ...muzzleFlash, sideLength: 0 }, fixed(0.5));
 
-    expect(roll.sides).toEqual([]);
-  });
+  expect(roll.sides).toEqual([]);
+});
 ```
 
 Базой взят `muzzleFlash`: у него `sideLength` 6, так что переопределение на `0` содержательно. Затем в импорте

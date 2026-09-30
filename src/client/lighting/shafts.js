@@ -13,7 +13,15 @@ const SHAFT_SWAY = 0.08;
 
 // клинья теней предметов уровня фонаря в его лучах: ближайшие
 // `maxShadowCasters` в радиусе лучей, в нарисованных координатах
-export function shadowsOf({ lamp, view, reach, camera, shaftsCfg, casters, shear }) {
+export function shadowsOf({
+  lamp,
+  view,
+  reach,
+  camera,
+  shaftsCfg,
+  casters,
+  shear,
+}) {
   if (!shaftsCfg.shadows || !(shaftsCfg.maxShadowCasters > 0)) {
     return [];
   }

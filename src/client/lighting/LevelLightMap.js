@@ -10,7 +10,10 @@ import {
 } from 'pixi.js';
 import { levelZ } from '../levelZ.js';
 import { applyParallax } from '../parallax.js';
-import { createHole, dispose as disposeHole } from '../parts/map/holeOverlay.js';
+import {
+  createHole,
+  dispose as disposeHole,
+} from '../parts/map/holeOverlay.js';
 import { LIGHT_OVERLAY_BASE_Z } from './lightMath.js';
 import { fanIndices, rampWedgePolygon } from './lightGeometry.js';
 
@@ -290,8 +293,16 @@ export default class LevelLightMap {
   // сервисом — `{ texture, x, y, anchorX, anchorY, scaleX, scaleY,
   // rotation, color, alpha }`
   layout(items) {
-    layoutPool(this.pool, this.lights, items.filter(item => !item.fan));
-    layoutFans(this.fanPool, this.lights, items.filter(item => item.fan));
+    layoutPool(
+      this.pool,
+      this.lights,
+      items.filter(item => !item.fan),
+    );
+    layoutFans(
+      this.fanPool,
+      this.lights,
+      items.filter(item => item.fan),
+    );
   }
 
   // Засветка граней стен фарами: `items` — `{ wash, texture, color, alpha }`,

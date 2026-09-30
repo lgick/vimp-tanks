@@ -177,10 +177,7 @@ async function buildExtrusion(spec, baseTexture, bakedTexture) {
 
   if (spec.volume > 0) {
     occluder = new Container();
-    occluder.zIndex = levelZ(
-      Math.max(spec.layer, OCCLUDER_BASE_Z),
-      spec.level,
-    );
+    occluder.zIndex = levelZ(Math.max(spec.layer, OCCLUDER_BASE_Z), spec.level);
 
     if (volumeConfig.faces) {
       const textures = await bakeWallTextures(spec, baseTexture, wallTextures);

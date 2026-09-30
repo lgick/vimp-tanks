@@ -33,7 +33,10 @@ export const loadConfig = async () => {
   const config = (await import('vimp-engine/lib/config.js')).default;
 
   config.set('auth', (await import('../../src/config/auth.js')).default);
-  config.set('wsports', (await import('vimp-engine/config/wsports.js')).default);
+  config.set(
+    'wsports',
+    (await import('vimp-engine/config/wsports.js')).default,
+  );
 
   // merge движок+игра — зеркало applyRoomOverrides из host.worker.js
   const hostDefaults = (await import('vimp-engine/config/hostDefaults.js'))
@@ -107,8 +110,7 @@ export const createHost = async ({ seed = 42, game = {}, opts = {} } = {}) => {
 
 // Ждёт микрозадачу (HostGame.createUser отвечает через queueMicrotask;
 // fake timers её не подделывают).
-export const flushMicro = () =>
-  new Promise(resolve => queueMicrotask(resolve));
+export const flushMicro = () => new Promise(resolve => queueMicrotask(resolve));
 
 // Полный онбординг игрока до isReady=true. Возвращает gameId.
 export const connectPlayer = async (

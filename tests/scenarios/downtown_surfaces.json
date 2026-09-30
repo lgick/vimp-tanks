@@ -17,19 +17,64 @@
     { "tick": 0, "op": "join", "who": "p5", "team": "team2" },
     { "tick": 20, "op": "key", "who": "p5", "action": "down", "name": "right" },
     { "tick": 80, "op": "key", "who": "p5", "action": "up", "name": "right" },
-    { "tick": 80, "op": "key", "who": "p5", "action": "down", "name": "forward" },
-    { "tick": 170, "op": "key", "who": "p5", "action": "up", "name": "forward" },
-    { "tick": 200, "op": "key", "who": "p4", "action": "down", "name": "forward" },
+    {
+      "tick": 80,
+      "op": "key",
+      "who": "p5",
+      "action": "down",
+      "name": "forward"
+    },
+    {
+      "tick": 170,
+      "op": "key",
+      "who": "p5",
+      "action": "up",
+      "name": "forward"
+    },
+    {
+      "tick": 200,
+      "op": "key",
+      "who": "p4",
+      "action": "down",
+      "name": "forward"
+    },
     { "tick": 400, "op": "key", "who": "p1", "action": "down", "name": "left" },
     { "tick": 460, "op": "key", "who": "p1", "action": "up", "name": "left" },
-    { "tick": 460, "op": "key", "who": "p1", "action": "down", "name": "forward" },
-    { "tick": 480, "op": "key", "who": "p4", "action": "up", "name": "forward" },
-    { "tick": 556, "op": "key", "who": "p1", "action": "up", "name": "forward" },
-    { "tick": 600, "op": "key", "who": "p3", "action": "down", "name": "forward" },
+    {
+      "tick": 460,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "forward"
+    },
+    {
+      "tick": 480,
+      "op": "key",
+      "who": "p4",
+      "action": "up",
+      "name": "forward"
+    },
+    {
+      "tick": 556,
+      "op": "key",
+      "who": "p1",
+      "action": "up",
+      "name": "forward"
+    },
+    {
+      "tick": 600,
+      "op": "key",
+      "who": "p3",
+      "action": "down",
+      "name": "forward"
+    },
     { "tick": 760, "op": "key", "who": "p3", "action": "up", "name": "forward" }
   ],
   "unusedSnapshotKeys": ["w1", "w2", "w2e", "c2"],
-  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06], "angles": [2] },
+  "divergence": {
+    "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06],
+    "angles": [2]
+  },
   "ticks": 1200,
   "dumpTicks": [80, 260, 480, 570, 640, 760, 1200]
 }

@@ -36,12 +36,26 @@ export function laneHeightAt(lane, t) {
 // `segmentsPerCell` отрезков на клетку, как меш. `lane` — полоса в клетках
 // (`buildRampLanes`). Возвращает `[x0, y0, …]`: одна кромка туда, другая
 // обратно
-export function rampWedgePolygon(lane, step, scale, camera, shear, segmentsPerCell) {
-  const { alongX, a0, a1, b0, b1 } = laneBounds(lane, step * scale.x, step * scale.y);
+export function rampWedgePolygon(
+  lane,
+  step,
+  scale,
+  camera,
+  shear,
+  segmentsPerCell,
+) {
+  const { alongX, a0, a1, b0, b1 } = laneBounds(
+    lane,
+    step * scale.x,
+    step * scale.y,
+  );
   // точка в мировых осях из осей полосы
   const point = (a, b) => (alongX ? [a, b] : [b, a]);
   const cells = alongX ? lane.col1 - lane.col0 : lane.row1 - lane.row0;
-  const segments = Math.max(1, cells * Math.max(1, Math.round(segmentsPerCell) || 1));
+  const segments = Math.max(
+    1,
+    cells * Math.max(1, Math.round(segmentsPerCell) || 1),
+  );
   const project = (x, y, k) => [x + (x - camera.x) * k, y + (y - camera.y) * k];
   const sideA = [];
   const sideB = [];

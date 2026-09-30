@@ -290,7 +290,13 @@ const drawTile = (pen, id, random) => {
       pen.rect(0, 0, CELL, CELL, 0x4e3822);
 
       for (let i = 0; i < 6; i += 1) {
-        pen.disc(random() * CELL, random() * CELL, 2 + random() * 3, 0x33240f, 0.8);
+        pen.disc(
+          random() * CELL,
+          random() * CELL,
+          2 + random() * 3,
+          0x33240f,
+          0.8,
+        );
       }
 
       pen.speckle(random, 30, 0x6e5335, 0.7);
@@ -311,7 +317,12 @@ const drawTile = (pen, id, random) => {
     case T.CONVEYOR_E_2:
     case T.CONVEYOR_E_3:
     case T.CONVEYOR_E_4: {
-      const frame = [T.CONVEYOR_E, T.CONVEYOR_E_2, T.CONVEYOR_E_3, T.CONVEYOR_E_4].indexOf(id);
+      const frame = [
+        T.CONVEYOR_E,
+        T.CONVEYOR_E_2,
+        T.CONVEYOR_E_3,
+        T.CONVEYOR_E_4,
+      ].indexOf(id);
 
       // кадр k сдвигает шевроны на k/4 тайла по ленте
       chevrons(pen, frame * (CELL / 4));
@@ -321,7 +332,12 @@ const drawTile = (pen, id, random) => {
     case T.CONVEYOR_W_2:
     case T.CONVEYOR_W_3:
     case T.CONVEYOR_W_4: {
-      const frame = [T.CONVEYOR_W, T.CONVEYOR_W_2, T.CONVEYOR_W_3, T.CONVEYOR_W_4].indexOf(id);
+      const frame = [
+        T.CONVEYOR_W,
+        T.CONVEYOR_W_2,
+        T.CONVEYOR_W_3,
+        T.CONVEYOR_W_4,
+      ].indexOf(id);
 
       chevrons(rotated(pen, 2), frame * (CELL / 4));
       return;
@@ -458,7 +474,14 @@ const fenceBroken = (pen, random) => {
     const x = random() * (w - 8);
     const y = random() * (h - 3);
 
-    pen.rect(x, y, 4 + random() * 6, 2 + random() * 2, i % 2 ? 0xf0f0f0 : 0xf07a1a, 0.9);
+    pen.rect(
+      x,
+      y,
+      4 + random() * 6,
+      2 + random() * 2,
+      i % 2 ? 0xf0f0f0 : 0xf07a1a,
+      0.9,
+    );
   }
 
   pen.rect(0, 0, 4, 4, 0x505050);
@@ -531,5 +554,7 @@ const outputs = {
 
 for (const [name, image] of Object.entries(outputs)) {
   writeFileSync(`${outDir}${name}`, encodePng(image));
-  console.log(`placeholder art: assets/img/${name} (${image.width} × ${image.height})`);
+  console.log(
+    `placeholder art: assets/img/${name} (${image.width} × ${image.height})`,
+  );
 }

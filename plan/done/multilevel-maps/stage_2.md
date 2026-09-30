@@ -16,14 +16,14 @@
 Единственная правка — сохранить хвост респауна:
 
 ```js
-  const respawns = Object.fromEntries(
-    Object.entries(mapData.respawns || {}).map(([team, arr]) => [
-      team,
-      // 4-й элемент точки — уровень 2.5D-карты; масштабируются ТОЛЬКО
-      // координаты, всё остальное едет как есть
-      arr.map(point => [point[0] * scale, point[1] * scale, ...point.slice(2)]),
-    ]),
-  );
+const respawns = Object.fromEntries(
+  Object.entries(mapData.respawns || {}).map(([team, arr]) => [
+    team,
+    // 4-й элемент точки — уровень 2.5D-карты; масштабируются ТОЛЬКО
+    // координаты, всё остальное едет как есть
+    arr.map(point => [point[0] * scale, point[1] * scale, ...point.slice(2)]),
+  ]),
+);
 ```
 
 `levels` и `ramps` доезжают сами: функция возвращает `{ ...mapData, … }`.
@@ -94,9 +94,9 @@
 списку — `levels.fallTime` до реплики не доезжал, и падение на клиенте
 шло бы по своему дефолту.
 
-* `packages/engine/src/lib/buildClientConfig.js` — `config.prediction`
+- `packages/engine/src/lib/buildClientConfig.js` — `config.prediction`
   дополняется полем `coreParams: game.coreParams`.
-* `packages/engine/src/lib/clientCoreConfig.js` — `coreParams` из
+- `packages/engine/src/lib/clientCoreConfig.js` — `coreParams` из
   `prediction` раскрывается в половину `game` тем же правилом, что в
   `coreConfig.js` (известные движку ключи перекрывают одноимённые).
 
@@ -107,21 +107,21 @@
 ### 2.4.1 Конфиг клиентского ядра
 
 ```js
-  clientCore?.set_map(
-    JSON.stringify({
-      map,
-      step,
-      scale,
-      setId,
-      physicsStatic,
-      physicsDynamic: data.physicsDynamic,
-      // 2.5D: надземные уровни и переходы. Клиентское ядро строит из них
-      // ту же `MapLevels`, что и хост, — иначе предсказание уровня
-      // разъедется с авторитетным молча
-      levels: data.levels,
-      ramps: data.ramps,
-    }),
-  );
+clientCore?.set_map(
+  JSON.stringify({
+    map,
+    step,
+    scale,
+    setId,
+    physicsStatic,
+    physicsDynamic: data.physicsDynamic,
+    // 2.5D: надземные уровни и переходы. Клиентское ядро строит из них
+    // ту же `MapLevels`, что и хост, — иначе предсказание уровня
+    // разъедется с авторитетным молча
+    levels: data.levels,
+    ramps: data.ramps,
+  }),
+);
 ```
 
 ### 2.4.2 Статические данные рендера по уровням
@@ -129,50 +129,50 @@
 Сейчас:
 
 ```js
-  const staticData = Object.entries(layers).reduce((acc, [layer, tiles], index) => {
-    acc[`s${index}`] = { type: 'static', spriteSheet, map, step, layer, tiles, physicsStatic, scale };
-    return acc;
-  }, {});
+const staticData = Object.entries(layers).reduce((acc, [layer, tiles], index) => {
+  acc[`s${index}`] = { type: 'static', spriteSheet, map, step, layer, tiles, physicsStatic, scale };
+  return acc;
+}, {});
 ```
 
 Заменить на сборку по уровням со сквозной нумерацией ключей:
 
 ```js
-  // рендер-слои по уровням: уровень 0 — из `layers` над гридом `map`,
-  // надземные — из `levels[n].layers` над гридом `levels[n].map`.
-  // Ключи `s0..sN` сквозные: парт получает `level`, `solid` и `floor`
-  // своего уровня и не обязан ничего знать про соседний
-  const staticData = {};
-  let staticIndex = 0;
+// рендер-слои по уровням: уровень 0 — из `layers` над гридом `map`,
+// надземные — из `levels[n].layers` над гридом `levels[n].map`.
+// Ключи `s0..sN` сквозные: парт получает `level`, `solid` и `floor`
+// своего уровня и не обязан ничего знать про соседний
+const staticData = {};
+let staticIndex = 0;
 
-  const pushLayers = (levelLayers, levelMap, level, solid, floor) => {
-    for (const [layer, tiles] of Object.entries(levelLayers || {})) {
-      staticData[`s${staticIndex}`] = {
-        type: 'static',
-        spriteSheet,
-        map: levelMap,
-        step,
-        layer,
-        tiles,
-        level,
-        solid,
-        floor,
-        // прежнее имя оставлено для парта, который его уже читает
-        physicsStatic,
-        scale,
-      };
+const pushLayers = (levelLayers, levelMap, level, solid, floor) => {
+  for (const [layer, tiles] of Object.entries(levelLayers || {})) {
+    staticData[`s${staticIndex}`] = {
+      type: 'static',
+      spriteSheet,
+      map: levelMap,
+      step,
+      layer,
+      tiles,
+      level,
+      solid,
+      floor,
+      // прежнее имя оставлено для парта, который его уже читает
+      physicsStatic,
+      scale,
+    };
 
-      staticIndex += 1;
-    }
-  };
-
-  pushLayers(layers, map, 0, physicsStatic, []);
-
-  for (const [key, levelData] of Object.entries(data.levels || {})) {
-    const level = Number(key);
-
-    pushLayers(levelData.layers, levelData.map, level, levelData.walls || [], levelData.floor || []);
+    staticIndex += 1;
   }
+};
+
+pushLayers(layers, map, 0, physicsStatic, []);
+
+for (const [key, levelData] of Object.entries(data.levels || {})) {
+  const level = Number(key);
+
+  pushLayers(levelData.layers, levelData.map, level, levelData.walls || [], levelData.floor || []);
+}
 ```
 
 > **Ловушка нумерации.** Ключи `s0..sN` — это id экземпляров парта в
@@ -237,16 +237,16 @@ title: 'layered maps are structurally sound'
 
 ## 2.9 Тесты движка (Vitest, `packages/engine/tests/…`)
 
-| Файл | Тест | Что проверяет |
-| --- | --- | --- |
-| `host/RoundManager.test.js` (или где живут тесты `scaleMapData`) | `scaleMapData keeps the respawn level` | точка `[100, 200, 0, 1]` при `scale = 0.5` → `[50, 100, 0, 1]` |
-| `host/RoundManager.test.js` | `scaleMapData passes layers and ramps through` | `levels`/`ramps` в результате идентичны входу |
-| `host/GameCoreAdapter.test.js` | `createPlayer sends the explicit actor level` | фейковое ядро получает `set_actor_level(gameId, 1)` для точки с уровнем |
-| `host/GameCoreAdapter.test.js` | `createPlayer skips the level on an old core` | ядро без метода — вызова нет, исключения нет |
-| `lib/coreConfig.test.js` | `coreParams reach the game half` | `gameConfig.coreParams = { levels: { fallTime: 0.35 } }` → в `config.game.levels` |
-| `lib/coreConfig.test.js` | `coreParams cannot override engine keys` | `coreParams.models` не перетирает `parts.models` |
-| `client/applyMapData.test.js` (или существующий тест `main.js`) | `static layers are numbered across levels` | 2 слоя на L0 + 2 на L1 → ключи `s0..s3`, у каждого свой `level` |
-| `devtools/contract/e3-map-layers.test.js` | по одному кейсу на каждую проверку 2.7 | |
+| Файл                                                             | Тест                                           | Что проверяет                                                                     |
+| ---------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------- |
+| `host/RoundManager.test.js` (или где живут тесты `scaleMapData`) | `scaleMapData keeps the respawn level`         | точка `[100, 200, 0, 1]` при `scale = 0.5` → `[50, 100, 0, 1]`                    |
+| `host/RoundManager.test.js`                                      | `scaleMapData passes layers and ramps through` | `levels`/`ramps` в результате идентичны входу                                     |
+| `host/GameCoreAdapter.test.js`                                   | `createPlayer sends the explicit actor level`  | фейковое ядро получает `set_actor_level(gameId, 1)` для точки с уровнем           |
+| `host/GameCoreAdapter.test.js`                                   | `createPlayer skips the level on an old core`  | ядро без метода — вызова нет, исключения нет                                      |
+| `lib/coreConfig.test.js`                                         | `coreParams reach the game half`               | `gameConfig.coreParams = { levels: { fallTime: 0.35 } }` → в `config.game.levels` |
+| `lib/coreConfig.test.js`                                         | `coreParams cannot override engine keys`       | `coreParams.models` не перетирает `parts.models`                                  |
+| `client/applyMapData.test.js` (или существующий тест `main.js`)  | `static layers are numbered across levels`     | 2 слоя на L0 + 2 на L1 → ключи `s0..s3`, у каждого свой `level`                   |
+| `devtools/contract/e3-map-layers.test.js`                        | по одному кейсу на каждую проверку 2.7         |                                                                                   |
 
 Если для `applyMapData` в репозитории нет точки тестирования — не изобретать
 её: покрыть сборку `staticData` через `VirtualClient` в сценарном тесте
@@ -254,46 +254,46 @@ title: 'layered maps are structurally sound'
 
 ## 2.10 Changelog и документация движка
 
-* `packages/engine/CHANGELOG.md` → `### Added`: слои карты в `MAP_DATA` и
+- `packages/engine/CHANGELOG.md` → `### Added`: слои карты в `MAP_DATA` и
   `set_map`, `staticData` по уровням, `gameConfig.coreParams`, уровень
   респауна через `set_actor_level`, capability `map.layers`, правило
   контракта E3.
-* `docs/en|ru/client.md`: раздел про `applyMapData` и поля `level`/`solid`/
+- `docs/en|ru/client.md`: раздел про `applyMapData` и поля `level`/`solid`/
   `floor`, приезжающие в парт карты.
-* `docs/en|ru/host.md`: `set_actor_level` в описании `GameCoreAdapter`.
-* `docs/en|ru/configuration.md`: `gameConfig.coreParams`.
-* `docs/en|ru/plugin-api.md`: формат карты со слоями, `requires:
-  ['map.layers']`, поля, приезжающие в парты.
-* `docs/en|ru/debugging.md`: правило контракта E3 в списке группы E.
-* `docs/ai/03-host-plugin.md`: `coreParams` в справочнике `gameConfig`.
-* `docs/ai/04-client-plugin.md`: новые поля данных статического слоя карты.
-* `docs/ai/07-maps-and-assets.md`: доработать после этапа 1 — добавить,
+- `docs/en|ru/host.md`: `set_actor_level` в описании `GameCoreAdapter`.
+- `docs/en|ru/configuration.md`: `gameConfig.coreParams`.
+- `docs/en|ru/plugin-api.md`: формат карты со слоями, `requires:
+['map.layers']`, поля, приезжающие в парты.
+- `docs/en|ru/debugging.md`: правило контракта E3 в списке группы E.
+- `docs/ai/03-host-plugin.md`: `coreParams` в справочнике `gameConfig`.
+- `docs/ai/04-client-plugin.md`: новые поля данных статического слоя карты.
+- `docs/ai/07-maps-and-assets.md`: доработать после этапа 1 — добавить,
   что именно доезжает до клиента.
 
 ### Отклонения от плана (сделано осознанно)
 
-* **Правило контракта — `E4`, а не `E3`.** Идентификатор `E3` в реестре уже
+- **Правило контракта — `E4`, а не `E3`.** Идентификатор `E3` в реестре уже
   занят (`e3-sound-registry.js`), поэтому файл называется
   `e4-map-layers.js`, id — `E4`. Доки (`debugging.md`, `plugin-api.md`) и
   ожидание пропуска в `tests/devtools/contract/miniGame.test.js` обновлены
   под `E4`.
-* **`eslint.config.js` → `FROZEN_CORE_ABI`.** Прямой вызов
+- **`eslint.config.js` → `FROZEN_CORE_ABI`.** Прямой вызов
   `this._core.set_actor_level` запрещён правилом `no-restricted-syntax`
   (новая возможность ядра обязана ехать опкодом `dispatch`). Метод уже вошёл
   в замороженный слепок `contract/surface.json` на этапе 1 (решение 4), а
   вызов защищён проверкой `typeof`, поэтому список в eslint синхронизирован
   со слепком, а не переписан на опкод.
-* **`2.8` — правок не потребовалось.** `startStandaloneGame` карту не
+- **`2.8` — правок не потребовалось.** `startStandaloneGame` карту не
   фильтрует: `gameConfig.maps` доезжает до `RoundManager` целиком, и
   `sendMap` шлёт клиенту весь объект.
-* **`2.5` — из двух правок применима одна.** У `VirtualClient` нет сборки
+- **`2.5` — из двух правок применима одна.** У `VirtualClient` нет сборки
   `staticData` (он headless и не рендерит), поэтому продублирован только
   `set_map`.
-* **Осознанный пропуск теста `applyMapData`.** Точки тестирования у
+- **Осознанный пропуск теста `applyMapData`.** Точки тестирования у
   `client/main.js` в репозитории нет (в happy-dom он не поднимается — см.
   `tests/standalone/startStandaloneGame.test.js`), новая не изобреталась.
   Сборка `staticData` по уровням покрывается сценарным тестом этапа 8.
-* **Тесты `coreConfig`** заведены новым файлом `tests/lib/coreConfig.test.js`
+- **Тесты `coreConfig`** заведены новым файлом `tests/lib/coreConfig.test.js`
   — раньше `buildCoreConfig` тестов не имел.
 
 ## Критерии готовности этапа

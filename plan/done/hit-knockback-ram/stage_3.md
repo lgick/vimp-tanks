@@ -40,6 +40,7 @@
    - `spinFactor` конечен и в `[0, 1]`.
 
    Текст ошибки: `models.{name}.hitResponse.{field} must be …, got {value}`.
+
 4. **Тесты** (модуль тестов `config.rs`): модель из JSON (поля — как у фикстуры `flat_config_json()` в
    `core/tests/sim.rs`; можно взять за основу `surface_model()` в `config.rs`), вставить в `cfg.models` конфига
    `config_with_panel_keys(&["health"])`:
@@ -95,6 +96,7 @@ pub fn hit_impulse(
 ```
 
 **Юнит-тесты** (модуль тестов `motion.rs`, хелпер `model()` ~стр. 342: `damping.linear` 3, `lateralGrip` 20):
+
 - лоб: `heading (1, 0)`, `J (−1000, 0)`, `lever (4, 0)` — без хода линейный `(−1000·idle, 0)`, с ходом
   `(−1000, 0)`, вращения нет;
 - борт: `J (0, 1000)` — при `grip` 1 боковая часть `1000·lateral`, при `grip` 0 — `1000·lateral·3/23`;
@@ -123,7 +125,7 @@ pub fn hit_state(
 - `drives` = `self.current_keys & (bits.forward | bits.back) != 0` — зажатые клавиши, **не**
   `keys_for_processing()` (тот сбрасывает разовые события).
 - `grip`: те же вызовы, что в `Tank::update` (искать `surface::tank_mix(`): `tank_mix(map, surface_rules,
-  &self.level_state, x, y, angle, width / 2, height / 2)`, затем `apply_slick` на копии
+&self.level_state, x, y, angle, width / 2, height / 2)`, затем `apply_slick` на копии
   `let mut state = self.level_state;` с `dt` 0.0; результат — `.grip`. Без карты поверхностей —
   `SurfaceMix::NEUTRAL.grip`.
 
@@ -192,6 +194,7 @@ fn config_json_with_hit_response(response: serde_json::Value) -> String {
 `apply_input(1, …, "down", "fire")`; `steps(…, 180)`; строка после.
 
 Тесты:
+
 1. `hit_without_response_keeps_point_impulse` — без блока попадание в борт у кормы (цель в (60, 3), курс 90°)
    доворачивает корпус заметно (> 2°): работает прежний путь.
 2. `hit_response_scales_hull_axes` — блок `{ lateralFactor 2, idleFactor 0.5, spinFactor 0 }`, стоящая цель:

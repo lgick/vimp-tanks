@@ -11,6 +11,7 @@
 (85 файлов). Ядро (`core/`) задача не трогала.
 
 **Итог.** Критических и значимых ошибок нет. Все семь этапов сделаны строго по плану, это сверено построчно:
+
 - тела `frameOf` и `growMeshPool` совпадают с планом;
 - `volumesChanged` эквивалентна обоим прежним условиям: `volumes = deps.volumes || null`, `clear()` сбрасывает
   `volumesVersion`;
@@ -23,11 +24,11 @@
 
 ### Сводка находок
 
-| # | Важность | Критерий | Суть | Этап |
-| --- | --- | --- | --- | --- |
-| R1 | низкая | DRY, тестируемость | Раскладку текстуры источника знают два места: `frameOf` (`lightGeometry.js`, мировые единицы; веер фары, засветка грани, свет на клине) и спрайт `itemOf` (`createLighting.js` ≈ 486–531, та же формула в масштабе проекции: `anchorX`, `scaleX/Y`, `spread ?? 0.5`, `rotation \|\| 0`). Связаны они только комментарием «Та же, что у спрайта `itemOf`». Раскладку спрайта не проверяет ни один тест: `scaleX`/`anchorX` в `tests/client/lighting` не встречаются. Разойдутся формулы — фара будет «прыгать» по размеру, подъезжая к стене (спрайт → веер), а свет фонаря на клине не совпадёт с его пятном. Долг старый, но этап 5 прошлой задачи переносил `frameOf` в чистый модуль ровно ради переиспользования, а второй потребитель так и остался копией | 1 |
-| F1 | незначительная | стандартизация | В новом `tests/client/lighting/rampLights.test.js` семь строк длиннее 80 символов (81–92), `printWidth: 80` в `~/.prettierrc.mjs`. Причина — фрагменты прошлого плана, исполнитель перенёс их дословно и сам об этом написал. Строку `vi.mock(…)` (82) не трогать: она дословно повторяет `occlusion.test.js` | 2 |
-| D1 | незначительная | стандартизация | Минимальный перенос этапа 6 оставил в `configuration.md` рваный хвост абзаца. В ru фраза «цветом `ambient`» разорвана по строкам. В en короткая строка стоит перед следующей фразой | 3 |
+| #   | Важность       | Критерий           | Суть                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Этап |
+| --- | -------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| R1  | низкая         | DRY, тестируемость | Раскладку текстуры источника знают два места: `frameOf` (`lightGeometry.js`, мировые единицы; веер фары, засветка грани, свет на клине) и спрайт `itemOf` (`createLighting.js` ≈ 486–531, та же формула в масштабе проекции: `anchorX`, `scaleX/Y`, `spread ?? 0.5`, `rotation \|\| 0`). Связаны они только комментарием «Та же, что у спрайта `itemOf`». Раскладку спрайта не проверяет ни один тест: `scaleX`/`anchorX` в `tests/client/lighting` не встречаются. Разойдутся формулы — фара будет «прыгать» по размеру, подъезжая к стене (спрайт → веер), а свет фонаря на клине не совпадёт с его пятном. Долг старый, но этап 5 прошлой задачи переносил `frameOf` в чистый модуль ровно ради переиспользования, а второй потребитель так и остался копией | 1    |
+| F1  | незначительная | стандартизация     | В новом `tests/client/lighting/rampLights.test.js` семь строк длиннее 80 символов (81–92), `printWidth: 80` в `~/.prettierrc.mjs`. Причина — фрагменты прошлого плана, исполнитель перенёс их дословно и сам об этом написал. Строку `vi.mock(…)` (82) не трогать: она дословно повторяет `occlusion.test.js`                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 2    |
+| D1  | незначительная | стандартизация     | Минимальный перенос этапа 6 оставил в `configuration.md` рваный хвост абзаца. В ru фраза «цветом `ambient`» разорвана по строкам. В en короткая строка стоит перед следующей фразой                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 3    |
 
 ### Ответы на отступления исполнителя из отчёта
 
@@ -40,12 +41,12 @@
 
 ## Статус этапов
 
-| # | Этап | Находки | Статус |
-| --- | --- | --- | --- |
-| 1 | Спрайт источника берёт раскладку из `frameOf` | R1 | ✅ выполнен |
-| 2 | Переносы длинных строк в `rampLights.test.js` | F1 | ✅ выполнен |
-| 3 | Хвосты абзацев в `configuration.md` | D1 | ✅ выполнен |
-| 4 | Итоговая проверка | — | ✅ выполнен |
+| #   | Этап                                          | Находки | Статус      |
+| --- | --------------------------------------------- | ------- | ----------- |
+| 1   | Спрайт источника берёт раскладку из `frameOf` | R1      | ✅ выполнен |
+| 2   | Переносы длинных строк в `rampLights.test.js` | F1      | ✅ выполнен |
+| 3   | Хвосты абзацев в `configuration.md`           | D1      | ✅ выполнен |
+| 4   | Итоговая проверка                             | —       | ✅ выполнен |
 
 Выполненный этап отметить «✅ выполнен» в заголовке и в таблице. Когда выполнены все этапы, перенести файл в
 `plan/done/` (`git mv`, без коммита; если файл ещё не в git — обычный `mv`).
@@ -67,43 +68,48 @@
 ### 1.1. Сначала — тест, закрепляющий нынешнее поведение
 
 `tests/client/lighting/createLighting.test.js`:
+
 - после `import LevelLightMap from '../../../src/client/lighting/LevelLightMap.js';` добавить
   `import { frameOf } from '../../../src/client/lighting/lightGeometry.js';`;
 - в `describe('lighting: фары и стены', …)` сразу после теста «конус упёрся в стену — веер, в чистом поле — прежний
   спрайт» добавить:
 
 ```js
-  // спрайт в чистом поле кладёт текстуру так же, как веер фары у стены и
-  // свет на клине: раскладка одна — `frameOf` (у спрайта — в масштабе
-  // проекции)
-  it('спрайты конуса и пятна: раскладка текстуры — frameOf', () => {
-    const { service, cone } = scene({ walls: [[15, 15]] });
-    const lamp = service.addLight({
-      kind: 'radial',
-      x: 200,
-      y: 200,
-      radius: 40,
-    });
-    const layout = spyLayout();
-
-    frame(service);
-
-    const items = lastItems(layout, 0);
-
-    for (const [light, name] of [[cone, 'cone'], [lamp, 'radial']]) {
-      const asset = service.texture(name);
-      const item = items.find(entry => entry.texture === asset.texture);
-      const expected = frameOf(light, asset);
-
-      expect(item.anchorX).toBe(expected.margin / expected.width);
-      expect(item.scaleX).toBe(expected.sx * item.view.scale);
-      expect(item.scaleY).toBe(expected.sy * item.view.scale);
-      expect(item.rotation).toBe(expected.rotation);
-    }
+// спрайт в чистом поле кладёт текстуру так же, как веер фары у стены и
+// свет на клине: раскладка одна — `frameOf` (у спрайта — в масштабе
+// проекции)
+it('спрайты конуса и пятна: раскладка текстуры — frameOf', () => {
+  const { service, cone } = scene({ walls: [[15, 15]] });
+  const lamp = service.addLight({
+    kind: 'radial',
+    x: 200,
+    y: 200,
+    radius: 40,
   });
+  const layout = spyLayout();
+
+  frame(service);
+
+  const items = lastItems(layout, 0);
+
+  for (const [light, name] of [
+    [cone, 'cone'],
+    [lamp, 'radial'],
+  ]) {
+    const asset = service.texture(name);
+    const item = items.find(entry => entry.texture === asset.texture);
+    const expected = frameOf(light, asset);
+
+    expect(item.anchorX).toBe(expected.margin / expected.width);
+    expect(item.scaleX).toBe(expected.sx * item.view.scale);
+    expect(item.scaleY).toBe(expected.sy * item.view.scale);
+    expect(item.rotation).toBe(expected.rotation);
+  }
+});
 ```
 
 Почему данные такие:
+
 - `scene()` возвращает `cone`: это запись `addLight`, то есть тот же объект, что получает `itemOf`;
 - стена `[[15, 15]]` далеко, поэтому у конуса спрайт, а не веер;
 - фонарь в (200, 200) на экране: камера в начале координат, сцена сдвинута на полэкрана;
@@ -115,49 +121,51 @@
 ### 1.2. `itemOf` через `frameOf`
 
 `src/client/lighting/createLighting.js`:
+
 1. После `import LevelLightMap, { hasLevelMap } from './LevelLightMap.js';` добавить
    `import { frameOf } from './lightGeometry.js';`.
 2. `itemOf` (≈ стр. 484–531, после `// --- раскладка источников ---`) заменить целиком:
 
 ```js
-  // спрайт источника: проекция, охват на экране и раскладка текстуры
-  const itemOf = (light, camera, factor) => {
-    const asset = light.kind === 'cone' ? textures.cone : textures.radial;
+// спрайт источника: проекция, охват на экране и раскладка текстуры
+const itemOf = (light, camera, factor) => {
+  const asset = light.kind === 'cone' ? textures.cone : textures.radial;
 
-    if (!asset || !(light.intensity * factor > 0)) {
-      return null;
-    }
+  if (!asset || !(light.intensity * factor > 0)) {
+    return null;
+  }
 
-    const view = projectLight(light.x, light.y, light.z ?? light.level, camera, stage, shear);
-    // раскладка текстуры — та же, что у вееров фар и света на клиньях
-    // (`frameOf`), в масштабе проекции источника
-    const frame = frameOf(light, asset);
-    const item = {
-      reach: light.radius * view.scale * stage.scale.x,
-      view,
-      texture: asset.texture,
-      anchorX: frame.margin / frame.width,
-      anchorY: 0.5,
-      scaleX: frame.sx * view.scale,
-      scaleY: frame.sy * view.scale,
-      rotation: frame.rotation,
-      color: light.color,
-      alpha: light.intensity * factor,
-    };
-
-    if (light.kind === 'cone') {
-      // веер и упор оси — `occludeItem`, уже после отсечения по экрану
-      item.fan = null;
-      item.hit = null;
-    }
-
-    return item;
+  const view = projectLight(light.x, light.y, light.z ?? light.level, camera, stage, shear);
+  // раскладка текстуры — та же, что у вееров фар и света на клиньях
+  // (`frameOf`), в масштабе проекции источника
+  const frame = frameOf(light, asset);
+  const item = {
+    reach: light.radius * view.scale * stage.scale.x,
+    view,
+    texture: asset.texture,
+    anchorX: frame.margin / frame.width,
+    anchorY: 0.5,
+    scaleX: frame.sx * view.scale,
+    scaleY: frame.sy * view.scale,
+    rotation: frame.rotation,
+    color: light.color,
+    alpha: light.intensity * factor,
   };
+
+  if (light.kind === 'cone') {
+    // веер и упор оси — `occludeItem`, уже после отсечения по экрану
+    item.fan = null;
+    item.hit = null;
+  }
+
+  return item;
+};
 ```
 
 Строку `projectLight(…)` оставить как есть: она прежняя.
 
 Эквивалентность:
+
 - `reach` вычисляется в том же порядке операций, что и раньше, для обоих видов;
 - `anchorX` конуса: `asset.margin / asset.texture.width` = `frame.margin / frame.width`;
 - `anchorX` пятна: `(w / 2) / w` = 0.5, и это точно во float;
@@ -194,32 +202,32 @@
 2. Тест «без полос — ничего»: две строки `expect(rampLights.push(target, 0, undefined | [], …)).toBe(false);`
    заменить на
    ```js
-       // полос нет вовсе или список пуст
-       for (const lanes of [undefined, []]) {
-         expect(rampLights.push(target, 0, lanes, lamp(), item(), 1)).toBe(false);
-       }
+   // полос нет вовсе или список пуст
+   for (const lanes of [undefined, []]) {
+     expect(rampLights.push(target, 0, lanes, lamp(), item(), 1)).toBe(false);
+   }
    ```
 3. `expect(entry).toMatchObject({ texture: 'tex', color: 0xffcc88, alpha: 0.5 });` → объект в три строки.
 4. `textures.radial = { ...textures.radial, texture: { width: 68, height: 68 } };` →
    ```js
-       textures.radial = {
-         ...textures.radial,
-         texture: { width: 68, height: 68 },
-       };
+   textures.radial = {
+     ...textures.radial,
+     texture: { width: 68, height: 68 },
+   };
    ```
 5. `frame: { x: 0, … height: 136 },` у `fan` → объект по полю на строку.
 6. `expect(rampLights.push(target, 0, [lane], cone, item({ rampFan: fan }), 1)).toBe(true);` →
    ```js
-       const occluded = item({ rampFan: fan });
+   const occluded = item({ rampFan: fan });
 
-       expect(rampLights.push(target, 0, [lane], cone, occluded, 1)).toBe(true);
+   expect(rampLights.push(target, 0, [lane], cone, occluded, 1)).toBe(true);
    ```
 7. `const levelMap = (level, tops) => ({ level, rampLevels: () => new Set(tops) });` →
    ```js
-       const levelMap = (level, tops) => ({
-         level,
-         rampLevels: () => new Set(tops),
-       });
+   const levelMap = (level, tops) => ({
+     level,
+     rampLevels: () => new Set(tops),
+   });
    ```
 
 Проверка ширины: скрипт ниже должен напечатать только строку 4 (`vi.mock`).
@@ -275,12 +283,14 @@ npm run build
 ```
 
 Ожидается:
+
 - eslint чисто;
 - 1106 тестов в 85 файлах (+1 на этапе 1);
 - сборка без ошибок и предупреждений;
 - ядро не менялось, поэтому `core:test` и `sim:scenarios` не нужны.
 
 **Вручную** (`npm run dev`, `downtown`, ночь), потому что этап 1 правит путь рендера:
+
 1. Фара в открытом поле — прежнего размера и формы.
 2. При подъезде к стене конус не «прыгает»: спрайт сменяется веером без скачка.
 3. Фонари, в том числе свет на клиньях рамп, — как раньше.

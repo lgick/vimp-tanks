@@ -7,6 +7,7 @@
 ## Как устроено сейчас (проверено по коду)
 
 `core/src/shot_levels.rs`:
+
 - `pub struct RaySegment { pub t0: f32, pub t1: f32, pub level: u8 }`, `t` — дистанция вдоль единичного
   направления;
 - `ray_segments(levels, origin, dir, range, level) -> Vec<RaySegment>`. Одноуровневая карта даёт
@@ -18,6 +19,7 @@
 - `level_at_distance(segments, t)` — максимальный `level` среди сегментов на `t` (уровень конца промаха).
 
 `core/src/shot_height.rs`:
+
 - `embankment_hit(levels, origin, dir, t0, t1, level, bullet)` — три правила: грань (вход снаружи, `t_in > t0`),
   склон (склон поднялся выше пули), верхний торец (`exits_top`: вверх по склону до торца — стоп);
 - `first_embankment_hit(levels, segments, origin, dir, bullet)`.
@@ -313,10 +315,10 @@
    - `segment_starting_on_the_run_edge_hits_the_face`: `hit([75.0, 15.0], [-1.0, 0.0], 15.0, 100.0, 0, FLOOR)` —
      сегмент начинается на торце x = 60 → `HIT_EMBANKMENT_FACE`, `t = 15`;
    - `segment_started_inside_the_embankment_hits_the_slope`: `hit([45.0, 15.0], [1.0, 0.0], 0.0, 100.0, 0,
-     BulletLine { base: 0.3, rate: 0.0 })` (склон на x = 45 — 0.5, выше пули; сегмент начат внутри прогона) →
+BulletLine { base: 0.3, rate: 0.0 })` (склон на x = 45 — 0.5, выше пули; сегмент начат внутри прогона) →
      `HIT_SLOPE`, `t = 0`;
    - `air_hit_carries_the_fly_level`: `embankment_hit(&ramp_map(), [5.0, 15.0], [1.0, 0.0],
-     &RaySegment { t0: 0.0, t1: 100.0, level: 0, fly: 1 }, &FLOOR)` → `level == 1`, `code == HIT_SLOPE`;
+&RaySegment { t0: 0.0, t1: 100.0, level: 0, fly: 1 }, &FLOOR)` → `level == 1`, `code == HIT_SLOPE`;
    - `bridge_bullet_over_an_air_segment_misses`: тот же сегмент `{0, 100, level 0, fly 1}`, `[75.0, 15.0]` на
      запад, пуля 1.1 → `None`.
 

@@ -58,7 +58,7 @@
    - в `snapshot_rows` (≈479–529) — строка возвращает `collidable` рядом с `level`;
    - в своём `begin_reconcile` (≈323) — **до** `self.set.begin_reconcile`, тем же проходом, что уже ставит
      `set_level_state`: переигранные шаги видят авторитетное значение с первого шага.
-   Удалённые танки и фреймворк не меняются.
+     Удалённые танки и фреймворк не меняются.
 2. `capture` (≈345–411): тела с `!collidable` не захватываются; уже захваченные понижаются в `Follow`
    (`demote_idle`/`release_predicted`).
 3. Контакты: маски тел собирает `Predictor::resolve_world` (`predictor.rs` ≈1256,

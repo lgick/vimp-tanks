@@ -83,6 +83,7 @@ npm run sim -- --scenario tests/scenarios/bots_terraces.json --determinism
 > Итог ручной игры (пользователь): боты убивают слишком быстро. Исправлено числами пресетов
 > (`game.js`, `default_bot_presets`, фикстура `tests/core/fixtures/bots.json`, таблица в
 > `configuration.md` en/ru, журнал `### Changed`):
+>
 > - `normal`: `reactionTime` 0.35→0.45, `aimError` 0.18→0.28, `aimSettleTime` 0.7→1.0,
 >   `aimTremor` 0.03→0.04, `burstShots` [1,3]→[1,2], `burstPause` [0.55,1.1]→[0.8,1.4],
 >   `shotInterval` 0.3→0.35;

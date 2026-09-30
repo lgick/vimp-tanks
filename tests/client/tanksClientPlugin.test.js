@@ -108,8 +108,8 @@ describe('ClientPlugin: сервис surfaces', () => {
   const makeSurfaceCore = () => ({
     'map_generation': vi.fn(() => 1),
     'surface_types': vi.fn(() => '["boost","sand"]'),
-    'surface_at': vi.fn((x) => (x < 0 ? -1 : Math.floor(x))),
-    'surface_dir_at': vi.fn((x) => (x < 0 ? -1 : 3)),
+    'surface_at': vi.fn(x => (x < 0 ? -1 : Math.floor(x))),
+    'surface_dir_at': vi.fn(x => (x < 0 ? -1 : 3)),
   });
 
   it('kindAt переводит индекс ядра в имя, -1 — в null', () => {

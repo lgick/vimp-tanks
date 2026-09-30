@@ -23,6 +23,7 @@
 ## 5.1. Ядро клиента — `core/src/lib.rs`
 
 Рядом с `shot_segments`, в том же `impl` и стиле:
+
 ```rust
 /// Уровень пола под мировой точкой для пули, летящей на уровне `level`:
 /// сам `level`, если там его плита (у земли — всегда), иначе уровень
@@ -38,12 +39,14 @@ pub fn floor_level(&self, level: u8, x: f32, y: f32) -> u8 {
     shot_levels::floor_under(levels, level, x, y)
 }
 ```
+
 Если `shot_levels` в `lib.rs` не импортирован под этим именем, писать путь, как у `shot_segments`. Затем
 `npm run core:build`.
 
 ## 5.2. Сервис — `src/client/index.js`, объект `rampRuns`
 
 После `faceAt`:
+
 ```js
 // уровень пола под мировой точкой для пули уровня `level`
 // (core.floor_level): у пули с моста над землёй пол ниже уровня конца —
@@ -52,6 +55,7 @@ floorAt(level, x, y) {
   return core.floor_level(level, x, y);
 },
 ```
+
 Комментарий над `rampRuns` в `services` (≈ 82) дополнить: «…и пол под концом выстрела (`floorAt`)».
 
 ## 5.3. Контроллер — `ShotEffectController.js`
@@ -71,10 +75,7 @@ floorAt(level, x, y) {
    - ветка `W1_HIT_EMBANKMENT_FACE`:
      ```js
      const ahead = 2 * WALL_EDGE_TOLERANCE;
-     const base = this._floorAt(
-       this.endPositionX + nx * ahead,
-       this.endPositionY + ny * ahead,
-     );
+     const base = this._floorAt(this.endPositionX + nx * ahead, this.endPositionY + ny * ahead);
      const found = this._rampRuns?.faceAt?.(
        base,
        this.endPositionX,
@@ -143,6 +144,7 @@ floorAt(level, x, y) {
 ## 5.4. `tracerPieces.js` и `shotEvents.js`
 
 Кода не менять. Шапку `tracerPieces.js` переписать:
+
 ```js
 // Куски трассера по уровням: сегменты луча из ядра (`shots.path`) →
 // непересекающиеся отрезки `[{ from, to, level }]` от 0 до `total`.
@@ -159,6 +161,7 @@ floorAt(level, x, y) {
 // накрывающего конец, либо целиком.
 // Без сегментов — один кусок на уровне конца, как было.
 ```
+
 В `shotEvents.js` комментарий у `path` дополнить: «…`level` в элементах — уровень полёта сегмента».
 
 ## 5.5. Тесты
@@ -166,7 +169,7 @@ floorAt(level, x, y) {
 1. `tests/core/clientCore.test.js`, блок «слоёная карта»: новый тест «floor_level: пол под пулей». Без карты
    `client.floor_level(1, 352, 300) === 1`. На `layeredMap`: `floor_level(1, 352, 300) === 1` (плита),
    `floor_level(1, 450, 300) === 0` (за кромкой), `floor_level(1, 250, 304) === 0` (рампа), `floor_level(0, 100,
-   100) === 0`.
+100) === 0`.
 2. `tests/client/tanksClientPlugin.test.js`, блок «ClientPlugin: сервис rampRuns»: в `makeRampCore` добавить
    `'floor_level': vi.fn(() => 0)`. Новый тест «floorAt спрашивает пол у ядра»: `rampRuns.floorAt(1, 96, 32) === 0`,
    `core.floor_level` вызван с `(1, 96, 32)`.
@@ -180,17 +183,17 @@ floorAt(level, x, y) {
    `camera()`).
    - **«осколки рождаются на уровне полёта и падают на пол»**: строка `[300, 40, 150, 40, 300, 40, 1, 1, 1, 1]`
      (конец x = 150 над землёй, `endLevel` 1). `rampRuns = { ...makeRampRuns(), floorAt: vi.fn((level, x) =>
-     (x < 200 ? 0 : level)) }` (рампа фикстуры — x 64..128, точка 150 вне её). После `run()` и
+(x < 200 ? 0 : level)) }` (рампа фикстуры — x 64..128, точка 150 вне её). После `run()` и
      `finishTracer`: `controller.impact._startK ≈ 1 * parallax.shear`. Затем `controller.impact._update(300)` и
      `controller.onRender()`: для осколка `p` — `controller.impact.x + p.sprite.x ≈ reproject(controller.impact.x
-     + p.x, controller.impact.y + p.y, camera, parallax.shear, 0).x` (из проекции уровня 1 на пол 0);
+     - p.x, controller.impact.y + p.y, camera, parallax.shear, 0).x` (из проекции уровня 1 на пол 0);
    - **«попадание на плите — осколки сразу на поверхности»**: та же строка, `floorAt: vi.fn((level) => level)` →
      `controller.impact._startK === null`;
    - **«грань насыпи под пулей ищется на полу»**: прогон фикстуры `0 → 2`:
      `const steep = [{ axis: 0, sign: 1, from: 0, to: 2, min: 64, max: 128, crossMin: 16, crossMax: 80 }]`, сервис
      `{ heightAt: (l, x, y) => rampSurfaceAt(steep, l, x, y), slopeAt: …, faceAt: vi.fn((...a) =>
-     rampFaceAt(steep, ...a)), floorAt: vi.fn(() => 0) }`. Строка `[112, 120, 112, 80, 112, 120,
-     W1_HIT_EMBANKMENT_FACE, 1, 1, 1]` — выстрел на север в борт `y = 80` с уровня 1. Камера южнее борта (центр
+rampFaceAt(steep, ...a)), floorAt: vi.fn(() => 0) }`. Строка `[112, 120, 112, 80, 112, 120,
+W1_HIT_EMBANKMENT_FACE, 1, 1, 1]` — выстрел на север в борт `y = 80` с уровня 1. Камера южнее борта (центр
      `(112, 200)`). После `run()`: `faceAt` вызван первым аргументом `0`, `controller._wall.base === 0`,
      `controller._wall.volume ≈ 1.5` (склон на x = 112 — `(112 − 64) / 64 · 2`), конец трассера ≈
      `reproject(112, 80, camera, 1 * parallax.shear, (1 + tracer.height) * parallax.shear).y`;

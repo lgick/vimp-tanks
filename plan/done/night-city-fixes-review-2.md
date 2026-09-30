@@ -12,6 +12,7 @@
 
 По задаче `ramp-debris-parallax` был отдельный план ревью, он уже выполнен: `plan/done/ramp-debris-review.md`
 (коммит 708b288). Его находки здесь **не повторяются**:
+
 - `wallFace.raisedPoint` дублирует `parallax.reproject` (там M1);
 - модель высоты пули, коды попадания `W1_HIT_*`, грань насыпи рамп в `ShotEffectController._wallAt` (там H1–N2);
 - константа `tracer.height = 0.19`, посчитанная для `downtown` (там «За рамками»).
@@ -30,15 +31,15 @@
 
 ### Сводка находок
 
-| # | Важность | Критерий | Суть | Этап |
-| --- | --- | --- | --- | --- |
-| M1 | средняя | документированность | `volume.faceTilesPerLevel` в `src/config/render.js` равен `3`. Комментарий рядом с ним и таблицы `docs/en|ru/configuration.md` пишут «по умолчанию `2`, ≈ 116 мировых единиц». Тот, кто настраивает пропорции кирпича по документации, получит не то, что прочитал | 1 |
-| L2 | низкая | DRY, читаемость | `LevelLightMap`: пул мешей-добавок написан трижды (`layoutFans`, `layoutWashes`, `layoutRampLights`), проекция вершин — дважды. У `wallWash().heights` и `rampLight().heights` одно имя, но разная точка отсчёта: высота над полом стены и абсолютная. Поэтому два почти одинаковых цикла проецируют по-разному (`item.level + h` и `h`) | 2 |
-| L3 | низкая | DRY | Мелкие дубли. Проверка `hasLevelMap` вписана копией в `shafts.js`. Формула alpha центра дыры повторена в `MapLayer._roofAlpha` и `holeOverlay.apply`. Размер клетки `map.step * map.scale.x/y` считается 7 раз в `occlusion.js`/`createLighting.js`. Границы полосы рампы и интерполяция её высоты повторены в `rampHeight`, `rampLight`, `rampWedgePolygon` | 3 |
-| L1 | низкая | DRY, поддерживаемость, документированность | Высоты объёмов лежат в двух реестрах: сервис `volumes` (выстрел) и `tops` освещения (сетка препятствий фар, вершины объёмов). `MapLayer` кладёт в оба одни и те же данные и дважды считает `cellsOfTiles`. Комментарий в `volumes.js` обещает объединить их при разделении `createLighting.js`, но этап 12 этого не сделал | 4 |
-| L4 | низкая | тестируемость | Короткий путь окклюзии фар (этап 10: «рядом нет стен и рамп — лучи не пускаются») не доказан ни одним тестом, исполнитель сам об этом написал. У модуля `occlusion.js` нет собственного теста | 5 |
-| L5 | низкая | читаемость, документированность | В комментариях `src/` стоят ссылки на этапы планов: `lightMath.js` — «(этап 10)», «(этап 11)», «(этап 12)», «(этап 14.5)», номера из двух разных планов; `createLighting.js` — «(7.3)». Без плана они не читаются, а заголовок раздела «свет верхнего уровня на рампах» уже неточен | 6 |
-| L6 | низкая | поддерживаемость | Цель этапа 12 (`createLighting.js` ≤ ~900 строк) не достигнута: файл занимает 1302 строки, исполнитель ждёт решения. `lightMath.js` вырос до 969 строк разнородного кода: проекция, мерцание, профили, сетки, окклюзия, засветка, свет на клиньях | 7 (необязательный) |
+| #   | Важность | Критерий                                   | Суть                                                                                                                                                                                                                                                                                                                                                         | Этап                                                                                                                                                   |
+| --- | -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M1  | средняя  | документированность                        | `volume.faceTilesPerLevel` в `src/config/render.js` равен `3`. Комментарий рядом с ним и таблицы `docs/en                                                                                                                                                                                                                                                    | ru/configuration.md`пишут «по умолчанию`2`, ≈ 116 мировых единиц». Тот, кто настраивает пропорции кирпича по документации, получит не то, что прочитал | 1   |
+| L2  | низкая   | DRY, читаемость                            | `LevelLightMap`: пул мешей-добавок написан трижды (`layoutFans`, `layoutWashes`, `layoutRampLights`), проекция вершин — дважды. У `wallWash().heights` и `rampLight().heights` одно имя, но разная точка отсчёта: высота над полом стены и абсолютная. Поэтому два почти одинаковых цикла проецируют по-разному (`item.level + h` и `h`)                     | 2                                                                                                                                                      |
+| L3  | низкая   | DRY                                        | Мелкие дубли. Проверка `hasLevelMap` вписана копией в `shafts.js`. Формула alpha центра дыры повторена в `MapLayer._roofAlpha` и `holeOverlay.apply`. Размер клетки `map.step * map.scale.x/y` считается 7 раз в `occlusion.js`/`createLighting.js`. Границы полосы рампы и интерполяция её высоты повторены в `rampHeight`, `rampLight`, `rampWedgePolygon` | 3                                                                                                                                                      |
+| L1  | низкая   | DRY, поддерживаемость, документированность | Высоты объёмов лежат в двух реестрах: сервис `volumes` (выстрел) и `tops` освещения (сетка препятствий фар, вершины объёмов). `MapLayer` кладёт в оба одни и те же данные и дважды считает `cellsOfTiles`. Комментарий в `volumes.js` обещает объединить их при разделении `createLighting.js`, но этап 12 этого не сделал                                   | 4                                                                                                                                                      |
+| L4  | низкая   | тестируемость                              | Короткий путь окклюзии фар (этап 10: «рядом нет стен и рамп — лучи не пускаются») не доказан ни одним тестом, исполнитель сам об этом написал. У модуля `occlusion.js` нет собственного теста                                                                                                                                                                | 5                                                                                                                                                      |
+| L5  | низкая   | читаемость, документированность            | В комментариях `src/` стоят ссылки на этапы планов: `lightMath.js` — «(этап 10)», «(этап 11)», «(этап 12)», «(этап 14.5)», номера из двух разных планов; `createLighting.js` — «(7.3)». Без плана они не читаются, а заголовок раздела «свет верхнего уровня на рампах» уже неточен                                                                          | 6                                                                                                                                                      |
+| L6  | низкая   | поддерживаемость                           | Цель этапа 12 (`createLighting.js` ≤ ~900 строк) не достигнута: файл занимает 1302 строки, исполнитель ждёт решения. `lightMath.js` вырос до 969 строк разнородного кода: проекция, мерцание, профили, сетки, окклюзия, засветка, свет на клиньях                                                                                                            | 7 (необязательный)                                                                                                                                     |
 
 ### Ответы на вопросы исполнителя из отчёта
 
@@ -52,16 +53,16 @@
 
 ## Статус этапов
 
-| # | Этап | Находки | Статус |
-| --- | --- | --- | --- |
-| 1 | `faceTilesPerLevel`: документация и комментарий по значению в коде | M1 | ✅ выполнен |
-| 2 | `LevelLightMap`: общий пул мешей и проекция, абсолютные высоты засветки | L2 | ✅ выполнен |
-| 3 | Мелкие дубли: `hasLevelMap`, alpha центра дыры, размер клетки, геометрия полосы рампы | L3 | ✅ выполнен |
-| 4 | Один реестр высот объёмов: освещение читает `volumes` | L1 | ✅ выполнен |
-| 5 | Тест короткого пути окклюзии (`occlusion.test.js`) | L4 | ✅ выполнен |
-| 6 | Ссылки на этапы в комментариях `src/` и тестов освещения | L5 | ✅ выполнен |
-| 7 | (необязательный) Структура модулей освещения | L6 | ✅ выполнен |
-| 8 | Итоговая проверка | — | ✅ выполнен |
+| #   | Этап                                                                                  | Находки | Статус      |
+| --- | ------------------------------------------------------------------------------------- | ------- | ----------- |
+| 1   | `faceTilesPerLevel`: документация и комментарий по значению в коде                    | M1      | ✅ выполнен |
+| 2   | `LevelLightMap`: общий пул мешей и проекция, абсолютные высоты засветки               | L2      | ✅ выполнен |
+| 3   | Мелкие дубли: `hasLevelMap`, alpha центра дыры, размер клетки, геометрия полосы рампы | L3      | ✅ выполнен |
+| 4   | Один реестр высот объёмов: освещение читает `volumes`                                 | L1      | ✅ выполнен |
+| 5   | Тест короткого пути окклюзии (`occlusion.test.js`)                                    | L4      | ✅ выполнен |
+| 6   | Ссылки на этапы в комментариях `src/` и тестов освещения                              | L5      | ✅ выполнен |
+| 7   | (необязательный) Структура модулей освещения                                          | L6      | ✅ выполнен |
+| 8   | Итоговая проверка                                                                     | —       | ✅ выполнен |
 
 Выполненный этап отметить «✅ выполнен» в заголовке и в таблице. Этап 7 выполняется только по решению
 пользователя. Если пользователь от него отказался, отметить его «— отменён (решение пользователя)». Когда все
@@ -110,6 +111,7 @@ plan/done/`, без коммита).
 ```
 
 Значение `3` пришло в том же коммите 14decad, а отчёт исполнителя и документация пишут `2`:
+
 - `docs/en/configuration.md`, строка таблицы `faceTilesPerLevel`: «(default `2`)», «(≈ 116 world units on
   `downtown` at `2`, ~0.6 of the half-screen)»;
 - `docs/ru/configuration.md`, та же строка: «(по умолчанию `2`)», «(≈ 116 мировых единиц на `downtown` при `2`,
@@ -120,11 +122,11 @@ plan/done/`, без коммита).
 Источник истины — значение в коде (`3`), оно закоммичено. Расчёт для `3`: `3 · 12.8 / 0.22 ≈ 174.5` мировых
 единиц. Из прежней пары «116 ≈ 0.6 полуэкрана» полуэкран ≈ 193 единицы, значит `174.5 / 193 ≈ 0.9`.
 
-1. `src/config/render.js`: в комментарии над `faceTilesPerLevel` заменить «(при 2\n  // на downtown ≈ 116 мировых
-   единиц, ~0.6 полуэкрана)» на «(при 3\n  // на downtown ≈ 175 мировых единиц, ~0.9 полуэкрана)».
+1. `src/config/render.js`: в комментарии над `faceTilesPerLevel` заменить «(при 2\n // на downtown ≈ 116 мировых
+   единиц, ~0.6 полуэкрана)» на «(при 3\n // на downtown ≈ 175 мировых единиц, ~0.9 полуэкрана)».
 2. `docs/en/configuration.md` (`grep -n "faceTilesPerLevel" docs/en/configuration.md`, строка таблицы
-   `| \`faceTilesPerLevel\` |`): «(default `2`)» → «(default `3`)»; «(≈ 116 world units on `downtown` at `2`, ~0.6
-   of the half-screen)» → «(≈ 175 world units on `downtown` at `3`, ~0.9 of the half-screen)».
+   `| \`faceTilesPerLevel\` |`): «(default `2`)» → «(default `3`)»; «(≈ 116 world units on `downtown`at`2`, ~0.6
+of the half-screen)» → «(≈ 175 world units on `downtown`at`3`, ~0.9 of the half-screen)».
 3. `docs/ru/configuration.md`, та же строка: «(по умолчанию `2`)» → «(по умолчанию `3`)»; «(≈ 116 мировых единиц
    на `downtown` при `2`, ~0.6 полуэкрана)» → «(≈ 175 мировых единиц на `downtown` при `3`, ~0.9 полуэкрана)».
 
@@ -143,9 +145,10 @@ plan/done/`, без коммита).
 ### Проблема
 
 `src/client/lighting/LevelLightMap.js`:
+
 - Цикл «пул мешей растёт до числа элементов» повторён в `layoutFans` (функция модуля внизу файла),
   `layoutWashes` и `layoutRampLights`. Каждый раз это `MeshGeometry` + `Mesh` с `Texture.EMPTY`, `blendMode =
-  'add'`, `pool.push`, `container.addChild`. Хвост «`visible = true`, `texture`, `tint`, `alpha`» тоже повторён
+'add'`, `pool.push`, `container.addChild`. Хвост «`visible = true`, `texture`, `tint`, `alpha`» тоже повторён
   трижды.
 - Проекция вершин повторена в `layoutWashes` и `layoutRampLights`, но с разной высотой:
   `k = (item.level + heights[v]) * shear` и `k = heights[v] * shear`. Причина в
@@ -211,9 +214,9 @@ plan/done/`, без коммита).
    ```
 5. **`layoutFans`**: цикл `while (pool.length < items.length) { … }` заменить на
    `growMeshPool(pool, container, items.length, () => fanIndices(2));`. Строки `mesh.shape = null;
-   mesh.topology = null;` уходят: у нового меша эти поля `undefined`, и сравнения `mesh.shape !== shape` и
+mesh.topology = null;` уходят: у нового меша эти поля `undefined`, и сравнения `mesh.shape !== shape` и
    `mesh.topology !== topology` дают `true`, как раньше. Хвост `mesh.visible = true; mesh.texture = …;
-   mesh.tint = …; mesh.alpha = …;` заменить на `showLight(mesh, item);`, а `mesh.position.set(...)` и
+mesh.tint = …; mesh.alpha = …;` заменить на `showLight(mesh, item);`, а `mesh.position.set(...)` и
    `mesh.scale.set(...)` оставить.
 6. **`layoutWashes(items, camera, shear)`**:
    - `while (this.washPool.length < items.length) { … }` →
@@ -228,16 +231,16 @@ plan/done/`, без коммита).
      geometry.positions = positions;
      ```
      Дальше код берёт `normals`, `mids` из `wash`: деструктуризацию `const { base, heights, normals, mids } =
-     wash;` сократить до `const { normals, mids } = wash;`;
+wash;` сократить до `const { normals, mids } = wash;`;
    - хвост `mesh.visible = true; … mesh.alpha = item.alpha;` → `showLight(mesh, item);`;
    - комментарий метода: «`items` — `{ wash, level, texture, color, alpha }`» → «`items` — `{ wash, texture,
-     color, alpha }`», а «`k = (level + высота вершины)·shear`» → «`k = высота вершины·shear` (высоты
+color, alpha }`», а «`k = (level + высота вершины)·shear`» → «`k = высота вершины·shear` (высоты
      абсолютные, `wallWash`)».
 7. **`layoutRampLights(items, camera, shear)`**: то же. `growMeshPool(this.rampLightPool, this.rampLights,
-   items.length, () => new Uint32Array(3));`, проекция через `projectVertices(positions, ramp.base,
-   ramp.heights, camera, shear)`, хвост через `showLight`.
+items.length, () => new Uint32Array(3));`, проекция через `projectVertices(positions, ramp.base,
+ramp.heights, camera, shear)`, хвост через `showLight`.
 8. **`extrusion.js`**, шапка модуля (первый комментарий, где перечислен формат `{ target, k, base, heights,
-   occluder, walls }`): дописать «`heights` — коэффициенты проекции `k` вершин, уже умноженные на `shear` (у
+occluder, walls }`): дописать «`heights` — коэффициенты проекции `k` вершин, уже умноженные на `shear` (у
    мешей освещения `heights` — высоты в уровнях)».
 
 Поведение не меняется. У всех существующих тестов засветки уровень фары 0, поэтому высоты совпадают.
@@ -316,7 +319,7 @@ map.roofLevels.has(lamp.level))`.
    В `apply`: `minAlpha: holeCenterAlpha(hole, cfg),`. Комментарий над этим полем оставить.
 2. `src/client/parts/map/MapLayer.js`: в импорт из `./holeOverlay.js` (`grep -n "holeOverlay" MapLayer.js`)
    добавить `holeCenterAlpha`; в `_roofAlpha` последняя строка — `return holeCenterAlpha(this._hole,
-   this._levelView.cfg);`.
+this._levelView.cfg);`.
 3. Тест `tests/client/parts/map/holeOverlay.test.js`: `holeCenterAlpha({ strength: 0 }, { minAlpha: 0.2 }) === 1`,
    при `strength: 1` → `0.2`, при `0.5` → `0.6` (`toBeCloseTo`).
 
@@ -409,6 +412,7 @@ map.roofLevels.has(lamp.level))`.
 
 `src/client/parts/map/MapLayer.js` (≈ стр. 209–235) дважды считает `cellsOfTiles(this._map, this._tiles)` и
 кладёт одни и те же данные в два сервиса:
+
 - `this._lighting.setVolumeTops(level, cells, volume, this)` → `tops` в `createLighting.js`. Из них собираются
   сетка препятствий фар (`occlusion.sync(tops, ramps)`) и вершины объёмов в картах освещённости
   (`topGroupsOf`);
@@ -472,13 +476,13 @@ map.roofLevels.has(lamp.level))`.
      освещение».
 2. **`src/client/index.js`**, `services(core)`: создать реестр до освещения и передать его:
    ```js
-      const levelView = createLevelView();
-      // высоты объёмов карты: пишут слои Map, читают эффект выстрела и
-      // освещение (src/client/volumes.js)
-      const volumes = createVolumes();
-      // ночь и освещение: камеру и прозрачность над игроком берёт у
-      // levelView, стены — у volumes
-      const lighting = createLighting(undefined, { levelView, volumes });
+   const levelView = createLevelView();
+   // высоты объёмов карты: пишут слои Map, читают эффект выстрела и
+   // освещение (src/client/volumes.js)
+   const volumes = createVolumes();
+   // ночь и освещение: камеру и прозрачность над игроком берёт у
+   // levelView, стены — у volumes
+   const lighting = createLighting(undefined, { levelView, volumes });
    ```
    В возвращаемом объекте `volumes: createVolumes(),` → `volumes,`. В комментарии над `services(core)` строку
    «volumes — высоты объёмов карты по клеткам: выстрел в стену кончается на её видимой грани, а не на подножии»
@@ -561,10 +565,9 @@ map.roofLevels.has(lamp.level))`.
 ### Документация
 
 - `docs/en/architecture.md`, абзац про сервис `volumes` (`grep -n "\`volumes\` service" docs/en/architecture.md`):
-  после «…filled by the `Map` layers that have `data.volume`.» вставить «The lighting service reads the same
-  registry (`levels()`, `version`) for its headlight obstacle grid and the volume tops of its light maps, so light
-  and shots see the same walls.». В абзаце «Headlights and walls» «what `setVolumeTops` hands over» → «what the
-  `volumes` service holds».
+после «…filled by the `Map`layers that have`data.volume`.» вставить «The lighting service reads the same
+registry (`levels()`, `version`) for its headlight obstacle grid and the volume tops of its light maps, so light
+and shots see the same walls.». В абзаце «Headlights and walls» «what `setVolumeTops`hands over» → «what the`volumes` service holds».
 - `docs/ru/architecture.md`: абзац про сервис `volumes` — «Тот же реестр читает сервис освещения (`levels()`,
   `version`): сетка препятствий фар и вершины объёмов в картах освещённости, поэтому свет и выстрел видят одни и
   те же стены.»; «то, что отдаёт `setVolumeTops`» → «то, что держит сервис `volumes`».
@@ -660,13 +663,14 @@ beforeEach(() => {
 прежний `Map(owner → …)`, поэтому тест от порядка этапов 4 и 5 не зависит.
 
 Тесты (`describe('occlusion: короткий путь без препятствий рядом')`):
+
 1. **Стена далеко — лучей нет.** `setup({ walls: column(15) })`. Стена в x 480..512, а AABB прямоугольника
    конуса с запасом — колонки −1..5. `occlusionOf(light(), asset)`: `coneFan` не вызван; результат —
    `{ shape: null, hit: null, wash: null, fan: null }` (проверить через `toMatchObject`).
 2. **Стена рядом — лучи есть.** `setup({ walls: column(3) })` (x 96..128). `coneFan` вызван ровно один раз;
    `result.fan` не `null` (`points`, `closed`, `frame`); `result.hit.x ≈ 96`, `result.hit.y ≈ 48`.
 3. **Рампа рядом без стен — лучи есть.** `setup({ lanes: [{ axis: 0, sign: 1, from: 0, to: 1, col0: 3, col1: 6,
-   row0: 1, row1: 2 }] })`: `coneFan` вызван.
+row0: 1, row1: 2 }] })`: `coneFan` вызван.
 4. **Кеш.** В случае 2 второй вызов `occlusionOf` с тем же объектом света и тем же `asset` → `coneFan` не вызван
    повторно, результат тот же объект (`toBe`). После сдвига `light.x += 1` — вызван снова.
 5. **Кеш короткого пути.** В случае 1 второй вызов отдаёт тот же объект, `coneFan` так и не вызван.
@@ -700,11 +704,11 @@ beforeEach(() => {
    → «ключи текстур, которые принимает сервис (`registerTextures`);».
 3. Те же ссылки в комментариях тестов освещения (номера этапов тех же планов):
    - `tests/client/lighting/lightMath.test.js`: `// Фары и стены (этап 12): клетка 10 × 10…` → `// Фары и стены:
-     клетка 10 × 10…`;
+клетка 10 × 10…`;
    - `tests/client/lighting/createLighting.test.js`: `// Фары и стены (этап 12): конус у стены…` → `// Фары и
-     стены: конус у стены…`; `// засветка грани (этап 14 ревью): часть луча…` → `// засветка грани: часть
-     луча…`; `// Горка — препятствие фарам своего подножия (этап 14): полоса…` → `// Горка — препятствие фарам
-     своего подножия: полоса…`.
+стены: конус у стены…`; `// засветка грани (этап 14 ревью): часть луча…` → `// засветка грани: часть
+луча…`; `// Горка — препятствие фарам своего подножия (этап 14): полоса…` → `// Горка — препятствие фарам
+своего подножия: полоса…`.
 4. Остальные ссылки на этапы в `src/` (`grep -rn "этап" src`: `systemMessages.js`, `config/client.js`,
    `tanks.css`, `tank3d/model.js`, `rampLanes.js`) относятся к другим задачам. Их **не** трогать.
 
@@ -748,6 +752,7 @@ export function createRampLights({ getMap, textures }) {
 ```
 
 В `createLighting.js`:
+
 - `const rampLights = createRampLights({ getMap: () => map, textures });` рядом с `occlusion`/`glints`;
 - в `layoutLights` блок сборки `rampTargets` заменить на `const rampTargets = rampLights.targets();`, а вызовы
   `pushRampLights(…)` — на `rampLights.push(…)`;
@@ -791,6 +796,7 @@ npm run build
 Ядро не менялось: `npm run core:test`, `npm run core:build`, `npm run sim:scenarios` не нужны.
 
 **Вручную** (`npm run dev`, карта `downtown`, ночь), потому что композитинг PixiJS юнит-тесты не ловят:
+
 1. Фары у стен: веер обрывается на стене, её видимая грань засвечена от подножия вверх, при камере за стеной
    засветки нет (этапы 2, 4).
 2. Фары и фонари у рамп: свет на клине в его проекции, мягкий край у бортов, борт насыпи засвечен (этапы 2, 3).

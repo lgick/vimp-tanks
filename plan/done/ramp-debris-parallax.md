@@ -6,15 +6,15 @@
 
 ## Статус этапов
 
-| Этап | Суть | Статус |
-| --- | --- | --- |
-| 1 | `rampSurfaceAt` — высота поверхности рампы в точке | ✅ выполнен |
-| 2 | Сервис `rampRuns.heightAt` и проводка зависимости | ✅ выполнен |
-| 3 | `reproject` в `parallax.js`, вспышка у дула через него | ✅ выполнен |
-| 4 | `ImpactEffect`: высота на каждый осколок и `project` | ✅ выполнен |
-| 5 | `ShotEffectController`: `surfaceK` и `_placeDebris` | ✅ выполнен |
-| 6 | Документация en/ru и CHANGELOG | ✅ выполнен |
-| 7 | Итоговая проверка | ✅ выполнен |
+| Этап | Суть                                                   | Статус      |
+| ---- | ------------------------------------------------------ | ----------- |
+| 1    | `rampSurfaceAt` — высота поверхности рампы в точке     | ✅ выполнен |
+| 2    | Сервис `rampRuns.heightAt` и проводка зависимости      | ✅ выполнен |
+| 3    | `reproject` в `parallax.js`, вспышка у дула через него | ✅ выполнен |
+| 4    | `ImpactEffect`: высота на каждый осколок и `project`   | ✅ выполнен |
+| 5    | `ShotEffectController`: `surfaceK` и `_placeDebris`    | ✅ выполнен |
+| 6    | Документация en/ru и CHANGELOG                         | ✅ выполнен |
+| 7    | Итоговая проверка                                      | ✅ выполнен |
 
 Выполненный этап отмечать тегом «✅ выполнен» у заголовка и в таблице. Когда выполнены все этапы, перенести файл
 в `plan/done/` (`git mv plan/ramp-debris-parallax.md plan/done/`, без коммита).
@@ -67,7 +67,7 @@
 
 - Сервис `rampRuns` (`src/client/index.js`, `hooks.services`): `forLevel(level)` отдаёт прогоны рамп ядра
   (`core.ramp_runs()`, JSON). Формат прогона — `{ axis, sign, from, to, min, max, crossMin, crossMax, block,
-  railMin, railMax }`, координаты МИРОВЫЕ: `axis` 0 = x, 1 = y; `sign` +1 — подъём в сторону роста координаты;
+railMin, railMax }`, координаты МИРОВЫЕ: `axis` 0 = x, 1 = y; `sign` +1 — подъём в сторону роста координаты;
   `min/max` — границы вдоль оси; `crossMin/crossMax` — поперёк. Разбор кешируется по `core.map_generation()`.
 - Формула высоты склона `lerp(from, to, progress)`, где `progress = sign > 0 ? t : 1 − t`, а
   `t = (along − min)/(max − min)`, — та же у движка (`MapLevels::ramp_at`, z танка), у вершин клина
@@ -123,12 +123,7 @@ export function rampSurfaceAt(runs, level, x, y) {
     const along = run.axis === 0 ? x : y;
     const cross = run.axis === 0 ? y : x;
 
-    if (
-      along < run.min ||
-      along > run.max ||
-      cross < run.crossMin ||
-      cross > run.crossMax
-    ) {
+    if (along < run.min || along > run.max || cross < run.crossMin || cross > run.crossMax) {
       continue;
     }
 
@@ -147,6 +142,7 @@ export function rampSurfaceAt(runs, level, x, y) {
 Стык непрерывен.
 
 **Тест** `tests/client/rampSurface.test.js` (новый; `describe`/`it` на русском, как в соседних тестах):
+
 - подъём по `+x` (`{ axis: 0, sign: 1, from: 0, to: 1, min: 100, max: 140, crossMin: 0, crossMax: 20 }`):
   `x = 100 → 0`, `x = 120 → 0.5`, `x = 140 → 1`;
 - подъём по `−y` (`axis: 1, sign: −1`, `min: 0, max: 40`): `y = 40 → 0` (подножие на `max`), `y = 0 → 1`,
@@ -161,6 +157,7 @@ export function rampSurfaceAt(runs, level, x, y) {
 ## Этап 2. Сервис `rampRuns.heightAt` и проводка зависимости ✅ выполнен
 
 **`src/client/index.js`**:
+
 1. Импорт: `import { rampSurfaceAt } from './rampSurface.js';`.
 2. В `services(core)` вынести чтение кеша прогонов из `forLevel` в локальную функцию (рядом с
    `runsCache`/`runsGeneration`):
@@ -197,13 +194,14 @@ export function rampSurfaceAt(runs, level, x, y) {
 склон (`heightAt`)».
 
 **Тесты:**
+
 - `tests/config/client.test.js`, тест «rampRuns объявлен и в componentDependencies, и в serviceNames»: ожидание
   `['Map', 'ShotEffect']`.
 - `tests/client/tanksClientPlugin.test.js`: новый `describe('ClientPlugin: сервис rampRuns')` по образцу
   `describe('ClientPlugin: сервис surfaces')`. Фейковое ядро:
   `{ 'map_generation': vi.fn(() => 1), 'ramp_runs': vi.fn(() => JSON.stringify(runs)) }`, где
   `runs = [{ axis: 0, sign: 1, from: 0, to: 1, min: 64, max: 128, crossMin: 0, crossMax: 64, block: 0,
-  railMin: 76.8, railMax: 128 }]`.
+railMin: 76.8, railMax: 128 }]`.
   - `heightAt(0, 96, 32) → 0.5`, `heightAt(0, 40, 32) → null`, `heightAt(2, 96, 32) → null`;
   - `forLevel(0)` и `heightAt` делят один разбор: после обоих вызовов `ramp_runs` вызван один раз; после
     `core.map_generation.mockReturnValue(2)` и нового `heightAt` — два раза.
@@ -266,10 +264,11 @@ this.flash.scale.set(point.scale);
 тесты `describe('ShotEffectController: вспышка у дула')`, в том числе «кадр без центра камеры».
 
 **Тест** `tests/client/parallax.test.js`: новый `describe('parallax: reproject')`.
+
 - `kHost === k` → исходная точка, `scale 1`.
 - `kHost = 0` → точка совпадает с `offsetPoint(x, y, camera, k)`, `scale = 1 + k`.
 - Композиция (главный тест). `applyParallax(target, camera, kHost)`, ребёнок в `q = reproject(p, camera,
-  kHost, k)`, затем `worldOf(target, q.x, q.y)` (хелпер уже есть в файле) даёт `offsetPoint(p, camera, k)`.
+kHost, k)`, затем `worldOf(target, q.x, q.y)` (хелпер уже есть в файле) даёт `offsetPoint(p, camera, k)`.
   Проверить при `kHost = 0.22`, `k = 0.5 · 0.22` и при `k < kHost`.
 - `camera = null` → исходная точка, `scale 1`.
 
@@ -352,6 +351,7 @@ this.flash.scale.set(point.scale);
 фиксировать напрямую: `const p = effect.particlesData[0]; p.x = −20; p.y = 0; p.vx = 0; p.vy = 0;
 p.isMoving = true; effect._update(0);`. Нулевая скорость — осколок встаёт в этом тике, и `k` пересчитывается
 для мировой точки `(80, 0)`.
+
 - **Проекция склона.** `surfaceK = vi.fn(x => (x >= 50 && x <= 150 ? ((x − 50) / 100) * 0.22 : null))`,
   `effect.project({ x: 0, y: 0 }, 0)`. Ожидания: `effect.x + p.sprite.x ≈ offsetPoint(80, 0, cam, 0.3 · 0.22).x`,
   `p.sprite.scale.x ≈ (p.size / 8) · (1 + 0.3 · 0.22)`.
@@ -429,6 +429,7 @@ p.isMoving = true; effect._update(0);`. Нулевая скорость — ос
 `renderer = { screen: { width: 800, height: 600 } }`. Центр камеры `(camX, 40)` задаётся сдвигом сцены, как в
 `wallShot`: `controller.parent.position.set(400 − camX, 300 − 40)`. Осколок фиксировать как в этапе 4 (через
 `controller.impact.particlesData[i]`, `x` относительно точки удара 120, затем `impact._update(0)`).
+
 - **Осколок на склоне — в проекции склона.** `camX = 0`, осколок в мировой `(96, 40)`, затем
   `controller.onRender()`. `endLevel 0`, поэтому трансформ контроллера единичный, и
   `impact.x + sprite.x ≈ offsetPoint(96, 40, { x: 0, y: 40 }, 0.5 · parallax.shear).x`.
@@ -482,9 +483,7 @@ p.isMoving = true; effect._update(0);`. Нулевая скорость — ос
    > только пока осколок летит. Вне рампы и у искр попадания в стену ничего не меняется.
 
 2. **Абзац о `levelView.camera()` → `null`** (en: `grep -n "carry on: \`offsetPoint\`" docs/en/architecture.md`;
-   ru: `grep -n "работать дальше: так делают" docs/ru/architecture.md`): список «`offsetPoint` and
-   `applyParallax`» → «`offsetPoint`, `applyParallax` and `reproject`» (ru: «`offsetPoint`, `applyParallax` и
-   `reproject`»).
+ru: `grep -n "работать дальше: так делают" docs/ru/architecture.md`): список «`offsetPoint`and`applyParallax`» → «`offsetPoint`, `applyParallax`and`reproject`» (ru: «`offsetPoint`, `applyParallax`и`reproject`»).
 
 3. **`docs/en/configuration.md`** и **`docs/ru/configuration.md`**, раздел `componentDependencies`:
    - в списке `` `rampRuns` → Map; `` → `` `rampRuns` → Map, ShotEffect; ``;
@@ -519,6 +518,7 @@ npm run build
 формула обязана совпасть бит в бит.
 
 **Вручную** (`npm run dev`, карта `downtown`, днём и ночью):
+
 1. С земли выстрелить вверх по рампе моста (тайлы `RAMP_S`, `bridgeRampNorth` в `src/data/maps/downtown.js`) и
    по рампе `RAMP_E` (эстакада, трамплин). Объехать рампу: осколки у верха лежат на склоне и не ползут по нему.
 2. Выстрелить в танк на рампе: осколки на склоне не плывут.

@@ -12,9 +12,9 @@
 
 ## Репозитории и правила
 
-| Обозначение | Путь                                | Что публикуется                              |
-| ----------- | ----------------------------------- | -------------------------------------------- |
-| **T** (игра)  | `/Users/dmitry/Sites/my/vimp-tanks` | npm `@vimp-games/tanks`, ИИ в `core/src/bots/` |
+| Обозначение    | Путь                                | Что публикуется                                |
+| -------------- | ----------------------------------- | ---------------------------------------------- |
+| **T** (игра)   | `/Users/dmitry/Sites/my/vimp-tanks` | npm `@vimp-games/tanks`, ИИ в `core/src/bots/` |
 | **E** (движок) | `/Users/dmitry/Sites/my/vimp`       | крейт `vimp-engine-core`, npm `vimp-engine`    |
 
 - **Коммиты не делать.** Всё остаётся в рабочем дереве; коммитит и выпускает пользователь.
@@ -35,20 +35,20 @@
 
 ## Итоги ревью
 
-| #   | Важность | Где | Суть | Критерий |
-| --- | -------- | --- | ---- | -------- |
-| 1   | 🔴 блокер релиза | `tests/scenarios/round.json` | `predictionDrift` падает: новый бот находит игрока и попадает в него, импульс hitscan клиент не предсказывает | работоспособность |
-| 2   | 🔴 релиз | `.cargo/config.toml`, `Cargo.lock` | локальный `[patch]` движка не снят; `Cargo.lock` закоммичен в `3a7b695` без `source`/`checksum` крейта | работоспособность, безопасность поставки |
-| 3   | 🟠 | `CHANGELOG.md` | «Requires `vimp-engine-core` 0.23.0 … `vimp-engine` 0.35.5» — на деле нужны 0.23.1 и 0.35.6 | документированность |
-| 4   | 🟠 логика | `brain.rs::pick_retreat_point` | при исчерпанном бюджете поиска сравниваются несравнимые числа: стоимость маршрута и эвристика (бывает отрицательной) | работоспособность |
-| 5   | 🟠 логика | `brain.rs::wants_bomb` | при `friendlyFire` бот кладёт бомбу, не глядя на союзника рядом — взрыв ранит своего | работоспособность |
-| 6   | 🟡 | `tanks.rs` `ai_clock` | часы досок команд (`f32`) не сбрасываются при смене карты: на долгоживущем хосте теряют точность и останавливаются, роли и фокус замерзают | масштабируемость |
-| 7   | 🟡 (по желанию) | `tanks.rs::on_ai_tick` | общий бюджет поисков маршрута всегда первыми берут одни и те же боты | масштабируемость |
-| 8   | 🟡 (по желанию) | `perception.rs::update_damage` | урон от падения и своей бомбы приписывается ближайшему врагу | работоспособность |
-| 9   | 🟢 | `tanks.rs`, `navigator.rs`, `geom.rs`, `team.rs` | мёртвый код под `#[allow(dead_code)]`, устаревшие комментарии | поддерживаемость, читаемость |
-| 10  | 🟢 | `config.rs` ↔ `src/config/game.js` | таблица пресетов продублирована, синхронность ничем не проверяется | DRY, тестируемость |
-| 11  | 🟢 | `brain.rs`, `navigator.rs` | повторяющиеся фрагменты: `max_speed`, разворот корпуса на месте, сборка `PathQuery` | DRY |
-| 12  | 🟢 процесс | отчёты этапов 4–7 | вывод «`round.json` падает и на HEAD» неверен: сравнение делалось без пересборки `dist/` и `core/pkg-*` | стандартизация процесса |
+| #   | Важность         | Где                                              | Суть                                                                                                                                       | Критерий                                 |
+| --- | ---------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| 1   | 🔴 блокер релиза | `tests/scenarios/round.json`                     | `predictionDrift` падает: новый бот находит игрока и попадает в него, импульс hitscan клиент не предсказывает                              | работоспособность                        |
+| 2   | 🔴 релиз         | `.cargo/config.toml`, `Cargo.lock`               | локальный `[patch]` движка не снят; `Cargo.lock` закоммичен в `3a7b695` без `source`/`checksum` крейта                                     | работоспособность, безопасность поставки |
+| 3   | 🟠               | `CHANGELOG.md`                                   | «Requires `vimp-engine-core` 0.23.0 … `vimp-engine` 0.35.5» — на деле нужны 0.23.1 и 0.35.6                                                | документированность                      |
+| 4   | 🟠 логика        | `brain.rs::pick_retreat_point`                   | при исчерпанном бюджете поиска сравниваются несравнимые числа: стоимость маршрута и эвристика (бывает отрицательной)                       | работоспособность                        |
+| 5   | 🟠 логика        | `brain.rs::wants_bomb`                           | при `friendlyFire` бот кладёт бомбу, не глядя на союзника рядом — взрыв ранит своего                                                       | работоспособность                        |
+| 6   | 🟡               | `tanks.rs` `ai_clock`                            | часы досок команд (`f32`) не сбрасываются при смене карты: на долгоживущем хосте теряют точность и останавливаются, роли и фокус замерзают | масштабируемость                         |
+| 7   | 🟡 (по желанию)  | `tanks.rs::on_ai_tick`                           | общий бюджет поисков маршрута всегда первыми берут одни и те же боты                                                                       | масштабируемость                         |
+| 8   | 🟡 (по желанию)  | `perception.rs::update_damage`                   | урон от падения и своей бомбы приписывается ближайшему врагу                                                                               | работоспособность                        |
+| 9   | 🟢               | `tanks.rs`, `navigator.rs`, `geom.rs`, `team.rs` | мёртвый код под `#[allow(dead_code)]`, устаревшие комментарии                                                                              | поддерживаемость, читаемость             |
+| 10  | 🟢               | `config.rs` ↔ `src/config/game.js`               | таблица пресетов продублирована, синхронность ничем не проверяется                                                                         | DRY, тестируемость                       |
+| 11  | 🟢               | `brain.rs`, `navigator.rs`                       | повторяющиеся фрагменты: `max_speed`, разворот корпуса на месте, сборка `PathQuery`                                                        | DRY                                      |
+| 12  | 🟢 процесс       | отчёты этапов 4–7                                | вывод «`round.json` падает и на HEAD» неверен: сравнение делалось без пересборки `dist/` и `core/pkg-*`                                    | стандартизация процесса                  |
 
 Что проверено в ходе ревью и в правке не нуждается: A\* на двоичной куче и эвристика (стоимость ребра ≥ его
 длины, эвристика состоятельна), `find_route`/`PathQuery`/`nearest_node_on`/`has_clear_corridor_on` в движке,
@@ -94,16 +94,21 @@
 `round_respawn.json` сохраняет покрытие дрейфа через конец раунда и респаун — без ботов, двумя игроками.
 
 1. `tests/scenarios/round.json`: заменить строку
+
    ```json
    "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06], "angles": [2] },
    ```
+
    на
+
    ```json
    "divergence": null,
    ```
+
    Больше в файле ничего не менять.
 
 2. Создать `tests/scenarios/round_respawn.json`:
+
    ```json
    {
      "version": 1,
@@ -133,6 +138,7 @@
      "dumpTicks": [600, 1800]
    }
    ```
+
    Это прежний `round.json` без команды `/bot` и со вторым игроком в `team2`, чтобы раунд завершился
    победой. `w1` в `unusedSnapshotKeys`, потому что без бота из пушки никто не стреляет. Черновик сценария
    прогнан при ревью: `predictionDrift` ✅ (296 + 446 реконсиляций, max |Δ| = 0), `roundLifecycle` ✅.
@@ -142,13 +148,16 @@
 3. Документация — таблица сценариев и абзац про `divergence: null`.
 
    `docs/en/getting-started.md` (таблица, строка `round.json`, ≈стр. 267):
+
    ```md
    | `round.json` | bots, friendly fire, death → round end → respawn (invariant 10); the drift detector is off (see below) |
    | `round_respawn.json` | two players, friendly fire: a self-bomb death → round end → respawn, with the `movement.json` drift thresholds — the prediction survives a round restart |
    ```
+
    В том же файле, в абзаце «Most of them run with the same drift thresholds…», сразу после предложения
    «`downtown_props.json` (a barrel blast), `bots_downtown.json` and `bots_terraces.json` set `null` for the same
    reason.» добавить:
+
    ```md
    So does `round.json`: the bot hunts the player by radar and hits him, and a hitscan hit pushes the tank
    with an authoritative-only impulse. The round restart keeps its drift coverage in `round_respawn.json`,
@@ -156,12 +165,15 @@
    ```
 
    `docs/ru/getting-started.md` (≈стр. 268 и абзац «Большинство идёт с теми же порогами дрейфа…»):
+
    ```md
    | `round.json` | боты, friendly fire, смерть → конец раунда → респаун (инвариант 10); детектор дрейфа выключен (см. ниже) |
    | `round_respawn.json` | двое игроков, friendly fire: смерть от своей бомбы → конец раунда → респаун, с порогами дрейфа `movement.json` — предсказание переживает перезапуск раунда |
    ```
+
    После предложения «`downtown_props.json` (взрыв бочки), `bots_downtown.json` и `bots_terraces.json` ставят
    `null` по той же причине.» добавить:
+
    ```md
    Так же и `round.json`: бот находит игрока по радару и попадает в него, а попадание hitscan толкает танк
    импульсом, который есть только у хоста. Покрытие дрейфа при перезапуске раунда осталось у `round_respawn.json` —
@@ -173,11 +185,13 @@
 ### 1.3. Снять локальный patch движка и привести `Cargo.lock` в порядок
 
 **Проблема.** В корне T лежит `.cargo/config.toml`:
+
 ```toml
 # ВРЕМЕННО (plan/bots-ai): локальный движок до релиза vimp-engine-core. Снять в этапе 7.
 [patch.crates-io]
 vimp-engine-core = { path = "../vimp/packages/engine/core" }
 ```
+
 Пока он есть:
 
 - `npm run core:build` релиза собирает WASM из исходников чекаута движка, а не из опубликованного крейта.
@@ -207,16 +221,20 @@ vimp-engine-core = { path = "../vimp/packages/engine/core" }
 ### 1.4. `CHANGELOG.md`
 
 В `## [Unreleased]` → `### Changed` заменить пункт
+
 ```md
 - Requires `vimp-engine-core` 0.23.0 (hull-aware bot routes); rebuilt against
   `vimp-engine` 0.35.5.
 ```
+
 на
+
 ```md
 - Requires `vimp-engine-core` 0.23.1 (hull-aware bot routes; route penalty
   zones are honoured on a direct line of sight); rebuilt against `vimp-engine`
   0.35.6.
 ```
+
 Скрипт релиза в этот раздел ничего не добавит: его запись «Rebuilt against …» подставляется только в пустой
 `[Unreleased]` (`scripts/release/steps.js`, `publishGame` → `dateChangelog({ fallback })`). Поэтому строку
 нужно поправить руками.
@@ -231,10 +249,7 @@ vimp-engine-core = { path = "../vimp/packages/engine/core" }
 // движка, а не от опубликованной версии (plan bots-ai-review, 1.3)
 const cargoConfig = path.join(dir, '.cargo', 'config.toml');
 
-if (
-  (await exists(cargoConfig)) &&
-  /^\s*\[patch\./m.test(await readFile(cargoConfig, 'utf8'))
-) {
+if ((await exists(cargoConfig)) && /^\s*\[patch\./m.test(await readFile(cargoConfig, 'utf8'))) {
   throw new Error(
     `${game.name}: .cargo/config.toml содержит [patch] — снимите локальный patch перед релизом`,
   );
@@ -452,6 +467,7 @@ unreachable or exposed retreat point when the per-tick route budget runs out.»
 `bomb_spares_an_ally_with_friendly_fire`. `fixture.friendly_fire = true`, бот `1` (команда 1) в (112, 112),
 враг `2` (команда 2) в 30 ед. справа, `brain.profile.aggression = 0.9`. Проверить, что урон `w2` в фикстуре
 ≤ 89, иначе условие здоровья не пройдёт: `fixture.weapons["w2"].damage`. Случаи:
+
 - без союзника — `drops_bomb == true` (контроль, что «драчун» бомбу кладёт);
 - союзник `3` (команда 1, уровень 0) в (112 − 25, 112) — `drops_bomb == false`.
 
@@ -554,17 +570,17 @@ self.bomb_pos.is_some() && self.clock < self.evade_until + 0.2)` и переда
 
 Этапы 3–6 закончены, а заглушки «пока не используется» остались:
 
-| Место | Что сделать |
-| ----- | ----------- |
-| `tanks.rs` ≈стр. 150–152: комментарий «поля и методы для ИИ этапов 3–6 (plan/bots-ai) пока не все используются» + `#[allow(dead_code)]` над `struct BotView` | удалить оба |
-| `tanks.rs` ≈стр. 182: `#[allow(dead_code)]` над `impl BotView<'_>` | удалить |
-| `BotView::tank_airborne` | нигде не вызывается — удалить |
-| поле `BotView::rules` | не читается — удалить поле и его инициализацию в `tanks.rs::on_ai_tick` и `bots/test_support.rs` (`BotView { … }`, ≈стр. 235) |
-| `navigator.rs`: `NavStatus::Arrived` с `#[allow(dead_code)]` | удалить вариант |
-| `navigator.rs`: поле `Navigator::failures` | только пишется (стр. 123, 338, 410) — удалить. Старый дамп с ключом `failures` читается: serde пропускает неизвестные поля, `deny_unknown_fields` нет |
-| `navigator.rs`: `Waypoint::level` с `#[allow(dead_code)]` | удалить поле и его заполнение в `follow` |
-| `geom.rs`: `#[allow(dead_code)]` у `dist` и `angle_of` | обе используются — удалить атрибуты |
-| `team.rs`: `TeamBoard::strength_near` | в production-коде не вызывается; если нет и в тестах (`grep -rn strength_near core/`), удалить |
+| Место                                                                                                                                                        | Что сделать                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tanks.rs` ≈стр. 150–152: комментарий «поля и методы для ИИ этапов 3–6 (plan/bots-ai) пока не все используются» + `#[allow(dead_code)]` над `struct BotView` | удалить оба                                                                                                                                           |
+| `tanks.rs` ≈стр. 182: `#[allow(dead_code)]` над `impl BotView<'_>`                                                                                           | удалить                                                                                                                                               |
+| `BotView::tank_airborne`                                                                                                                                     | нигде не вызывается — удалить                                                                                                                         |
+| поле `BotView::rules`                                                                                                                                        | не читается — удалить поле и его инициализацию в `tanks.rs::on_ai_tick` и `bots/test_support.rs` (`BotView { … }`, ≈стр. 235)                         |
+| `navigator.rs`: `NavStatus::Arrived` с `#[allow(dead_code)]`                                                                                                 | удалить вариант                                                                                                                                       |
+| `navigator.rs`: поле `Navigator::failures`                                                                                                                   | только пишется (стр. 123, 338, 410) — удалить. Старый дамп с ключом `failures` читается: serde пропускает неизвестные поля, `deny_unknown_fields` нет |
+| `navigator.rs`: `Waypoint::level` с `#[allow(dead_code)]`                                                                                                    | удалить поле и его заполнение в `follow`                                                                                                              |
+| `geom.rs`: `#[allow(dead_code)]` у `dist` и `angle_of`                                                                                                       | обе используются — удалить атрибуты                                                                                                                   |
+| `team.rs`: `TeamBoard::strength_near`                                                                                                                        | в production-коде не вызывается; если нет и в тестах (`grep -rn strength_near core/`), удалить                                                        |
 
 После удаления атрибутов `cargo build -p vimp-tanks-core` и `cargo test --workspace -q` не должны выдавать
 `dead_code`. Если предупреждение всплыло на чём-то ещё, это тоже мёртвый код: удалить или спросить.

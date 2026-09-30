@@ -32,13 +32,18 @@ export function splitMix32(value) {
 // зерно вывески из её клетки и уровня: соседние вывески мерцают не синхронно
 export function cellSeed(col, row, level = 0) {
   return splitMix32(
-    (Math.imul(col, 73856093) ^ Math.imul(row, 19349663) ^ Math.imul(level, 83492791)) >>> 0,
+    (Math.imul(col, 73856093) ^
+      Math.imul(row, 19349663) ^
+      Math.imul(level, 83492791)) >>>
+      0,
   );
 }
 
 // доля [0, 1) из пары (зерно, номер окна, соль)
 function unit(seed, window, salt) {
-  return splitMix32((seed ^ Math.imul(window + salt, 0x27d4eb2d)) >>> 0) / 4294967296;
+  return (
+    splitMix32((seed ^ Math.imul(window + salt, 0x27d4eb2d)) >>> 0) / 4294967296
+  );
 }
 
 const clamp01 = value => Math.min(1, Math.max(0, value));
@@ -55,7 +60,9 @@ export function inDropout(t, seed, dropouts) {
     return false;
   }
 
-  const start = window * DROPOUT_WINDOW + unit(seed, window, 1) * (DROPOUT_WINDOW - DROPOUT_DURATION);
+  const start =
+    window * DROPOUT_WINDOW +
+    unit(seed, window, 1) * (DROPOUT_WINDOW - DROPOUT_DURATION);
 
   return t >= start && t < start + DROPOUT_DURATION;
 }
@@ -65,10 +72,14 @@ export function inDropout(t, seed, dropouts) {
 export function brightness(t, seed, cfg) {
   const pulse = clamp01(cfg?.pulse || 0);
   const phase = (seed % 1000) / 1000;
-  const base = 1 - pulse * (0.5 + 0.5 * Math.sin(2 * Math.PI * (PULSE_HZ * t + phase)));
+  const base =
+    1 - pulse * (0.5 + 0.5 * Math.sin(2 * Math.PI * (PULSE_HZ * t + phase)));
 
   if (inDropout(t, seed, cfg?.dropouts || 0)) {
-    return { core: clamp01(base * DROPOUT_CORE), glow: clamp01(base * DROPOUT_GLOW) };
+    return {
+      core: clamp01(base * DROPOUT_CORE),
+      glow: clamp01(base * DROPOUT_GLOW),
+    };
   }
 
   return { core: clamp01(base), glow: clamp01(base) };

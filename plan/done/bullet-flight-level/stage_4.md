@@ -82,16 +82,19 @@ pub fn first_tall_wall(
 ```
 
 Юнит-тесты в `mod tests`. Новый хелпер:
+
 ```rust
 /// Карта 10×3, клетка 10: стена земли (тайл 1) в колонке 8 (x 80..90) во
 /// всех строках; у уровня 1 — стена без плиты (тайл 4) в колонке 6 строки 0.
 fn walled_map() -> MapLevels { … }
 ```
+
 Строится как `ramp_map()`: `MapLevels::build(&grid0, &[1], &levels, &[], TILE, None)`, у уровня 1 —
 `MapLevelConfig { map: grid1, floor: vec![], walls: vec![4], layers: IndexMap::new(), volumes: IndexMap::new() }`.
 `MapGame` для тестов — `MapGame::from_value(&serde_json::json!({ "wallHeights": { … } })).unwrap()`. Воздушный
 сегмент — `RaySegment { t0: 0.0, t1: 100.0, level: 0, fly: 1 }`, пуля с моста —
 `BulletLine { base: 1.1, rate: 0.0 }`.
+
 - `tank_reaches_by_its_top`: `tank_reaches(0.0, 3.0, 32.0, 0.075)` — true; `(0.0, 3.0, 32.0, 1.075)` — false;
   `(0.99, 3.0, 32.0, 1.075)` — true;
 - `low_wall_is_flown_over`: из `(5, 15)` на восток, `{ "0": { "1": 1.0 } }` → `None`;
@@ -270,6 +273,7 @@ fn walled_map() -> MapLevels { … }
 `if !covers_level(&segments, direction.length(), target_level) { return; }`, затем проверка насыпи.
 
 Проверку `covers_level` заменить:
+
 ```rust
 let target_distance = direction.length();
 let Some(target_tank) = game.tanks.get(&target) else {
@@ -295,6 +299,7 @@ if !covered
     return;
 }
 ```
+
 - `target` — идентификатор цели в функции (`let target = self.target.unwrap();`), `target_level` больше не нужен —
   убрать, если нигде не используется.
 - Если заём `game.tanks` спорит с `tank` (свой танк), скопировать нужные `f32` заранее.
@@ -324,7 +329,7 @@ if !covered
    спаунится первым. Цель 2 — `(208, 304, 0.0)`, едет вперёд (`core.apply_input(2, 1, "down", "forward")`), шаги
    по одному, пока `tank_z(&core, 2) >= 0.6` (предел 200, образец —
    `ground_shot_stops_on_the_slope_before_a_tank_high_on_the_ramp` ≈ 1092). Затем `core.take_events();
-   fire(&mut core, 1, 1);` → `health_of(…, 2) == None` (верх 0.69 < пули 1.075).
+fire(&mut core, 1, 1);` → `health_of(…, 2) == None` (верх 0.69 < пули 1.075).
 6. Остальные тесты (`ground_shot_stops_on_the_slope_before_a_tank_high_on_the_ramp`,
    `ground_shot_hits_a_tank_at_the_foot_of_the_ramp`, `bridge_shot_hits_bridge_tank_not_ground_tank`,
    `hitscan_shot_kills_after_three_hits`, выстрелы по пропам) — без правок, зелёные.
@@ -342,6 +347,7 @@ if !covered
 `ground_tracer_hits_the_tank_in_transit` (≈ 1563).
 
 Новый хелпер рядом с `bridge_tank_row`:
+
 ```rust
 // строка чужого танка на земле (size 2, z 0, уровень 0)
 fn ground_tank_row(x: f32, y: f32) -> Vec<FieldValue> {
@@ -362,17 +368,17 @@ fn ground_tank_row(x: f32, y: f32) -> Vec<FieldValue> {
 4. `ground_tracer_hits_the_tank_in_transit` — прежнее (`HIT_TARGET`: верх 0.625 выше пули 0.1).
 5. Новые:
    - `tracer_from_the_slab_passes_over_a_ground_tank`: `layered_shot_map()`, чужой танк `ground_tank_row(80.0,
-     5.0)`, выстрел `render_at_level(35.0, 5.0, 1)` на восток → `tracer[6] == HIT_NONE`, `tracer[9] == 1`;
+5.0)`, выстрел `render_at_level(35.0, 5.0, 1)` на восток → `tracer[6] == HIT_NONE`, `tracer[9] == 1`;
    - `tracer_from_the_slab_hits_a_tank_at_the_top_of_the_ramp`: `ramp_shot_map()`, чужой танк
      `bridge_tank_row(56.0, 15.0)` с `row[TANK_FIELD_Z] = FieldValue::F32(0.98)` (верх 1.105 ≥ пули 1.1), выстрел
      `RenderState { angle: PI, ..render_at_level(75.0, 15.0, 1) }` → `tracer[6] == HIT_TARGET`, `tracer[9] == 1`;
    - `tracer_from_the_slab_passes_over_a_tank_lower_on_the_ramp`: то же с z = 0.9 (верх 1.025) →
      `tracer[6] == HIT_NONE`;
    - `tracer_from_the_ramp_side_passes_over_a_ground_tank`: `ramp_shot_map()`, чужой танк `ground_tank_row(45.0,
-     26.0)`, выстрел `RenderState { angle: FRAC_PI_2, z: 0.5, slope_vec: [1.0 / 3.0, 0.0], ..render_at(45.0,
-     15.0) }` (вбок, поперёк склона: пуля 0.6, верх танка 0.125) → `tracer[6] == HIT_NONE`;
+26.0)`, выстрел `RenderState { angle: FRAC_PI_2, z: 0.5, slope_vec: [1.0 / 3.0, 0.0], ..render_at(45.0,
+15.0) }` (вбок, поперёк склона: пуля 0.6, верх танка 0.125) → `tracer[6] == HIT_NONE`;
    - `tracer_from_the_slope_climbs_over_the_slab`: `ramp_shot_map()`, `RenderState { z: 1.0 / 3.0, slope_vec:
-     [1.0 / 3.0, 0.0], ..render_at(40.0, 15.0) }` на восток (ствол вдоль склона) → `tracer[6] == HIT_NONE`,
+[1.0 / 3.0, 0.0], ..render_at(40.0, 15.0) }` на восток (ствол вдоль склона) → `tracer[6] == HIT_NONE`,
      `tracer[9] == 1`. Прежде такой выстрел упирался в верхний торец (`HIT_SLOPE` на x = 60);
    - `air_tracer_meets_a_wall_without_height`: карта-хелпер `walled_shot_map()` — как `layered_shot_map()`, но в
      гриде земли колонка 8 — тайл 1 (`physicsStatic: [1]` уже есть), поля `game` нет → стена бесконечно высокая.

@@ -182,16 +182,8 @@
       "name": "fire"
     }
   ],
-  "unusedSnapshotKeys": [
-    "c2"
-  ],
+  "unusedSnapshotKeys": ["c2"],
   "divergence": null,
   "ticks": 1400,
-  "dumpTicks": [
-    700,
-    940,
-    1159,
-    1300,
-    1400
-  ]
+  "dumpTicks": [700, 940, 1159, 1300, 1400]
 }

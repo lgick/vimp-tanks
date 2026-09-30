@@ -69,8 +69,7 @@ describe.skipIf(!coreAvailable)('HostGame (core-driven)', () => {
     tick(host, 60);
 
     const after = core.position_of(gameId);
-    const moved =
-      (after[0] - before[0]) ** 2 + (after[1] - before[1]) ** 2;
+    const moved = (after[0] - before[0]) ** 2 + (after[1] - before[1]) ** 2;
 
     expect(moved).toBeGreaterThan(1);
   });
@@ -252,7 +251,7 @@ describe.skipIf(!coreAvailable)('HostGame (core-driven)', () => {
 // переносится JS-мета: участники, боты, счёт, карта с остатком, seq кадров.
 // Д4.1: гонка «кик → в полёте ещё сообщения клиента до disconnect» — методы
 // с participants.get(gameId) не должны кидать TypeError на чужом gameId
-describe.skipIf(!coreAvailable)('HostGame: null-guard\'ы (Д4.1)', () => {
+describe.skipIf(!coreAvailable)("HostGame: null-guard'ы (Д4.1)", () => {
   let host;
 
   beforeEach(async () => {
@@ -273,7 +272,7 @@ describe.skipIf(!coreAvailable)('HostGame: null-guard\'ы (Д4.1)', () => {
   });
 });
 
-describe.skipIf(!coreAvailable)('HostGame: эстафета Worker\'ов (5.2)', () => {
+describe.skipIf(!coreAvailable)("HostGame: эстафета Worker'ов (5.2)", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.resetModules();
@@ -504,7 +503,10 @@ describe.skipIf(!coreAvailable)('HostGame: спавн на мосту (overpass)
   it('точка [x, y, angle, 1] даёт level 1 в строке m1', async () => {
     const overpass = (await import('../../src/data/maps/overpass.js')).default;
     const { host, socket } = await createHost({
-      game: { currentMap: 'overpass', maps: { overpass: bridgeOnly(overpass) } },
+      game: {
+        currentMap: 'overpass',
+        maps: { overpass: bridgeOnly(overpass) },
+      },
     });
 
     const gameId = await connectPlayer(host, { socketId: 's1' });

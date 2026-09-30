@@ -85,25 +85,25 @@
 того же меша:
 
 ```js
-    // боковая грань корпуса: K копий той же текстуры, каждая ниже
-    // предыдущей по высоте и потому смещённая к центру камеры слабее.
-    // Тот же приём, которым карта строит объёмы зданий
-    // (`src/client/parts/map/extrusion.js::buildVolumeSlices`): экструзия
-    // одной картинки вместо второй текстуры «вид сбоку». Срезы уходят
-    // ПОД сам меш, поэтому добавляются в контейнер первыми
-    this._slices = [];
+// боковая грань корпуса: K копий той же текстуры, каждая ниже
+// предыдущей по высоте и потому смещённая к центру камеры слабее.
+// Тот же приём, которым карта строит объёмы зданий
+// (`src/client/parts/map/extrusion.js::buildVolumeSlices`): экструзия
+// одной картинки вместо второй текстуры «вид сбоку». Срезы уходят
+// ПОД сам меш, поэтому добавляются в контейнер первыми
+this._slices = [];
 ```
 
 В конструкторе, до `this.addChild(this.body, this.gun, this.wreck)`:
 
 ```js
-    for (let i = 0; i < tiltConfig.bodySlices; i += 1) {
-      const slice = mesh();
+for (let i = 0; i < tiltConfig.bodySlices; i += 1) {
+  const slice = mesh();
 
-      slice.tint = tiltConfig.sideTint;
-      this._slices.push(slice);
-      this.addChild(slice);
-    }
+  slice.tint = tiltConfig.sideTint;
+  this._slices.push(slice);
+  this.addChild(slice);
+}
 ```
 
 Срезы строятся только для КОРПУСА и ОСТОВА — у пушки своя высота и
@@ -132,44 +132,35 @@
 В `_applyTilt` добавить (после расчёта `size`/`squashY`):
 
 ```js
-    const count = this._slices.length;
+const count = this._slices.length;
 
-    for (let i = 0; i < count; i += 1) {
-      // высота среза: нижний — на всю толщину корпуса ниже верхней грани
-      const depth = (tiltConfig.body * (count - i)) / count;
+for (let i = 0; i < count; i += 1) {
+  // высота среза: нижний — на всю толщину корпуса ниже верхней грани
+  const depth = (tiltConfig.body * (count - i)) / count;
 
-      // те же углы, что у корпуса, но масштаб — свой: срез лежит НИЖЕ, а
-      // в этой проекции всё, что ниже, мельче (`1 + z·shear`)
-      const sliceScale = 1 + (this._z - depth) * parallaxConfig.shear;
+  // те же углы, что у корпуса, но масштаб — свой: срез лежит НИЖЕ, а
+  // в этой проекции всё, что ниже, мельче (`1 + z·shear`)
+  const sliceScale = 1 + (this._z - depth) * parallaxConfig.shear;
 
-      this._setCorners(
-        this._slices[i],
-        this._bodyAnchor,
-        0,
-        this._scaleFactor * sliceScale,
-        squashY,
-      );
-    }
+  this._setCorners(this._slices[i], this._bodyAnchor, 0, this._scaleFactor * sliceScale, squashY);
+}
 ```
 
 А экранное смещение срезов считается там же, где смещается сам танк, — в
 `_updateView`, потому что ему нужен центр камеры:
 
 ```js
-    // срезы боковой грани: каждый лежит ниже корпуса и потому смещён к
-    // центру камеры слабее. Смещение локальное — сам контейнер уже стоит
-    // в проекции высоты корпуса
-    const count = this._slices.length;
+// срезы боковой грани: каждый лежит ниже корпуса и потому смещён к
+// центру камеры слабее. Смещение локальное — сам контейнер уже стоит
+// в проекции высоты корпуса
+const count = this._slices.length;
 
-    for (let i = 0; i < count; i += 1) {
-      const depth = (tiltConfig.body * (count - i)) / count;
-      const dk = -depth * parallaxConfig.shear;
+for (let i = 0; i < count; i += 1) {
+  const depth = (tiltConfig.body * (count - i)) / count;
+  const dk = -depth * parallaxConfig.shear;
 
-      this._slices[i].position.set(
-        (this._worldX - camera.x) * dk,
-        (this._worldY - camera.y) * dk,
-      );
-    }
+  this._slices[i].position.set((this._worldX - camera.x) * dk, (this._worldY - camera.y) * dk);
+}
 ```
 
 `camera` может быть `null` (парт ещё не на сцене) — в этом случае
@@ -242,23 +233,23 @@ export function tiltShade({ angle, pitch, roll, lightDir, shading }) {
 `this.tint`:
 
 ```js
-    // светотень наклона поверх тинта уровня: множитель, а не замена —
-    // затемнение нижних ярусов обязано остаться
-    if (tiltConfig.enabled && tiltConfig.shading) {
-      const shade = clamp(
-        tiltShade({
-          angle: this.rotation,
-          pitch: this._pitch,
-          roll: this._roll,
-          lightDir: tiltConfig.lightDir,
-          shading: tiltConfig.shading,
-        }),
-        0.5,
-        1.5,
-      );
+// светотень наклона поверх тинта уровня: множитель, а не замена —
+// затемнение нижних ярусов обязано остаться
+if (tiltConfig.enabled && tiltConfig.shading) {
+  const shade = clamp(
+    tiltShade({
+      angle: this.rotation,
+      pitch: this._pitch,
+      roll: this._roll,
+      lightDir: tiltConfig.lightDir,
+      shading: tiltConfig.shading,
+    }),
+    0.5,
+    1.5,
+  );
 
-      this.tint = scaleTint(this.tint, shade);
-    }
+  this.tint = scaleTint(this.tint, shade);
+}
 ```
 
 `scaleTint` — маленький помощник рядом с `tiltShade` в `tilt.js`

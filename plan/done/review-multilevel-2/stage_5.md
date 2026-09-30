@@ -77,15 +77,18 @@ const raw = ds > MIN_STEP ? (z - prevZ) / ds : 0;
 ### Тесты
 
 `tests/client/grade.test.js` (расширить или создать):
+
 - уклон подъёма на геометрии `rampSteep` близок к 0.5;
 - знак: подъём и спуск дают противоположные значения;
 - при падении трекер уклона не выдаёт всплеска.
 
 `tests/client/parts/Tank.test.js`:
+
 - сжатие корпуса на подъёме заметно (> 5 %) и имеет верный знак;
 - при `z`, падающем без смены уровня, сжатие не растёт.
 
 `tests/client/parts/Smoke.test.js`:
+
 - пыль появляется на уклоне `rampSteep` и не появляется на ровной земле.
 
 ---
@@ -113,8 +116,9 @@ const raw = ds > MIN_STEP ? (z - prevZ) / ds : 0;
    Заодно уходит утечка состояния между картами: `layered` не сбрасывался
    никогда (сервис живёт на ядро, `src/client/index.js:64`), поэтому после
    слоёной карты на плоской бейдж показывал вечный «0».
+
 5. Тесты: `tests/config/client.test.js:43` (`expect(names).toContain(
-   'levelBadgeTexture')`), блок бейджа в `tests/client/parts/Tank.test.js`
+'levelBadgeTexture')`), блок бейджа в `tests/client/parts/Tank.test.js`
    (`:221` и рядом).
 
 **Что остаётся** и специально не трогается — прочие признаки уровня:
@@ -129,14 +133,14 @@ const raw = ds > MIN_STEP ? (z - prevZ) / ds : 0;
 `src/config/render.js` заведён ровно для того, чтобы числа 2.5D жили в
 одном месте (см. его шапку), но в партах осталось:
 
-| Константа | Где | Куда |
-| --- | --- | --- |
-| `Z_SCALE_GAIN` | `Tank.js:24` | `render.js` → `parallax.zScaleGain` |
-| `SHADOW_SHEAR`, `SHADOW_SCALE_GAIN`, `SHADOW_BASE_ALPHA`, `SHADOW_ALPHA_FALLOFF`, `SHADOW_SIZE_FACTOR` | `Tank.js:29-37` | `render.js` → `shadow` |
-| `GRADE_SQUASH_GAIN` | `Tank.js:40` | `render.js` → `grade.squashGain` |
-| `DUST_CONFIG` | `Smoke.js:80-95` | `render.js` → `dust` |
-| `SMOOTHING`, `MIN_STEP` | `grade.js:10,14` | `render.js` → `grade` |
-| `LEVEL_Z_STRIDE` | `levelZ.js:4` | `render.js` → `parallax.levelZStride` |
+| Константа                                                                                              | Где              | Куда                                  |
+| ------------------------------------------------------------------------------------------------------ | ---------------- | ------------------------------------- |
+| `Z_SCALE_GAIN`                                                                                         | `Tank.js:24`     | `render.js` → `parallax.zScaleGain`   |
+| `SHADOW_SHEAR`, `SHADOW_SCALE_GAIN`, `SHADOW_BASE_ALPHA`, `SHADOW_ALPHA_FALLOFF`, `SHADOW_SIZE_FACTOR` | `Tank.js:29-37`  | `render.js` → `shadow`                |
+| `GRADE_SQUASH_GAIN`                                                                                    | `Tank.js:40`     | `render.js` → `grade.squashGain`      |
+| `DUST_CONFIG`                                                                                          | `Smoke.js:80-95` | `render.js` → `dust`                  |
+| `SMOOTHING`, `MIN_STEP`                                                                                | `grade.js:10,14` | `render.js` → `grade`                 |
+| `LEVEL_Z_STRIDE`                                                                                       | `levelZ.js:4`    | `render.js` → `parallax.levelZStride` |
 
 Базовые `zIndex` партов (`TANK_BASE_Z`, `SMOKE_BASE_Z`, `BOMB_BASE_Z`, …)
 **оставить в партах**: это не настройка, а порядок отрисовки, привязанный к
@@ -168,7 +172,6 @@ const raw = ds > MIN_STEP ? (z - prevZ) / ds : 0;
 - [x] Ни одного упоминания `levelBadgeTexture` и `markLayered` в
       `src`, `tests`, `docs` (`grep -r`; в тестах остался только
       `expect(names).not.toContain('levelBadgeTexture')`).
-
 
 ---
 
@@ -213,7 +216,7 @@ const raw = ds > MIN_STEP ? (z - prevZ) / ds : 0;
    движковый долг этапа 3, он закрывается в `stage_7.md` § 7.0 и к правкам
    этапа 5 (чистый рендер) отношения не имеет.
 10. **Приёмка `npm run dev` глазами не проводилась** — проверка визуала
-   остаётся за пользователем; всё остальное из критериев приёмки зелёное.
+    остаётся за пользователем; всё остальное из критериев приёмки зелёное.
 
 ---
 
@@ -231,4 +234,3 @@ const raw = ds > MIN_STEP ? (z - prevZ) / ds : 0;
 и блоки `grade`/`dust` конфига удалены целиком — клиентский уклон затухал
 только в кадрах с движением и у стоящего танка замирал навсегда. Высота
 теперь читается тенью-силуэтом, параллаксом и масштабом.
-

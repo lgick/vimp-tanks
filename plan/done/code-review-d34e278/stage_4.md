@@ -7,6 +7,7 @@
 ## Проблема (проверено)
 
 В `src/config/render.js` три объекта повторяют одни и те же значения:
+
 - `tracer` (~стр. 386): `color: 0xff9a4a`, `coreColor: 0xfff4e0`;
 - `muzzleFlash` (~стр. 435): те же `color`/`coreColor` с комментарием «те же цвета, что у трассера: горящий
   фосфор и раскалённое ядро», плюс `layers` (три слоя), `shrink: 0.3`, `ring.color: 0xffe2b0`;

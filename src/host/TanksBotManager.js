@@ -133,9 +133,8 @@ export default class TanksBotManager {
   }
 
   getCountForTeam(teamName) {
-    return this._participants
-      .getScripted()
-      .filter(bot => bot.team === teamName).length;
+    return this._participants.getScripted().filter(bot => bot.team === teamName)
+      .length;
   }
 
   getCountsPerTeam() {

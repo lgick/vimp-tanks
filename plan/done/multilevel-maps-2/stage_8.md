@@ -44,14 +44,14 @@ cd /Users/dmitry/Sites/my/vimp-tanks \
 
 ## 8.3 Документация (en + ru синхронно — правило `CLAUDE.md`)
 
-| Изменение | Страница (T) |
-| --- | --- |
-| N уровней, многоуровневые рампы, `volumes`, новые поля `levels[n]`, новые `coreParams.levels` (`climbGravity`, `climbMaxSpeedFactor`, `maxFallDamage`, уточнённый смысл `fallTime`/`fallDamage`) | `configuration.md` |
-| падение ящиков, приземление на ближайшую нижнюю плиту, гейт входа на рампу, физика подъёма/спуска, стрельба и взрывы на N уровнях | `gameplay.md` |
-| новая форма дампа `LevelState`/`Transit`, `FallModel`, `step_body_level`, сегменты луча, схема `c1`/`c2` | `core.md` |
-| `MapVolume`, два режима see-through, тень, бейдж уровня, порядок отрисовки, вычисление камеры из трансформа сцены | `architecture.md` |
-| требования к автору многоуровневой карты, `volumes`, снятое ограничение «ящик у разрыва перил», чек-лист новой карты | `extending.md` |
-| новые версии движка, порядок сборки после смены крейта | `getting-started.md` |
+| Изменение                                                                                                                                                                                        | Страница (T)         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- |
+| N уровней, многоуровневые рампы, `volumes`, новые поля `levels[n]`, новые `coreParams.levels` (`climbGravity`, `climbMaxSpeedFactor`, `maxFallDamage`, уточнённый смысл `fallTime`/`fallDamage`) | `configuration.md`   |
+| падение ящиков, приземление на ближайшую нижнюю плиту, гейт входа на рампу, физика подъёма/спуска, стрельба и взрывы на N уровнях                                                                | `gameplay.md`        |
+| новая форма дампа `LevelState`/`Transit`, `FallModel`, `step_body_level`, сегменты луча, схема `c1`/`c2`                                                                                         | `core.md`            |
+| `MapVolume`, два режима see-through, тень, бейдж уровня, порядок отрисовки, вычисление камеры из трансформа сцены                                                                                | `architecture.md`    |
+| требования к автору многоуровневой карты, `volumes`, снятое ограничение «ящик у разрыва перил», чек-лист новой карты                                                                             | `extending.md`       |
+| новые версии движка, порядок сборки после смены крейта                                                                                                                                           | `getting-started.md` |
 
 В движке (E): `plugin-api.md` (capability `map.levelsN`, новая строка
 динамики), `configuration.md` (`volumes`, `mapFallTime`), `core.md`
@@ -60,20 +60,20 @@ cd /Users/dmitry/Sites/my/vimp-tanks \
 
 ## 8.4 Журналы
 
-* **T** `CHANGELOG.md`, `## [Unreleased]`:
-  * `### ⚠️ Breaking` — требует `vimp-engine-core 0.12.0` /
+- **T** `CHANGELOG.md`, `## [Unreleased]`:
+  - `### ⚠️ Breaking` — требует `vimp-engine-core 0.12.0` /
     `vimp-engine 0.31.0`; сменилась схема `c1`/`c2` (поля `z`/`level` в
     голове, `optionalFrom: 5`); сменилась форма дампа `Transit`;
-    + `### Migration` — что делать со старыми дампами и с картой, если
-    она объявляла свою схему;
-  * `### Added` — уровней до восьми, многоуровневые рампы, объёмные
+    - `### Migration` — что делать со старыми дампами и с картой, если
+      она объявляла свою схему;
+  - `### Added` — уровней до восьми, многоуровневые рампы, объёмные
     элементы, знаки уровня, тень, карта `terraces`;
-  * `### Changed` — падение зависит от высоты, урон пропорционален,
+  - `### Changed` — падение зависит от высоты, урон пропорционален,
     физика подъёма;
-  * `### Fixed` — ящики падают (1), ящики гаснут (2), вход на рампу
+  - `### Fixed` — ящики падают (1), ящики гаснут (2), вход на рампу
     только с торца (5).
-  * Тесты, рефакторинг и `docs/` в журнал **не** идут.
-* **E** — записи этапов 1—2 (закрываются датой на этапе 2.5).
+  - Тесты, рефакторинг и `docs/` в журнал **не** идут.
+- **E** — записи этапов 1—2 (закрываются датой на этапе 2.5).
 
 ## 8.5 Релиз танков (вручную)
 
@@ -114,8 +114,8 @@ mkdir -p plan/done && git mv plan/multilevel-maps-2 plan/done/multilevel-maps-2
 2. **8.2** — в браузере (`VITE_MAP=terraces npm run dev`, править
    `standalone.js` не пришлось: карта берётся из переменной окружения)
    вскрылся дефект этапа 6: фильтр «дыры» не линковался — `PixiJS Error:
-   Could not initialize shader`, `Precisions of uniform 'uInputSize'
-   differ between VERTEX and FRAGMENT shaders`. Причина: Pixi объявляет
+Could not initialize shader`, `Precisions of uniform 'uInputSize'
+differ between VERTEX and FRAGMENT shaders`. Причина: Pixi объявляет
    `uInputSize`/`uOutputFrame` в `defaultFilter.vert` с точностью `highp`,
    а во фрагментном шейдере точность `float` по умолчанию `mediump`.
    Ошибка молчаливая: карта продолжает рисоваться, просто без дыры.

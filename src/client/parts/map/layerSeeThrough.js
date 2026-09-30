@@ -111,7 +111,12 @@ function updateOccluderSeeThrough(view, cfg, rate, camera) {
 function playerPoint(view, camera) {
   const player = view.levelView;
 
-  return offsetPoint(player.x, player.y, camera, player.z * parallaxConfig.shear);
+  return offsetPoint(
+    player.x,
+    player.y,
+    camera,
+    player.z * parallaxConfig.shear,
+  );
 }
 
 // Накрывает ли крыша нарисованную точку игрока (с запасом `roofMargin`):

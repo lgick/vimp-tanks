@@ -13,6 +13,7 @@
 ## Как устроено сейчас (проверено по коду)
 
 `src/client/parts/effects/shot/ShotEffectController.js`:
+
 - `_wallEnd(dx, dy, dist)` находит задетую грань: `this._wall = this._wallAt(nx, ny)` → `{ face, volume }` или
   `null`.
   - Если грань смотрит на камеру (`faceIsFront`), конец трассера переносится на высоту ствола
@@ -30,6 +31,7 @@
 - В `destroy` есть блок уборки `_impactLayer`.
 
 `src/client/parts/effects/shot/ImpactEffect.js`:
+
 - Конструктор — `(x, y, dirX, dirY, onComplete, assets, { surfaceK = null } = {})`. У осколка есть
   `pData: { x, y, vx, vy, size, age, lifetime, isMoving, k, sprite, … }`, `pData.k = this._kAt(pData)`.
 - `_update(deltaMs)` двигает осколки, пересчитывает `pData.k`, пока осколок летит, и ставит
@@ -74,10 +76,7 @@
    - высота осколка:
      ```js
      const surface = pData.k ?? kHost;
-     const k =
-       this._startK === null
-         ? surface
-         : surface + (this._startK - surface) * pData.lift;
+     const k = this._startK === null ? surface : surface + (this._startK - surface) * pData.lift;
      ```
      и дальше `reproject(this.x + pData.x, this.y + pData.y, camera, kHost, k)`. Позиция и масштаб — как было.
 7. Комментарии в шапке класса и над `project` дополнить: «осколки попадания в стену рождаются на высоте `startK`
@@ -141,7 +140,7 @@
 ### 1.3. Тесты
 
 1. `tests/client/parts/effects/ImpactEffect.test.js`, новый блок `describe('ImpactEffect: падение с высоты
-   рождения')`. Хелперы файла — `assets`, `camera`, `SHEAR`, `makeEffect`, `offsetPoint`, `slopeK`. `makeEffect`
+рождения')`. Хелперы файла — `assets`, `camera`, `SHEAR`, `makeEffect`, `offsetPoint`, `slopeK`. `makeEffect`
    ставит осколки в мировую `(80, 0)` и вызывает `_update(0)`.
    - `makeEffect({ startK: 0.5 * SHEAR })`, `project(camera, 0)`: осколок в `offsetPoint(80, 0, camera, 0.5 * SHEAR)`,
      масштаб `(size / CONTENT_SIZE) · (1 + 0.5·SHEAR)`, `effect.isFalling() === true`.

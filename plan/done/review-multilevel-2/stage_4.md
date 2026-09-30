@@ -14,7 +14,7 @@
 каждую вершину:
 
 ```js
-positions[i]     = base[i]     + (base[i]     - camX) * k;
+positions[i] = base[i] + (base[i] - camX) * k;
 positions[i + 1] = base[i + 1] + (base[i + 1] - camY) * k;
 ```
 
@@ -115,7 +115,7 @@ this._parallaxK = this._level * cfg.shear;
 - **Центр дыры** (`Map._updateHole`, `:246-253`) считается из позиции игрока
   в мировых координатах. Игрок теперь тоже смещён своим `z`, поэтому центр
   брать из смещённой точки: `offsetPoint(view.x, view.y, camera, view.z *
-  shear)`, затем в экранные пиксели прежним умножением на трансформ сцены.
+shear)`, затем в экранные пиксели прежним умножением на трансформ сцены.
   Иначе дыра поедет относительно танка тем сильнее, чем дальше игрок от
   центра экрана.
 - **Тела на слое** (ящики): `Map._updateDynamicSeeThrough` дополнительно
@@ -150,7 +150,7 @@ src/client/parts/MapVolume.js` — ноль совпадений). Плоски�
    и к плоскому слою, и к его объёму, одним проходом фильтра.
 3. `MapVolume` удаляется: из `src/client/parts/index.js`, из `gameSets`,
    `entitiesOnCanvas`, `componentDependencies` (`src/config/client.js:13-14,
-   23, 157, 160, 174`), из тестов.
+23, 157, 160, 174`), из тестов.
 
 Что это чинит разом: Д4 (объём гаснет), Д16 (двойное запекание, K лишних
 мешей, течь геометрии, пустые контейнеры `MapVolume` на каждое динамическое
@@ -192,7 +192,7 @@ shadow.y = camera ? this.y + (this.y - camera.y) * shear : this.y;
 Правка:
 
 - корпус (`this.position`) смещается на `offsetPoint(x, y, camera, z *
-  shear)`;
+shear)`;
 - тень рисуется в **немодифицированной** мировой точке `(this.x, this.y)`;
 - масштаб и alpha тени остаются как есть (растёт и бледнеет с высотой);
 - `shadow.zIndex = levelZ(TANK_BASE_Z - 1, Math.floor(this._z))` сохранить —
@@ -271,10 +271,12 @@ shadow.y = camera ? this.y + (this.y - camera.y) * shear : this.y;
 ## Тесты
 
 `tests/client/parallax.test.js` (новый):
+
 - тождество точечной формулы и трансформа контейнера;
 - `k = 0` не меняет ни позицию, ни масштаб.
 
 `tests/client/parts/Map.test.js`:
+
 - слой уровня 1 получает трансформ параллакса, слой уровня 0 — нет;
 - центр «дыры» считается от смещённой позиции игрока;
 - при `volume > 0` создаётся ровно `slices` дополнительных спрайтов из **той
@@ -282,6 +284,7 @@ shadow.y = camera ? this.y + (this.y - camera.y) * shear : this.y;
 - alpha и tint применяются ко всему контейнеру, включая срезы объёма.
 
 `tests/client/parts/Tank.test.js`:
+
 - корпус смещён, тень — нет (проверка инверсии Д6);
 - в `levelView` уходит несмещённая мировая точка.
 

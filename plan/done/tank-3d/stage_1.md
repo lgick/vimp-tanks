@@ -18,8 +18,8 @@
      (боковые скаты = фаски рисунка, спереди — пологий лобовой лист);
    - башня — восьмигранник рисунка на `w = 6.5`, верх — он же × 0.6 на `w = 10` (скаты = кольцо фаски);
    - ствол `u ∈ [2.5, 21]`, `v ∈ ±2.5`, `w ∈ 8 ± 1.5` и дульный тормоз `u ∈ [21, 24.5]`, `v ∈ ±3.6`.
-   Высоты — в конфиге (`tankModel` в `src/config/render.js`: `trackHeight`, `hullBase`, `hullTop`, `turretBase`,
-   `turretTop`, `barrelHeight`, `barrelRadius`), форма в плане — из рисунка.
+     Высоты — в конфиге (`tankModel` в `src/config/render.js`: `trackHeight`, `hullBase`, `hullTop`, `turretBase`,
+     `turretTop`, `barrelHeight`, `barrelRadius`), форма в плане — из рисунка.
 2. `transform.js` — `poseModel({ model, size, gunRotation, pitch, roll, recoil, shake })`: башня и ствол
    поворачиваются на `gunRotation` вокруг оси башни, откат отдачи — вдоль ствола; затем вся модель — тангаж
    (вокруг `v`) и крен (вокруг `u`) вокруг центра опоры; встряска — сдвиг. Нормали граней поворачиваются вместе.

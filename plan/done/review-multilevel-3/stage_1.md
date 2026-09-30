@@ -275,4 +275,3 @@ cargo test --workspace && cargo clippy --workspace && npx eslint . && npx vitest
 - **1.2.** Проверка вырожденного бокса в `obb_manifold` стоит сразу после
   `separating_axis`, как и предписано; в `obb_vs_obb_within` она вынесена
   в общий `tolerance`, который дальше передаётся в `contact_point`.
-

@@ -85,7 +85,10 @@ const lampHeadsOf = (stage, level) =>
 // Имитация частей карты: каждая статическая часть берёт ключ и, если она
 // уровня >= 1, вносит вклад в маску
 const makeParts = (service, key, cfg, floors = {}) => {
-  const parts = [{ level: 0 }, ...Object.keys(floors).map(level => ({ level: Number(level) }))];
+  const parts = [
+    { level: 0 },
+    ...Object.keys(floors).map(level => ({ level: Number(level) })),
+  ];
 
   for (const part of parts) {
     service.acquireMap(key, cfg, STEP, 1);
@@ -204,7 +207,13 @@ describe('lighting: источник в нескольких уровнях', ()
 
     service.registerTextures(textures());
     makeParts(service, 'k', nightLighting([]), { 1: [[0, 0]] });
-    service.addLight({ kind: 'radial', radius: 40, z: 0.6, level: 1, levels: [0, 1] });
+    service.addLight({
+      kind: 'radial',
+      radius: 40,
+      z: 0.6,
+      level: 1,
+      levels: [0, 1],
+    });
     frame(service);
 
     expect(lastItems(layout, 0)).toHaveLength(1);
@@ -217,7 +226,13 @@ describe('lighting: источник в нескольких уровнях', ()
 
     service.registerTextures(textures());
     makeParts(service, 'k', nightLighting([]));
-    service.addLight({ kind: 'radial', radius: 40, z: 0.6, level: 1, levels: [0, 1] });
+    service.addLight({
+      kind: 'radial',
+      radius: 40,
+      z: 0.6,
+      level: 1,
+      levels: [0, 1],
+    });
     frame(service);
 
     expect(lastItems(layout, 0)).toHaveLength(1);
@@ -322,7 +337,10 @@ describe('lighting: clear()', () => {
 
   it('acquire ×3 → release ×3 → acquire того же ключа создаёт новые оверлеи', () => {
     const { service, stage } = setup();
-    const parts = makeParts(service, 'a', nightLighting(), { 1: [[0, 0]], 2: [[0, 0]] });
+    const parts = makeParts(service, 'a', nightLighting(), {
+      1: [[0, 0]],
+      2: [[0, 0]],
+    });
 
     frame(service);
 
@@ -378,12 +396,18 @@ describe('lighting: registerTextures', () => {
       const layout = spyLayout();
 
       if (order === 'texturesFirst') {
-        service.registerTextures({ radial: textures().radial, head: textures().head });
+        service.registerTextures({
+          radial: textures().radial,
+          head: textures().head,
+        });
         makeParts(service, 'a', nightLighting());
       } else {
         makeParts(service, 'a', nightLighting());
         frame(service);
-        service.registerTextures({ radial: textures().radial, head: textures().head });
+        service.registerTextures({
+          radial: textures().radial,
+          head: textures().head,
+        });
       }
 
       frame(service);
@@ -398,7 +422,10 @@ describe('lighting: registerTextures', () => {
   it('голова фонаря — светильник в асфальте: над дорогой, под танком', () => {
     const { service, stage } = setup();
 
-    service.registerTextures({ radial: textures().radial, head: textures().head });
+    service.registerTextures({
+      radial: textures().radial,
+      head: textures().head,
+    });
     makeParts(service, 'a', nightLighting());
     frame(service);
 
@@ -433,7 +460,14 @@ describe('lighting: registerTextures', () => {
 
     service.registerTextures(textures());
     makeParts(service, 'a', nightLighting([]));
-    service.flash({ level: 0, x: 0, y: 0, radius: 40, intensity: 1, duration: 40 });
+    service.flash({
+      level: 0,
+      x: 0,
+      y: 0,
+      radius: 40,
+      intensity: 1,
+      duration: 40,
+    });
     frame(service);
 
     expect(lastItems(layout, 0)).toHaveLength(1);
@@ -464,7 +498,11 @@ describe('lighting: releaseMap и ключи', () => {
 
     service.registerTextures(textures());
 
-    const oldParts = makeParts(service, 'a', nightLighting([{ cell: [1, 1], radius: 50 }]));
+    const oldParts = makeParts(
+      service,
+      'a',
+      nightLighting([{ cell: [1, 1], radius: 50 }]),
+    );
 
     // новые части раньше старых
     makeParts(
@@ -491,7 +529,11 @@ describe('lighting: смена карты в порядке движка', () =>
 
     service.registerTextures(textures());
 
-    const oldParts = makeParts(service, 'a', nightLighting([{ cell: [1, 1], radius: 50 }]));
+    const oldParts = makeParts(
+      service,
+      'a',
+      nightLighting([{ cell: [1, 1], radius: 50 }]),
+    );
 
     frame(service);
     releaseParts(service, 'a', oldParts);
@@ -517,7 +559,12 @@ describe('lighting: смена карты в порядке движка', () =>
     const setMask = vi.spyOn(LevelLightMap.prototype, 'setMask');
     const cfg = nightLighting([]);
 
-    const oldParts = makeParts(service, 'k', cfg, { 1: [[0, 0], [1, 0]] });
+    const oldParts = makeParts(service, 'k', cfg, {
+      1: [
+        [0, 0],
+        [1, 0],
+      ],
+    });
 
     frame(service);
     releaseParts(service, 'k', oldParts);
@@ -546,7 +593,9 @@ describe('lighting: смена карты в порядке движка', () =>
     frame(service);
 
     expect(lastItems(layout, 0)).toHaveLength(1);
-    expect(lastItems(layout, 0)[0].texture).toBe(service.texture('cone').texture);
+    expect(lastItems(layout, 0)[0].texture).toBe(
+      service.texture('cone').texture,
+    );
     expect(glare.parent).toBe(emissiveOf(stage, 0));
     expect(cone.radius).toBe(90);
   });
@@ -636,12 +685,21 @@ describe('lighting: крыши и вершины объёмов', () => {
     const roof = {};
 
     makeParts(service, 'k', nightLighting([]));
-    service.setLevelMask(1, [[0, 0], [1, 0]], slab);
+    service.setLevelMask(
+      1,
+      [
+        [0, 0],
+        [1, 0],
+      ],
+      slab,
+    );
     service.setLevelMask(1, [[1, 0]], roof, { roof: true });
     frame(service);
 
     expect(overlayOf(stage, 1)).toBeDefined();
-    expect(stage.children.find(child => child.label === 'lighting-roof-1')).toBeDefined();
+    expect(
+      stage.children.find(child => child.label === 'lighting-roof-1'),
+    ).toBeDefined();
 
     const runsOf = isRoof => {
       const index = setMask.mock.contexts.findIndex(map => map.roof === isRoof);
@@ -694,7 +752,14 @@ describe('lighting: крыши и вершины объёмов', () => {
     service.registerTextures(textures());
     makeParts(service, 'k', nightLighting([]));
     service.setLevelMask(1, [[1, 0]], {}, { roof: true });
-    service.addLight({ kind: 'radial', level: 1, x: 48, y: 16, radius: 40, intensity: 1 });
+    service.addLight({
+      kind: 'radial',
+      level: 1,
+      x: 48,
+      y: 16,
+      radius: 40,
+      intensity: 1,
+    });
     frame(service);
 
     expect(overlayOf(stage, 1)).toBeUndefined();
@@ -721,7 +786,9 @@ describe('lighting: крыши и вершины объёмов', () => {
     service.setLevelMask(1, [[1, 0]], {}, { roof: true });
     frame(service);
 
-    const roofMap = levelMaps(layoutShafts).find(map => map.roof && map.level === 1);
+    const roofMap = levelMaps(layoutShafts).find(
+      map => map.roof && map.level === 1,
+    );
 
     expect(roofMap.shafts.children.some(entry => entry.visible)).toBe(true);
   });
@@ -733,7 +800,16 @@ describe('lighting: крыши и вершины объёмов', () => {
 
     makeParts(service, 'k', nightLighting([]));
     service.acquireMap('k', nightLighting([]), STEP, 1);
-    volumes.setLayerVolume(0, [[0, 0], [1, 0]], 1, walls, { step: STEP, scale: 1 });
+    volumes.setLayerVolume(
+      0,
+      [
+        [0, 0],
+        [1, 0],
+      ],
+      1,
+      walls,
+      { step: STEP, scale: 1 },
+    );
     frame(service);
 
     const ground = levelMaps(layout).find(map => map.level === 0);
@@ -1043,7 +1119,10 @@ describe('lighting: лучи фонарей и тени', () => {
 
     vi.restoreAllMocks();
     spy = spyShafts();
-    env = withShaft({ ...lighting, shafts: { ...lighting.shafts, enabled: false } });
+    env = withShaft({
+      ...lighting,
+      shafts: { ...lighting.shafts, enabled: false },
+    });
     frame(env.service);
     expect(lastShafts(spy, 0)).toEqual([]);
 
@@ -1104,7 +1183,10 @@ describe('lighting: лучи фонарей и тени', () => {
     const { service } = withShaft();
 
     for (let i = 0; i < 6; i += 1) {
-      service.setCaster({}, { x: 58 + i * 5, y: 48, z: 0, level: 0, radius: 1 });
+      service.setCaster(
+        {},
+        { x: 58 + i * 5, y: 48, z: 0, level: 0, radius: 1 },
+      );
     }
 
     frame(service);
@@ -1171,7 +1253,16 @@ describe('lighting: лучи фонарей и тени', () => {
 
 describe('lighting: свет верхнего уровня на рампах', () => {
   // рампа 0 → 1: клетки 2..5 × 1..2, в гриде уровня 0
-  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 5, row0: 1, row1: 2 };
+  const lane = {
+    axis: 0,
+    sign: 1,
+    from: 0,
+    to: 1,
+    col0: 2,
+    col1: 5,
+    row0: 1,
+    row1: 2,
+  };
   const spyRamps = () => vi.spyOn(LevelLightMap.prototype, 'layoutRampLights');
   const lastRamps = (spy, level) => {
     for (let i = spy.mock.calls.length - 1; i >= 0; i -= 1) {
@@ -1274,8 +1365,12 @@ describe('lighting: свет верхнего уровня на рампах', (
     expect(ground.lights.mask).toBe(ground.lightsMask);
     expect(ground.lights._maskOptions.inverse).toBe(true);
     // тот же контур, что у маски клиньев
-    expect(ground.lightsMask.bounds.minX).toBeCloseTo(ground.rampMask.bounds.minX);
-    expect(ground.lightsMask.bounds.maxY).toBeCloseTo(ground.rampMask.bounds.maxY);
+    expect(ground.lightsMask.bounds.minX).toBeCloseTo(
+      ground.rampMask.bounds.minX,
+    );
+    expect(ground.lightsMask.bounds.maxY).toBeCloseTo(
+      ground.rampMask.bounds.maxY,
+    );
 
     service.releaseMap('a', parts[0]);
     frame(service);
@@ -1351,7 +1446,13 @@ describe('lighting: фары и стены', () => {
 
     service.registerTextures(textures());
     service.acquireMap('w', nightLighting([]), STEP, 1, size);
-    context.volumes.setLayerVolume(0, walls, volume, {}, { step: STEP, scale: 1 });
+    context.volumes.setLayerVolume(
+      0,
+      walls,
+      volume,
+      {},
+      { step: STEP, scale: 1 },
+    );
 
     const cone = service.addLight({
       kind: 'cone',
@@ -1424,7 +1525,10 @@ describe('lighting: фары и стены', () => {
 
     const items = lastItems(layout, 0);
 
-    for (const [light, name] of [[cone, 'cone'], [lamp, 'radial']]) {
+    for (const [light, name] of [
+      [cone, 'cone'],
+      [lamp, 'radial'],
+    ]) {
       const asset = service.texture(name);
       const item = items.find(entry => entry.texture === asset.texture);
       const expected = frameOf(light, asset);
@@ -1496,7 +1600,9 @@ describe('lighting: фары и стены', () => {
 
     const items = lastItems(layout, 0);
 
-    expect(items.filter(entry => entry.texture === radialTexture(service))).toHaveLength(0);
+    expect(
+      items.filter(entry => entry.texture === radialTexture(service)),
+    ).toHaveLength(0);
     expect(items.find(entry => entry.fan)).toBeDefined();
   });
 
@@ -1530,7 +1636,13 @@ describe('lighting: фары и стены', () => {
     const { service } = context;
 
     service.registerTextures(textures());
-    service.acquireMap('w', nightLighting([{ cell: [5, 5], radius: 50 }]), STEP, 1, size);
+    service.acquireMap(
+      'w',
+      nightLighting([{ cell: [5, 5], radius: 50 }]),
+      STEP,
+      1,
+      size,
+    );
     context.volumes.setLayerVolume(0, column, 1, {}, { step: STEP, scale: 1 });
     service.addLight({
       kind: 'cone',
@@ -1553,7 +1665,9 @@ describe('lighting: фары и стены', () => {
     expect(items).toHaveLength(2);
     // конус и фонарь (центр клетки [5, 5] — 176, 176); пятна отсвета нет
     expect(items.some(entry => entry.x === 176 && entry.y === 176)).toBe(true);
-    expect(items.some(entry => entry.texture === coneTexture(service))).toBe(true);
+    expect(items.some(entry => entry.texture === coneTexture(service))).toBe(
+      true,
+    );
   });
 
   it('конус за экраном не считает веер', () => {
@@ -1569,8 +1683,7 @@ describe('lighting: фары и стены', () => {
   it('стоящая фара не пересчитывает веер; сдвинутая — пересчитывает', () => {
     const { service, cone } = scene();
     const layout = spyLayout();
-    const fanOf = () =>
-      lastItems(layout, 0).find(entry => entry.fan).fan.shape;
+    const fanOf = () => lastItems(layout, 0).find(entry => entry.fan).fan.shape;
 
     frame(service);
 
@@ -1609,7 +1722,9 @@ describe('lighting: фары и стены', () => {
     );
     // спрайта конуса нет — только отсвет
     expect(
-      ground.pool.filter(sprite => sprite.visible && sprite.texture === coneTexture(service)),
+      ground.pool.filter(
+        sprite => sprite.visible && sprite.texture === coneTexture(service),
+      ),
     ).toHaveLength(0);
   });
 
@@ -1764,7 +1879,16 @@ describe('lighting: фары и стены', () => {
 // y 96..192, подъём на восток с уровня 0 на 1; клетка 32
 describe('lighting: фары и рампы', () => {
   const size = { cols: 20, rows: 20 };
-  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 8, row0: 3, row1: 6 };
+  const lane = {
+    axis: 0,
+    sign: 1,
+    from: 0,
+    to: 1,
+    col0: 2,
+    col1: 8,
+    row0: 3,
+    row1: 6,
+  };
 
   const scene = light => {
     const context = setup();
@@ -1788,7 +1912,9 @@ describe('lighting: фары и рампы', () => {
     return { ...context, cone };
   };
   const coneItem = (layout, service) =>
-    lastItems(layout, 0).find(entry => entry.texture === service.texture('cone').texture);
+    lastItems(layout, 0).find(
+      entry => entry.texture === service.texture('cone').texture,
+    );
   const ends = points => {
     const list = [];
 
@@ -1832,7 +1958,9 @@ describe('lighting: фары и рампы', () => {
     frame(service);
 
     const item = coneItem(layout, service);
-    const reach = Math.max(...ends(item.fan?.shape.points ?? [0, 0, 999, 0]).map(([x]) => x));
+    const reach = Math.max(
+      ...ends(item.fan?.shape.points ?? [0, 0, 999, 0]).map(([x]) => x),
+    );
 
     // ось уходит далеко за подножие x = 64
     expect(reach).toBeGreaterThan(120);
@@ -1880,7 +2008,12 @@ describe('lighting: фары и рампы', () => {
   });
 
   it('фара на самой рампе светит как раньше', () => {
-    const { service } = scene({ x: 150, y: 144, z: 0.4, rotation: Math.PI / 2 });
+    const { service } = scene({
+      x: 150,
+      y: 144,
+      z: 0.4,
+      rotation: Math.PI / 2,
+    });
     const layout = spyLayout();
 
     frame(service);
@@ -1888,7 +2021,8 @@ describe('lighting: фары и рампы', () => {
     expect(coneItem(layout, service).fan).toBeNull();
   });
 
-  const rampMapOf = spy => spy.mock.contexts.findLast(context => context.level === 0);
+  const rampMapOf = spy =>
+    spy.mock.contexts.findLast(context => context.level === 0);
 
   it('от подножия вверх: свет на склоне — меш в проекции клина', () => {
     const rampSpy = vi.spyOn(LevelLightMap.prototype, 'layoutRampLights');
@@ -1908,7 +2042,10 @@ describe('lighting: фары и рампы', () => {
     const positions = mesh.geometry.positions;
     // камера в начале координат: сдвиг вершины — `p · высота · shear`
     const shiftOf = v =>
-      Math.hypot(positions[v * 2] - base[v * 2], positions[v * 2 + 1] - base[v * 2 + 1]);
+      Math.hypot(
+        positions[v * 2] - base[v * 2],
+        positions[v * 2 + 1] - base[v * 2 + 1],
+      );
     let low = 0;
     let high = 0;
 
@@ -1999,7 +2136,12 @@ describe('LevelLightMap: свет на клиньях', () => {
     uvs: new Float32Array(6),
     indices: new Uint32Array([0, 1, 2]),
   });
-  const item = data => ({ ramp: data, texture: Texture.WHITE, color: 0xffffff, alpha: 1 });
+  const item = data => ({
+    ramp: data,
+    texture: Texture.WHITE,
+    color: 0xffffff,
+    alpha: 1,
+  });
   const camera = { x: 0, y: 0 };
 
   it('layoutRampLights переиспользует пул и проецирует высотой вершины', () => {
@@ -2011,14 +2153,9 @@ describe('LevelLightMap: свет на клиньях', () => {
     const [first] = map.rampLightPool;
 
     expect(map.rampLightPool).toHaveLength(2);
-    expect([...first.geometry.positions]).toEqual([
-      10,
-      10,
-      22,
-      11,
-      24,
-      24,
-    ].map(value => expect.closeTo(value, 5)));
+    expect([...first.geometry.positions]).toEqual(
+      [10, 10, 22, 11, 24, 24].map(value => expect.closeTo(value, 5)),
+    );
 
     map.layoutRampLights([item(data)], camera, 0.2);
 
@@ -2040,7 +2177,12 @@ describe('LevelLightMap: свет на клиньях', () => {
       normals: new Float32Array([0, 1]),
       mids: new Float32Array([15, 10]),
     };
-    const washItem = { wash, texture: Texture.WHITE, color: 0xffffff, alpha: 1 };
+    const washItem = {
+      wash,
+      texture: Texture.WHITE,
+      color: 0xffffff,
+      alpha: 1,
+    };
 
     // грань смотрит на камеру
     map.layoutWashes([washItem], { x: 15, y: 100 }, 0.2);
@@ -2106,10 +2248,14 @@ describe('LevelLightMap: веера', () => {
 
     const [mesh] = map.fanPool;
 
-    expect([...mesh.geometry.indices]).toEqual([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1]);
+    expect([...mesh.geometry.indices]).toEqual([
+      0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1,
+    ]);
 
     map.layout([fanItem(shape(5, false))]);
-    expect([...mesh.geometry.indices]).toEqual([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
+    expect([...mesh.geometry.indices]).toEqual([
+      0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5,
+    ]);
 
     map.destroy();
   });

@@ -106,8 +106,21 @@ describe('lightMath: mapKeyOf', () => {
   ];
 
   it('одинаков для частей разных уровней одной карты', () => {
-    const ground = { map: grid, level: 0, layer: 1, tiles: [1], game: { lighting } };
-    const bridge = { map: grid, level: 1, layer: 4, tiles: [5], floor: [5], game: { lighting } };
+    const ground = {
+      map: grid,
+      level: 0,
+      layer: 1,
+      tiles: [1],
+      game: { lighting },
+    };
+    const bridge = {
+      map: grid,
+      level: 1,
+      layer: 4,
+      tiles: [5],
+      floor: [5],
+      game: { lighting },
+    };
 
     expect(mapKeyOf(ground)).toBe(mapKeyOf(bridge));
   });
@@ -236,7 +249,9 @@ describe('lightMath: сила источника в точке (засвет)', 
     // дальше луча
     expect(lightStrength(cone, 120, 0)).toBe(0);
     // к краю клина слабее, чем на оси
-    expect(lightStrength(cone, 50, 20)).toBeLessThan(lightStrength(cone, 50, 0));
+    expect(lightStrength(cone, 50, 20)).toBeLessThan(
+      lightStrength(cone, 50, 0),
+    );
   });
 
   it('поворот конуса поворачивает клин', () => {

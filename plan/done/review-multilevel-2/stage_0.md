@@ -86,14 +86,14 @@ cd /Users/dmitry/Sites/my/vimp && npm link @vimp-games/tanks
 
 ### E (`/Users/dmitry/Sites/my/vimp`)
 
-| Команда | Ожидание | Факт |
-| --- | --- | --- |
-| `cargo test --workspace` | 159 тестов, 0 упавших | **159 passed, 0 failed** (+ 0 doc-тестов) |
-| `npx eslint .` | 0 ошибок | **0 ошибок** |
-| `npx vitest run --reporter=dot` | ~2318 тестов | **2318 passed, 183 файла, 0 упавших** |
-| `packages/engine/core/Cargo.toml` version | 0.12.0 | **0.12.0** |
-| `packages/engine/package.json` version | 0.31.0 | **0.31.0** |
-| `grep -c 'patch.crates-io' Cargo.toml` | 0 | **0** |
+| Команда                                   | Ожидание              | Факт                                      |
+| ----------------------------------------- | --------------------- | ----------------------------------------- |
+| `cargo test --workspace`                  | 159 тестов, 0 упавших | **159 passed, 0 failed** (+ 0 doc-тестов) |
+| `npx eslint .`                            | 0 ошибок              | **0 ошибок**                              |
+| `npx vitest run --reporter=dot`           | ~2318 тестов          | **2318 passed, 183 файла, 0 упавших**     |
+| `packages/engine/core/Cargo.toml` version | 0.12.0                | **0.12.0**                                |
+| `packages/engine/package.json` version    | 0.31.0                | **0.31.0**                                |
+| `grep -c 'patch.crates-io' Cargo.toml`    | 0                     | **0**                                     |
 
 `cargo clippy --workspace`: **0 ошибок, 1 предупреждение** —
 `needless_range_loop` (`packages/engine/core/src/map.rs:1501`, переменная `y`
@@ -103,17 +103,17 @@ cd /Users/dmitry/Sites/my/vimp && npm link @vimp-games/tanks
 
 ### T (`/Users/dmitry/Sites/my/vimp-tanks`)
 
-| Команда | Ожидание | Факт |
-| --- | --- | --- |
-| `npm run core:test` | 42 теста | **42 passed, 0 failed** |
-| `npx eslint .` | 0 | **0 ошибок** |
-| `npm test` | ~235 тестов | **237 passed, 25 файлов, 0 упавших** |
-| `npm run build` | без ошибок | **зелёный**, manifest `ebdbe9ac742f0d93`, карты: canopy, garden, overpass, pool mini, terraces |
-| `npx vimp-contract --strict` | 36 проверок, 0 ошибок | **36 passed, 0 failed (0 error, 0 warning), 0 skipped** |
-| `npm run sim:scenarios` | 11 сценариев зелёные | **all 11 scenario(s) green** |
-| `package.json` version | 0.18.1 | **0.18.1** |
-| `core/Cargo.toml` | 0.12.0 | версия крейта игры **0.1.0**; `vimp-engine-core = "0.12.0"` |
-| зависимость `vimp-engine` | ^0.31.0 | **^0.31.0**, но в `devDependencies` |
+| Команда                      | Ожидание              | Факт                                                                                           |
+| ---------------------------- | --------------------- | ---------------------------------------------------------------------------------------------- |
+| `npm run core:test`          | 42 теста              | **42 passed, 0 failed**                                                                        |
+| `npx eslint .`               | 0                     | **0 ошибок**                                                                                   |
+| `npm test`                   | ~235 тестов           | **237 passed, 25 файлов, 0 упавших**                                                           |
+| `npm run build`              | без ошибок            | **зелёный**, manifest `ebdbe9ac742f0d93`, карты: canopy, garden, overpass, pool mini, terraces |
+| `npx vimp-contract --strict` | 36 проверок, 0 ошибок | **36 passed, 0 failed (0 error, 0 warning), 0 skipped**                                        |
+| `npm run sim:scenarios`      | 11 сценариев зелёные  | **all 11 scenario(s) green**                                                                   |
+| `package.json` version       | 0.18.1                | **0.18.1**                                                                                     |
+| `core/Cargo.toml`            | 0.12.0                | версия крейта игры **0.1.0**; `vimp-engine-core = "0.12.0"`                                    |
+| зависимость `vimp-engine`    | ^0.31.0               | **^0.31.0**, но в `devDependencies`                                                            |
 
 ### Связка
 

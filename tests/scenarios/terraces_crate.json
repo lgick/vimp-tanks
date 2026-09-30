@@ -9,13 +9,28 @@
   "timeline": [
     { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
     { "tick": 0, "op": "join", "who": "p2", "team": "team1" },
-    { "tick": 20, "op": "key", "who": "p2", "action": "down", "name": "forward" },
-    { "tick": 30, "op": "key", "who": "p1", "action": "down", "name": "forward" },
+    {
+      "tick": 20,
+      "op": "key",
+      "who": "p2",
+      "action": "down",
+      "name": "forward"
+    },
+    {
+      "tick": 30,
+      "op": "key",
+      "who": "p1",
+      "action": "down",
+      "name": "forward"
+    },
     { "tick": 85, "op": "key", "who": "p2", "action": "up", "name": "forward" },
     { "tick": 220, "op": "key", "who": "p1", "action": "up", "name": "forward" }
   ],
   "unusedSnapshotKeys": ["w1", "w2", "w2e", "c2"],
-  "divergence": { "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06], "angles": [2] },
+  "divergence": {
+    "thresholds": [3, 3, 0.06, 25, 25, 1.5, 0.15, 0.06],
+    "angles": [2]
+  },
   "ticks": 700,
   "dumpTicks": [120, 300, 500, 700]
 }

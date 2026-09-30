@@ -6,11 +6,15 @@
 // Цвета 0xRRGGBB: смешивание по каналам. Чистые функции, PixiJS не нужен
 
 // a → b по доле t ∈ [0, 1] (t зажимается)
-export function lerpColor(a, b, t) { /* по каналам R, G, B: Math.round(lerp) */ }
+export function lerpColor(a, b, t) {
+  /* по каналам R, G, B: Math.round(lerp) */
+}
 
 // градиент по опорным точкам `[[доля, цвет], ...]` (доли по возрастанию):
 // до первой — первый цвет, после последней — последний
-export function colorRamp(stops, t) { /* найти пару соседних опор, lerpColor */ }
+export function colorRamp(stops, t) {
+  /* найти пару соседних опор, lerpColor */
+}
 ```
 
 Тест `tests/client/colorRamp.test.js`: `lerpColor(0x000000, 0xffffff, 0.5) === 0x808080`;
@@ -30,14 +34,18 @@ export function colorRamp(stops, t) { /* найти пару соседних о
 export function fireIntensity(elapsed, fire) {}
 
 // конец пожара, мс
-export function fireEnd(fire) { return fire.duration + fire.fadeOut; }
+export function fireEnd(fire) {
+  return fire.duration + fire.fadeOut;
+}
 
 // частота дыма, частиц/с: пока горит — от `tailRate` до `rate` по силе
 // пламени; после — от `tailRate` линейно до 0 за `smoke.tail`
 export function smokeRate(elapsed, fire, smoke) {}
 
 // когда перестаёт рождаться последняя частица
-export function emissionEnd(fire, smoke) { return fireEnd(fire) + smoke.tail; }
+export function emissionEnd(fire, smoke) {
+  return fireEnd(fire) + smoke.tail;
+}
 
 // прозрачность клуба дыма по доле жизни t: проявление за первые 12 %,
 // плато, угасание с 45 % до конца (форма SmokeEffect)

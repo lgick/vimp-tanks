@@ -58,9 +58,9 @@ cargo --config 'patch."crates-io".vimp-engine-core.path="../vimp/packages/engine
 В обоих репозиториях версия пакета на патч выше последнего заголовка в
 `CHANGELOG.md`:
 
-* `vimp-engine` — `package.json` 0.30.1, последний заголовок `## [0.30.0]`,
+- `vimp-engine` — `package.json` 0.30.1, последний заголовок `## [0.30.0]`,
   `## [Unreleased]` пуст;
-* `@vimp-games/tanks` — `package.json` 0.17.1 (коммит `9825724`
+- `@vimp-games/tanks` — `package.json` 0.17.1 (коммит `9825724`
   «chore: release 0.17.1»), последний заголовок `## [0.17.0]`, при этом
   `## [Unreleased]` **не пуст** — в нём лежат записи кодревью 2.5D.
 
@@ -78,17 +78,17 @@ cargo --config 'patch."crates-io".vimp-engine-core.path="../vimp/packages/engine
 
 ## Отклонения
 
-* Базовая линия зелёная полностью, чинить ничего не потребовалось:
+- Базовая линия зелёная полностью, чинить ничего не потребовалось:
   E — `cargo test --workspace` 144 теста, `eslint` 0, `vitest` 2309 тестов;
   T — `core:test` 34 теста, `eslint` 0, `npm test` 198 тестов, `build`,
   `sim:scenarios` (8 сценариев), `vimp-contract --strict` 0.
-* Версии на момент старта совпали с ожиданиями плана: крейт `0.11.0`,
+- Версии на момент старта совпали с ожиданиями плана: крейт `0.11.0`,
   `vimp-engine` 0.30.1, танки 0.17.1, `vimp-engine-core = "0.11.0"` в
   `core/Cargo.toml`, `[patch.crates-io]` отсутствует.
-* Связка: симлинки `vimp-tanks/node_modules/vimp-engine` →
+- Связка: симлинки `vimp-tanks/node_modules/vimp-engine` →
   `../../vimp/packages/engine` и `vimp/node_modules/@vimp-games/tanks` →
   `../../../vimp-tanks` созданы, рабочие деревья от `npm link` не изменились.
-* Хвосты журналов закрыты по варианту «по умолчанию из плана» (выбор
+- Хвосты журналов закрыты по варианту «по умолчанию из плана» (выбор
   пользователя): в танках накопленный `## [Unreleased]` (кодревью 2.5D)
   закрыт как `## [0.17.1] - 2026-09-04` (дата коммита `9825724`), сверху
   открыт пустой `## [Unreleased]`. В движке `## [Unreleased]` был пуст, а

@@ -89,7 +89,10 @@ export default class NeonSign {
   // крыша непрозрачна, пока не закрывает танк, и вывеска обязана гаснуть
   // вместе с ней, а не по кругу вокруг игрока
   update(t, camera, levelView, roofAlpha = null) {
-    const light = t === null ? { core: 1, glow: 1 } : brightness(t, this._seed, this._sign.flicker);
+    const light =
+      t === null
+        ? { core: 1, glow: 1 }
+        : brightness(t, this._seed, this._sign.flicker);
 
     if (!this.emissive) {
       this.glow.alpha = light.glow;

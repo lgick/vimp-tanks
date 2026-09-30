@@ -11,7 +11,13 @@ import {
 // `flashes` — источники сессии сервиса (живые коллекции), `getMap()` —
 // текущее состояние карты (сетка фонарей `lampGrid`), `reachesPoint` —
 // окклюзия фар (`occlusion.js`)
-export function createGlintQuery({ getMap, lights, flashes, cfg, reachesPoint }) {
+export function createGlintQuery({
+  getMap,
+  lights,
+  flashes,
+  cfg,
+  reachesPoint,
+}) {
   // бюджет засветов на тик: `lightsAt` с ответом — не больше `maxLights`
   let glintTick = null;
   let glintCount = 0;
@@ -22,7 +28,8 @@ export function createGlintQuery({ getMap, lights, flashes, cfg, reachesPoint })
   const candidatesAt = (x, y, level, exclude, now) => {
     const map = getMap();
     const candidates = [];
-    const onLevel = light => (light.levels ?? [light.level ?? 0]).includes(level);
+    const onLevel = light =>
+      (light.levels ?? [light.level ?? 0]).includes(level);
 
     for (const lamp of queryLightGrid(map.lampGrid, x, y)) {
       if (lamp.level === level) {

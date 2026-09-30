@@ -238,9 +238,9 @@ const TANK_FIELD_LEVEL: usize = 12;
 
 ### `reset` / `set_map` / `on_server_state`
 
-* `reset`: `self.level_state = LevelState::default();`
-* `set_map`: `self.levels = Some(levels);`
-* `on_server_state`: уровень НЕ берётся из авторитетного состояния (его там
+- `reset`: `self.level_state = LevelState::default();`
+- `set_map`: `self.levels = Some(levels);`
+- `on_server_state`: уровень НЕ берётся из авторитетного состояния (его там
   нет). Реплей истории пересчитает `level_state` сам, шаг за шагом, начиная
   с авторитетной позиции. Перед реплеем сбросить только `Falling`:
   ```rust
@@ -277,9 +277,9 @@ const TANK_FIELD_LEVEL: usize = 12;
 
 ### `RemoteTanks`
 
-* `update` (интерполированный кадр) и `snapshot_bodies` читают
+- `update` (интерполированный кадр) и `snapshot_bodies` читают
   `TANK_FIELD_LEVEL` из строки и кладут в `PredictedBody.level`.
-* `sim_boxes()` меняет форму на `Vec<(u32, Box2, u8)>` (id, бокс, уровень) —
+- `sim_boxes()` меняет форму на `Vec<(u32, Box2, u8)>` (id, бокс, уровень) —
   потребитель (`ShotPredictor::cast_ray`) обязан знать уровень корпуса.
   Либо добавить отдельный `sim_boxes_leveled()`, оставив старый — решить по
   числу вызовов (сейчас вызов один).
@@ -397,21 +397,21 @@ const TANK_FIELD_LEVEL: usize = 12;
 
 ### Rust
 
-| Файл | Тест | Что проверяет |
-| --- | --- | --- |
-| `client/predictor.rs` | `replica_climbs_the_ramp` | Реплика, проезжая по рампе, даёт те же `level`/`z`, что `level::step_level` |
-| `client/predictor.rs` | `replica_falls_off_the_ledge` | Съезд с плиты → `input_locked`, через `fallTime` — уровень 0 |
-| `client/predictor.rs` | `falling_replica_makes_no_contacts` | Падающий танк не выталкивается стеной уровня 0 под ним |
-| `client/predictor.rs` | `tank_and_box_on_different_levels_do_not_touch` | Ящик уровня 0 под танком уровня 1: контакта нет |
-| `client/predictor.rs` | `wall_of_the_other_level_is_ignored` | Перила уровня 1 не останавливают танк уровня 0 |
-| `client/predictor.rs` | `correct_level_only_when_grounded` | На рампе кадр уровень не перебивает; на плоскости — перебивает |
-| `client/predictor.rs` | `parity_*` (существующие) | остаются зелёными без правок — реплика движения не менялась |
-| `client/shot.rs` | `tracer_drops_at_the_ledge` | `endLevel == 0` при выстреле с моста за кромку |
-| `client/shot.rs` | `tracer_stops_on_the_railing_of_its_level` | Перила уровня 1 обрезают луч уровня 1 |
-| `client/shot.rs` | `ground_tracer_ignores_the_bridge_tank_behind_the_slab` | Танк уровня 1 не в первом тайле плиты не поражается |
-| `client/remote_tanks.rs` | `body_carries_the_level_from_the_row` | |
-| `client/map_dynamics.rs` | `body_carries_the_level_from_the_map` | |
-| `client/mod.rs` | `render_overlay_tail_matches_schema_width` | Длина хвоста == 2 + число полей `m1` |
+| Файл                     | Тест                                                    | Что проверяет                                                               |
+| ------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `client/predictor.rs`    | `replica_climbs_the_ramp`                               | Реплика, проезжая по рампе, даёт те же `level`/`z`, что `level::step_level` |
+| `client/predictor.rs`    | `replica_falls_off_the_ledge`                           | Съезд с плиты → `input_locked`, через `fallTime` — уровень 0                |
+| `client/predictor.rs`    | `falling_replica_makes_no_contacts`                     | Падающий танк не выталкивается стеной уровня 0 под ним                      |
+| `client/predictor.rs`    | `tank_and_box_on_different_levels_do_not_touch`         | Ящик уровня 0 под танком уровня 1: контакта нет                             |
+| `client/predictor.rs`    | `wall_of_the_other_level_is_ignored`                    | Перила уровня 1 не останавливают танк уровня 0                              |
+| `client/predictor.rs`    | `correct_level_only_when_grounded`                      | На рампе кадр уровень не перебивает; на плоскости — перебивает              |
+| `client/predictor.rs`    | `parity_*` (существующие)                               | остаются зелёными без правок — реплика движения не менялась                 |
+| `client/shot.rs`         | `tracer_drops_at_the_ledge`                             | `endLevel == 0` при выстреле с моста за кромку                              |
+| `client/shot.rs`         | `tracer_stops_on_the_railing_of_its_level`              | Перила уровня 1 обрезают луч уровня 1                                       |
+| `client/shot.rs`         | `ground_tracer_ignores_the_bridge_tank_behind_the_slab` | Танк уровня 1 не в первом тайле плиты не поражается                         |
+| `client/remote_tanks.rs` | `body_carries_the_level_from_the_row`                   |                                                                             |
+| `client/map_dynamics.rs` | `body_carries_the_level_from_the_map`                   |                                                                             |
+| `client/mod.rs`          | `render_overlay_tail_matches_schema_width`              | Длина хвоста == 2 + число полей `m1`                                        |
 
 ### JS
 
@@ -420,13 +420,13 @@ const TANK_FIELD_LEVEL: usize = 12;
 
 ## 5.8 Changelog и документация
 
-* `CHANGELOG.md` → `### Added`: предсказание уровня своего танка, контакты
+- `CHANGELOG.md` → `### Added`: предсказание уровня своего танка, контакты
   и трассеры с учётом уровней. `### Changed`: клиентская геометрия карты
   перешла с `Grid` на `MapLevels`.
-* `docs/en|ru/core.md`: раздел клиентского ядра — как уровень
+- `docs/en|ru/core.md`: раздел клиентского ядра — как уровень
   предсказывается и чем корректируется; почему `PLAYER_STATE_LEN` не
   расширяли.
-* `docs/en|ru/architecture.md`: в списке инвариантов — «правила уровня
+- `docs/en|ru/architecture.md`: в списке инвариантов — «правила уровня
   живут в `core/src/level.rs` и зовутся обеими сторонами».
 
 ## Критерии готовности этапа

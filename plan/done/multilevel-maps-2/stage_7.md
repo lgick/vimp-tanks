@@ -52,9 +52,9 @@
 
 ## 7.2 Старые карты
 
-* `canopy`, `garden`, `pool mini` — **ни строки правок**. Это и есть
+- `canopy`, `garden`, `pool mini` — **ни строки правок**. Это и есть
   доказательство аддитивности: карта без `levels` идёт прежним путём.
-* `overpass` — только два изменения: опциональные `volumes` (здания и
+- `overpass` — только два изменения: опциональные `volumes` (здания и
   перила) и возврат мостовых ящиков к разрывам перил (кодревью 3.3
   переставило их вглубь плиты именно потому, что падать они не умели;
   ограничение снято этапом 3.4). Комментарий-предупреждение в файле
@@ -62,10 +62,10 @@
 
 Регресс ловят:
 
-* `tests/config/game.test.js` — гоняет правила `E4`/`E5` над
+- `tests/config/game.test.js` — гоняет правила `E4`/`E5` над
   `gameConfig`, то есть над всеми картами сразу;
-* `core/tests/sim.rs::overpass_loads_and_places_respawns_on_their_levels`;
-* фикстура `tests/core/fixtures/overpass.json`, синхронность которой
+- `core/tests/sim.rs::overpass_loads_and_places_respawns_on_their_levels`;
+- фикстура `tests/core/fixtures/overpass.json`, синхронность которой
   стережёт `tests/core/fixtures.test.js`. **При любой правке карты
   фикстуру перегенерировать** тем же `JSON.stringify`, что и
   `scripts/export-maps.js`. Такую же фикстуру завести для `terraces` и
@@ -77,10 +77,10 @@
 (поля: `version`, `seed`, `map`, `participants`, `timeline`,
 `unusedSnapshotKeys`, `divergence.thresholds`, `ticks`, `dumpTicks`):
 
-* `terraces_climb.json` — подъём 0 → 2 одной рампой и спуск обратно;
-* `terraces_backside.json` — попытка заехать на рампу не с торца
+- `terraces_climb.json` — подъём 0 → 2 одной рампой и спуск обратно;
+- `terraces_backside.json` — попытка заехать на рампу не с торца
   (сбоку и из-под плиты);
-* `terraces_crate.json` — сталкивание ящика с уровня 2.
+- `terraces_crate.json` — сталкивание ящика с уровня 2.
 
 **Сценарии не утверждают игровых правил**: в раннере нет секции `assert`,
 пас/фейл дают 12 встроенных инвариантов (`finiteValues`,
@@ -99,11 +99,11 @@
 
 `core/tests/sim.rs`, новые (на фикстуре `terraces`):
 
-* `terraces_loads_with_three_levels` — карта грузится, респауны на своих
+- `terraces_loads_with_three_levels` — карта грузится, респауны на своих
   уровнях (без `set_actor_level`, уровень даёт геометрия);
-* `tank_climbs_two_levels_in_one_ramp` — 0 → 2 одним проездом;
-* `tank_cannot_enter_the_ramp_from_under_the_slab` — задача 5;
-* `crate_pushed_off_the_upper_slab_lands_on_the_lower_one` — задача 1.
+- `tank_climbs_two_levels_in_one_ramp` — 0 → 2 одним проездом;
+- `tank_cannot_enter_the_ramp_from_under_the_slab` — задача 5;
+- `crate_pushed_off_the_upper_slab_lands_on_the_lower_one` — задача 1.
 
 ## Проверка
 

@@ -4,7 +4,9 @@ import { tracerPieces } from '../../../../src/client/parts/effects/shot/tracerPi
 // Куски трассера по сегментам уровней ядра (`core/src/shot_levels.rs`)
 describe('tracerPieces', () => {
   it('без сегментов — один кусок на уровне конца', () => {
-    expect(tracerPieces(null, 500, 1)).toEqual([{ from: 0, to: 500, level: 1 }]);
+    expect(tracerPieces(null, 500, 1)).toEqual([
+      { from: 0, to: 500, level: 1 },
+    ]);
     expect(tracerPieces([], 500, 0)).toEqual([{ from: 0, to: 500, level: 0 }]);
   });
 

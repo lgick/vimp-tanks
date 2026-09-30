@@ -81,7 +81,9 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
     it('карта с game.surfaces загружается', () => {
       expect(() =>
         core.load_map(
-          withSurfaces({ 0: { 99: 'sand', 98: { type: 'boost', dir: 'east' } } }),
+          withSurfaces({
+            0: { 99: 'sand', 98: { type: 'boost', dir: 'east' } },
+          }),
         ),
       ).not.toThrow();
     });
@@ -91,7 +93,9 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
         /lava/,
       );
       expect(() =>
-        core.load_map(withSurfaces({ 0: { 99: { type: 'sand', dir: 'east' } } })),
+        core.load_map(
+          withSurfaces({ 0: { 99: { type: 'sand', dir: 'east' } } }),
+        ),
       ).toThrow(/dir/);
     });
   });
@@ -162,7 +166,9 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
         }
       }
 
-      expect(peak, 'прыжок обязан оторвать танк от плиты').toBeGreaterThan(1.05);
+      expect(peak, 'прыжок обязан оторвать танк от плиты').toBeGreaterThan(
+        1.05,
+      );
       // дуга ниже уровня + jumpClearance (0.45): перила танк видит всегда
       expect(peak).toBeLessThan(1.45);
       expect(landedAt).toBeGreaterThan(24);
@@ -310,9 +316,9 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
         }
       }
 
-      expect(JSON.parse(core.players_data()).m1['1'][11]).toBeGreaterThanOrEqual(
-        0.2,
-      );
+      expect(
+        JSON.parse(core.players_data()).m1['1'][11],
+      ).toBeGreaterThanOrEqual(0.2);
 
       const tracer = shoot();
 
@@ -515,7 +521,11 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
 
       const events = takeEvents(core);
 
-      expect(events).toContainEqual({ type: 'panelActive', id: 1, field: 'w1' });
+      expect(events).toContainEqual({
+        type: 'panelActive',
+        id: 1,
+        field: 'w1',
+      });
       expect(events).toContainEqual({
         type: 'panelSet',
         id: 1,
@@ -599,7 +609,9 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       core.spawn_actor(1, 'm1', 1, 10, 20, 0);
       core.spawn_actor(2, 'm1', 2, 30, 40, 0);
 
-      expect(Array.from(core.alive_players())).toEqual([1, 1, 10, 20, 2, 2, 30, 40]);
+      expect(Array.from(core.alive_players())).toEqual([
+        1, 1, 10, 20, 2, 2, 30, 40,
+      ]);
     });
   });
 

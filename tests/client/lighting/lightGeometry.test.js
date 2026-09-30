@@ -21,7 +21,16 @@ import {
 
 describe('lightGeometry: контур клина рампы', () => {
   // полоса вдоль x: клетки 2..5 × 1..2, подъём 0 → 1 к +x
-  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 5, row0: 1, row1: 2 };
+  const lane = {
+    axis: 0,
+    sign: 1,
+    from: 0,
+    to: 1,
+    col0: 2,
+    col1: 5,
+    row0: 1,
+    row1: 2,
+  };
   const scale = { x: 1, y: 1 };
 
   it('камера в нуле: подножие на месте, вершина сдвинута на уровень', () => {
@@ -51,7 +60,14 @@ describe('lightGeometry: контур клина рампы', () => {
   });
 
   it('обратный знак — вершина у начала полосы', () => {
-    const points = rampWedgePolygon({ ...lane, sign: -1 }, 10, scale, { x: 0, y: 0 }, 0.2, 1);
+    const points = rampWedgePolygon(
+      { ...lane, sign: -1 },
+      10,
+      scale,
+      { x: 0, y: 0 },
+      0.2,
+      1,
+    );
 
     expect(points[0]).toBeCloseTo(20 * 1.2);
     expect(points[6]).toBeCloseTo(50);
@@ -164,7 +180,7 @@ describe('lightGeometry: castRay / firstHit', () => {
     const d = Math.SQRT1_2;
 
     expect(castRay(5, 5, d, d, 100, wall([[2, 2]]), CELL, CELL)).toBeCloseTo(
-        15 * Math.SQRT2,
+      15 * Math.SQRT2,
     );
     expect(castRay(5, 5, 0, -1, 100, wall([[0, -2]]), CELL, CELL)).toBeCloseTo(
       15,
@@ -183,7 +199,14 @@ describe('lightGeometry: coneFan / fanUvs / fanIndices', () => {
 
     return (col, row) => set.has(`${col},${row}`);
   };
-  const cone = { x: 5, y: 55, rotation: 0, alongMax: 100, acrossMax: 50, rays: 9 };
+  const cone = {
+    x: 5,
+    y: 55,
+    rotation: 0,
+    alongMax: 100,
+    acrossMax: 50,
+    rays: 9,
+  };
   const ends = points => {
     const list = [];
 
@@ -374,7 +397,14 @@ describe('lightGeometry: frameOf', () => {
 // подножия вверх; UV верха — конец того же луча, яркость гаснет вверх
 describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
   const CELL = 10;
-  const cone = { x: 5, y: 55, rotation: 0, alongMax: 100, acrossMax: 50, rays: 9 };
+  const cone = {
+    x: 5,
+    y: 55,
+    rotation: 0,
+    alongMax: 100,
+    acrossMax: 50,
+    rays: 9,
+  };
   const column = new Set(Array.from({ length: 20 }, (_, row) => `4,${row}`));
   const isBlocked = (col, row) => column.has(`${col},${row}`);
   // UV — сама мировая точка: так видно, какую точку взяла вершина
@@ -469,7 +499,8 @@ describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
         // верх — на продолжении луча из вершины, дальше подножия
         const ux = wash.uvs[top * 2];
         const uy = wash.uvs[top * 2 + 1];
-        const cross = (bx - cone.x) * (uy - cone.y) - (by - cone.y) * (ux - cone.x);
+        const cross =
+          (bx - cone.x) * (uy - cone.y) - (by - cone.y) * (ux - cone.x);
 
         expect(cross).toBeCloseTo(0, 2);
         expect(ux).toBeGreaterThan(bx);
@@ -479,8 +510,7 @@ describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
     // ось: конец луча — край прямоугольника текстуры
     const axis = [...Array(wash.heights.length).keys()].find(
       v =>
-        wash.heights[v] > 0 &&
-        Math.abs(wash.base[v * 2 + 1] - cone.y) < 1e-3,
+        wash.heights[v] > 0 && Math.abs(wash.base[v * 2 + 1] - cone.y) < 1e-3,
     );
 
     expect(wash.uvs[axis * 2]).toBeCloseTo(cone.x + cone.alongMax, 3);
@@ -491,7 +521,9 @@ describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
     const wash = washOf(fan, () => 0.25);
 
     for (let v = 0; v < wash.heights.length; v += 1) {
-      expect(wash.heights[v] === 0 || Math.abs(wash.heights[v] - 0.25) < 1e-6).toBe(true);
+      expect(
+        wash.heights[v] === 0 || Math.abs(wash.heights[v] - 0.25) < 1e-6,
+      ).toBe(true);
     }
   });
 
@@ -562,7 +594,16 @@ describe('lightGeometry: coneFan (reaches/forward) / wallWash', () => {
 // восток с уровня 0 на 1; клетка 10 × 10
 describe('lightGeometry: rampBlocks', () => {
   const CELL = 10;
-  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 6, row0: 0, row1: 3 };
+  const lane = {
+    axis: 0,
+    sign: 1,
+    from: 0,
+    to: 1,
+    col0: 2,
+    col1: 6,
+    row0: 0,
+    row1: 3,
+  };
   const laneAt = (col, row) =>
     col >= 2 && col < 6 && row >= 0 && row < 3 ? lane : null;
   const enter = (col, row, prevCol, prevRow, x, y, z = 0) =>
@@ -638,21 +679,39 @@ describe('lightGeometry: rampBlocks', () => {
     // от подножия наискосок: вышел через борт — дальше по полу
     const diagonal = Math.SQRT1_2;
 
-    expect(
-      castRay(5, 15, diagonal, diagonal, 200, isBlocked, CELL, CELL),
-    ).toBe(200);
+    expect(castRay(5, 15, diagonal, diagonal, 200, isBlocked, CELL, CELL)).toBe(
+      200,
+    );
   });
 });
 
 describe('lightGeometry: rampHeight', () => {
   it('высота по прогрессу от подножия, обрезана по полосе', () => {
-    const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 6, row0: 0, row1: 3 };
+    const lane = {
+      axis: 0,
+      sign: 1,
+      from: 0,
+      to: 1,
+      col0: 2,
+      col1: 6,
+      row0: 0,
+      row1: 3,
+    };
 
     expect(rampHeight(lane, 20, 5, 10, 10)).toBeCloseTo(0);
     expect(rampHeight(lane, 40, 5, 10, 10)).toBeCloseTo(0.5);
     expect(rampHeight(lane, 90, 5, 10, 10)).toBeCloseTo(1);
     // подъём к меньшим y
-    const down = { axis: 1, sign: -1, from: 1, to: 2, col0: 0, col1: 1, row0: 0, row1: 4 };
+    const down = {
+      axis: 1,
+      sign: -1,
+      from: 1,
+      to: 2,
+      col0: 0,
+      col1: 1,
+      row0: 0,
+      row1: 4,
+    };
 
     expect(rampHeight(down, 5, 40, 10, 10)).toBeCloseTo(1);
     expect(rampHeight(down, 5, 10, 10, 10)).toBeCloseTo(1.75);
@@ -662,7 +721,16 @@ describe('lightGeometry: rampHeight', () => {
 describe('lightGeometry: rampLight', () => {
   const CELL = 10;
   // полоса x 20..60, y 0..30, подъём по +x
-  const lane = { axis: 0, sign: 1, from: 0, to: 1, col0: 2, col1: 6, row0: 0, row1: 3 };
+  const lane = {
+    axis: 0,
+    sign: 1,
+    from: 0,
+    to: 1,
+    col0: 2,
+    col1: 6,
+    row0: 0,
+    row1: 3,
+  };
   const frame = {
     x: 0,
     y: 15,
@@ -675,7 +743,9 @@ describe('lightGeometry: rampLight', () => {
   };
   // веер из (0, 15) вдоль +x: четыре луча до x = 100, крайние накрывают
   // углы полосы у подножия
-  const points = new Float32Array([0, 15, 100, -85, 100, -5, 100, 35, 100, 115]);
+  const points = new Float32Array([
+    0, 15, 100, -85, 100, -5, 100, 35, 100, 115,
+  ]);
   const build = extra =>
     rampLight({
       points,
@@ -731,10 +801,11 @@ describe('lightGeometry: rampLight', () => {
     for (let i = 0; i < indices.length; i += 3) {
       const [a, b, c] = [indices[i], indices[i + 1], indices[i + 2]];
 
-      area += Math.abs(
-        (base[b * 2] - base[a * 2]) * (base[c * 2 + 1] - base[a * 2 + 1]) -
-          (base[c * 2] - base[a * 2]) * (base[b * 2 + 1] - base[a * 2 + 1]),
-      ) / 2;
+      area +=
+        Math.abs(
+          (base[b * 2] - base[a * 2]) * (base[c * 2 + 1] - base[a * 2 + 1]) -
+            (base[c * 2] - base[a * 2]) * (base[b * 2 + 1] - base[a * 2 + 1]),
+        ) / 2;
     }
 
     // веер накрывает полосу целиком: 40 × 30

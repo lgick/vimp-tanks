@@ -33,15 +33,7 @@ const smoothStep = (edge0, edge1, x) => {
 
 // alpha точечной сущности уровня `level` в мировой точке (x, y) при игроке
 // уровня `viewLevel` в точке (viewX, viewY)
-export function seeThroughAlpha({
-  viewLevel,
-  viewX,
-  viewY,
-  level,
-  x,
-  y,
-  cfg,
-}) {
+export function seeThroughAlpha({ viewLevel, viewX, viewY, level, x, y, cfg }) {
   // всё, что не выше игрока, видно как есть: ниже — не мешает, вровень —
   // это и есть его собственный уровень
   if ((level || 0) <= (viewLevel || 0)) {

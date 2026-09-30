@@ -20,7 +20,13 @@ describe('volumes', () => {
   it('масштаб карты входит в размер клетки', () => {
     const volumes = createVolumes();
 
-    volumes.setLayerVolume(0, [[1, 1]], 0.5, {}, { step: 32, scale: { x: 2, y: 1 } });
+    volumes.setLayerVolume(
+      0,
+      [[1, 1]],
+      0.5,
+      {},
+      { step: 32, scale: { x: 2, y: 1 } },
+    );
 
     expect(volumes.cellSize()).toEqual({ cellW: 64, cellH: 32 });
     expect(volumes.heightAt(0, 70, 40)).toBe(0.5);

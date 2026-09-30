@@ -327,8 +327,7 @@ export default class Tracks extends Container {
         this._prevRotation,
         this._trackWidth,
         this._trackLength,
-        Math.min(1, this._trackInitialAlpha * (style ? style.alpha : 1)) *
-          fade,
+        Math.min(1, this._trackInitialAlpha * (style ? style.alpha : 1)) * fade,
         this._assets.trackMarkTexture,
         style ? style.lifetime : 1,
       );

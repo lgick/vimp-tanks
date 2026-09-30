@@ -119,9 +119,30 @@ export default {
       trackSampleY: 0.75, // линия гусеницы, доля полуширины
       bodyBeltCoupling: 4.0, // связь ящика/бочки с лентой конвейера, 1/с
       types: {
-        sand: { accel: 0.6, maxSpeed: 0.55, drag: 1.2, grip: 1.0, brake: 1.0, turn: 0.8 },
-        mud: { accel: 0.45, maxSpeed: 0.4, drag: 2.0, grip: 0.9, brake: 1.0, turn: 0.7 },
-        water: { accel: 0.7, maxSpeed: 0.6, drag: 1.5, grip: 0.8, brake: 0.8, turn: 0.85 },
+        sand: {
+          accel: 0.6,
+          maxSpeed: 0.55,
+          drag: 1.2,
+          grip: 1.0,
+          brake: 1.0,
+          turn: 0.8,
+        },
+        mud: {
+          accel: 0.45,
+          maxSpeed: 0.4,
+          drag: 2.0,
+          grip: 0.9,
+          brake: 1.0,
+          turn: 0.7,
+        },
+        water: {
+          accel: 0.7,
+          maxSpeed: 0.6,
+          drag: 1.5,
+          grip: 0.8,
+          brake: 0.8,
+          turn: 0.85,
+        },
         oil: {
           accel: 0.35,
           maxSpeed: 1.0,
@@ -183,7 +204,12 @@ export default {
         ramThreshold: 150,
         ramDamagePerSpeed: 1.0,
         chainDelay: 0.15,
-        blast: { radius: 70, damage: 80, impulse: 2500000, cameraShake: { intensity: 30, duration: 400 } },
+        blast: {
+          radius: 70,
+          damage: 80,
+          impulse: 2500000,
+          cameraShake: { intensity: 30, duration: 400 },
+        },
       },
     },
     // боты: пресет сложности + разброс «характера» между ботами. Числа —
@@ -276,9 +302,26 @@ export default {
   // авторитетная граница: значения всё равно клампятся в
   // applyRoomOverrides.js движка
   roomForm: [
-    { name: 'maxPlayers', control: 'text', label: 'Max players', numeric: true },
-    { name: 'roundTime', control: 'text', label: 'Round time', unit: 's', numeric: true },
-    { name: 'mapTime', control: 'text', label: 'Map time', unit: 's', numeric: true },
+    {
+      name: 'maxPlayers',
+      control: 'text',
+      label: 'Max players',
+      numeric: true,
+    },
+    {
+      name: 'roundTime',
+      control: 'text',
+      label: 'Round time',
+      unit: 's',
+      numeric: true,
+    },
+    {
+      name: 'mapTime',
+      control: 'text',
+      label: 'Map time',
+      unit: 's',
+      numeric: true,
+    },
     { name: 'friendlyFire', control: 'checkbox', label: 'Friendly fire' },
     { name: 'map', control: 'select', label: 'Map', source: 'maps' },
   ],

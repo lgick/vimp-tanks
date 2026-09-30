@@ -167,7 +167,9 @@ async function main() {
     const measured = loop ? await measureLoudness(sourcePath) : null;
 
     if (loop && !measured) {
-      console.warn('⚠️   loudnorm measurement failed, falling back to one pass');
+      console.warn(
+        '⚠️   loudnorm measurement failed, falling back to one pass',
+      );
     }
 
     const audioFilters = buildFilters(loop, measured);

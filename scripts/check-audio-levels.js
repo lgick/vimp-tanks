@@ -105,8 +105,10 @@ async function main() {
     `> Target: I = ${TARGET_I} LUFS; ` +
       `codecs must agree within ${CODEC_TOLERANCE} LU\n`,
   );
-  console.log(`   ${'sound'.padEnd(26)}${'mp3'.padStart(7)}` +
-    `${'webm'.padStart(8)}${'spread'.padStart(9)}`);
+  console.log(
+    `   ${'sound'.padEnd(26)}${'mp3'.padStart(7)}` +
+      `${'webm'.padStart(8)}${'spread'.padStart(9)}`,
+  );
 
   let failed = 0;
 

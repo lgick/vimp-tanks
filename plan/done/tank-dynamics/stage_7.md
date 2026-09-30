@@ -98,7 +98,7 @@ for (id, height, impact) in landed {
   `k == 0` (мягкое касание) → события нет — тот же порог, по которому
   клиент не даёт ни просадки, ни пыли, ни звука;
 - иначе `ctx.events.push(CoreEvent::Shake { id, intensity: intensity * k,
-  duration })`.
+duration })`.
 
 Важно: событие рождается только на ХОСТЕ. `Predictor::step_inner`
 (`core/src/client/predictor.rs`) зовёт уровневые формулы сам, но `SimCtx`

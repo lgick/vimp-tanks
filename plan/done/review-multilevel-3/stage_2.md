@@ -67,11 +67,11 @@ falling })`, а в движковой `BodyLevelState` фазы рампы не�
 pub on_ramp: bool,
 ```
 
-   Заполняется там же, где `set_level_state` / шаг правил уровня тела:
-   после `step_body_level` спросить `levels.ramp_at(body.x, body.y)`.
-   Если у `PredictedBodies` нет доступа к `MapLevels` — передать его
-   параметром в `capture`/шаг (в `Predictor::resolve_world` `self.levels`
-   уже под рукой, `predictor.rs:961`).
+Заполняется там же, где `set_level_state` / шаг правил уровня тела:
+после `step_body_level` спросить `levels.ramp_at(body.x, body.y)`.
+Если у `PredictedBodies` нет доступа к `MapLevels` — передать его
+параметром в `capture`/шаг (в `Predictor::resolve_world` `self.levels`
+уже под рукой, `predictor.rs:961`).
 
 2. Заменить проверку индекса общим правилом:
 
@@ -91,7 +91,7 @@ if !masks[index].intersects(level_group(low)) || on_ramp(index) {
 }
 ```
 
-   Локальная переменная `climbing` (`predictor.rs:1012`) больше не нужна.
+Локальная переменная `climbing` (`predictor.rs:1012`) больше не нужна.
 
 **Тесты** (`core/src/client/predictor.rs`, `mod tests`, рядом с
 `replica_climbs_the_ramp:1909` и `replica_drives_onto_a_wide_ramp:1859`):
@@ -154,7 +154,7 @@ for guard in &self.guards {
 }
 ```
 
-   Импорт `RampRun` из `predictor.rs:29` уходит, если больше не нужен.
+Импорт `RampRun` из `predictor.rs:29` уходит, если больше не нужен.
 
 **Критерий:** ни один из 12 сценариев не сдвинулся ни на бит — геометрия
 обязана получиться той же. Если сдвинулась, значит копия и оригинал уже

@@ -13,7 +13,10 @@ describe('authSchema танков (src/config/auth.js)', () => {
   });
 
   it('все params ссылаются на существующие валидаторы', () => {
-    const known = new Set(['isValidName', ...Object.keys(tanksAuthConfig.validators)]);
+    const known = new Set([
+      'isValidName',
+      ...Object.keys(tanksAuthConfig.validators),
+    ]);
 
     for (const { options } of tanksAuthConfig.params) {
       expect(known.has(options.validator)).toBe(true);

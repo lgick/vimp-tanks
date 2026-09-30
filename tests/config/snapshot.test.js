@@ -10,9 +10,7 @@ import * as fields from '../../src/client/snapshotFields.js';
 describe('snapshotFields.js согласован со схемой snapshot.js', () => {
   // константа M1_GUN_ROTATION → поле gunRotation
   const nameOf = suffix =>
-    suffix
-      .toLowerCase()
-      .replace(/_(.)/g, (_, char) => char.toUpperCase());
+    suffix.toLowerCase().replace(/_(.)/g, (_, char) => char.toUpperCase());
 
   // префикс константы → ключ схемы; c1/c2 делят одну форму (префикс C_)
   const blocks = { M1: 'm1', W1: 'w1', W2: 'w2', W2E: 'w2e', C: 'c1' };
@@ -45,7 +43,13 @@ describe('snapshotFields.js согласован со схемой snapshot.js',
   it('m1 несёт 2.5D-хвост целиком: z, level, vz, pitch, roll', () => {
     const names = snapshot.m1.fields.map(field => field.name);
 
-    expect(names.slice(fields.M1_Z)).toEqual(['z', 'level', 'vz', 'pitch', 'roll']);
+    expect(names.slice(fields.M1_Z)).toEqual([
+      'z',
+      'level',
+      'vz',
+      'pitch',
+      'roll',
+    ]);
   });
 
   // `vz` — детектор касания, а не плавная величина: сглаженная выборка

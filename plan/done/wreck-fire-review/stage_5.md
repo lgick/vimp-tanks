@@ -10,6 +10,7 @@
 ## 5.2. `src/config/render.js:241–243` (К1)
 
 Комментарий над `blastJolt`:
+
 - «визуальная реакция танка на взрыв бомбы или бочки» → «визуальная реакция танка на взрыв бомбы или бочки и на
   гибель танка (`WreckFire`, радиус `wreckFx.joltRadius`)».
 
@@ -17,6 +18,7 @@
 
 `docs/en/architecture.md:222–225` и `docs/ru/architecture.md:216–219`. Сейчас там
 `{ x, y, radius: wreckFx.joltRadius, level }` (`grep -n joltRadius docs/*/architecture.md`).
+
 - en: `{ x, y, radius, level }` at the wreck, where `radius` is `wreckFx.joltRadius` scaled by `size / referenceSize`
   and `level` is the wreck's physical level;
 - ru: `{ x, y, radius, level }` в точке остова, где `radius` — `wreckFx.joltRadius`, масштабированный на
@@ -25,6 +27,7 @@
 ## 5.4. Длинные строки (К2)
 
 Перенести на ~80 символов, как соседний текст, смысл не менять:
+
 - `docs/en/architecture.md:239–240` («`WreckFire` 4 (its scorch 2), map layers from `data.layer`), so a map without
   upper levels draws exactly as before.»);
 - `docs/ru/architecture.md:240` («`Smoke`/вспышка 4, `WreckFire` 4 (его копоть 2), слои карты — из `data.layer`),
@@ -38,10 +41,10 @@
 комментарию, по образцу `Smoke.js`:
 
 ```js
-      // Известное упрощение: контейнер стоит в проекции ТЕКУЩЕЙ высоты
-      // остова, поэтому уже выпущенный столб дыма едет вместе с ним — если
-      // остов столкнут с моста, столб опустится на новый слой целиком.
-      // Остов меняет высоту редко, а дым тогда и так тонет под плитой
+// Известное упрощение: контейнер стоит в проекции ТЕКУЩЕЙ высоты
+// остова, поэтому уже выпущенный столб дыма едет вместе с ним — если
+// остов столкнут с моста, столб опустится на новый слой целиком.
+// Остов меняет высоту редко, а дым тогда и так тонет под плитой
 ```
 
 ## Проверка этапа

@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // шпион на сборку меша клина: кеш `rampMeshes` не зовёт её повторно
-vi.mock('../../../src/client/lighting/lightGeometry.js', async importOriginal => {
-  const actual = await importOriginal();
+vi.mock(
+  '../../../src/client/lighting/lightGeometry.js',
+  async importOriginal => {
+    const actual = await importOriginal();
 
-  return { ...actual, rampLight: vi.fn(actual.rampLight) };
-});
+    return { ...actual, rampLight: vi.fn(actual.rampLight) };
+  },
+);
 
 import { rampLight } from '../../../src/client/lighting/lightGeometry.js';
 import { createRampLights } from '../../../src/client/lighting/rampLights.js';

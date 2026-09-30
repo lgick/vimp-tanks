@@ -45,9 +45,9 @@ onResourceChange(resource) {
 `FilterSystem._globalFilterBindGroup` (`lib/filters/FilterSystem.mjs`):
 
 ```js
-this._globalFilterBindGroup.setResource(this._filterGlobalUniforms, 0);  // :341  <- место падения, индекс 0
-this._globalFilterBindGroup.setResource(input.source, 1);                // :343
-this._globalFilterBindGroup.setResource(input.source.style, 2);          // :344
+this._globalFilterBindGroup.setResource(this._filterGlobalUniforms, 0); // :341  <- место падения, индекс 0
+this._globalFilterBindGroup.setResource(input.source, 1); // :343
+this._globalFilterBindGroup.setResource(input.source.style, 2); // :344
 ```
 
 Индекс `0` в сообщении об ошибке совпадает. Единственный фильтр в игре —
@@ -85,7 +85,7 @@ if (this._assetUrl) {
 (`packages/engine/src/client/main.js:679-680`):
 
 ```js
-removeMap(currentMapSetId);   // -> instance.destroy() каждого парта
+removeMap(currentMapSetId); // -> instance.destroy() каждого парта
 createMap(setId, staticData); // -> Assets.load(...) новой карты
 ```
 
@@ -233,7 +233,7 @@ if (this.parent) {
 `canopy → terraces → overpass → canopy` снять:
 
 ```js
-__PIXI_APP__?.renderer.texture.managedTextures.length
+__PIXI_APP__?.renderer.texture.managedTextures.length;
 ```
 
 (если глобали нет — `performance.memory.usedJSHeapSize` до и после). Рост не
@@ -284,15 +284,15 @@ __PIXI_APP__?.renderer.texture.managedTextures.length
 
 ### Что сделано
 
-| Пункт | Файл | Правка |
-| --- | --- | --- |
-| 1.1 | `src/client/parts/Map.js` | блок `Assets.unload` удалён, на его месте комментарий из плана |
-| 1.2 | `Map.js`, `MapVolume.js` | `if (this.destroyed) return;` после КАЖДОГО `await`; на втором `await` уничтоженный парт освобождает уже созданную текстуру |
-| 1.3 | `Map.js`, `MapVolume.js` | GPU-ресурс освобождается после снятия со сцены |
-| 1.4 | `MapVolume.js` | `mesh.geometry.destroy()` по каждому срезу |
-| 1.4 | `bakeTileLayer.js` | `spriteSheet.destroy()` после `generateTexture` |
-| 1.5 | — | правка не нужна, см. отклонение 1 |
-| 1.6 | — | замер снят, см. ниже |
+| Пункт | Файл                      | Правка                                                                                                                      |
+| ----- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| 1.1   | `src/client/parts/Map.js` | блок `Assets.unload` удалён, на его месте комментарий из плана                                                              |
+| 1.2   | `Map.js`, `MapVolume.js`  | `if (this.destroyed) return;` после КАЖДОГО `await`; на втором `await` уничтоженный парт освобождает уже созданную текстуру |
+| 1.3   | `Map.js`, `MapVolume.js`  | GPU-ресурс освобождается после снятия со сцены                                                                              |
+| 1.4   | `MapVolume.js`            | `mesh.geometry.destroy()` по каждому срезу                                                                                  |
+| 1.4   | `bakeTileLayer.js`        | `spriteSheet.destroy()` после `generateTexture`                                                                             |
+| 1.5   | —                         | правка не нужна, см. отклонение 1                                                                                           |
+| 1.6   | —                         | замер снят, см. ниже                                                                                                        |
 
 ### Тесты (7 новых, все краснеют на старом коде)
 

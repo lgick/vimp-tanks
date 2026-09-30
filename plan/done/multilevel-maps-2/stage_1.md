@@ -284,26 +284,26 @@ pub volumes: IndexMap<String, f32>,
 `map::tests::shared_layered_fixtures` и
 `tests/devtools/contract/e4-map-layers.test.js`):
 
-* `level_group` даёт разные биты для 0..7, ни один не пересекается со
+- `level_group` даёт разные биты для 0..7, ни один не пересекается со
   `STATIC_LEVEL_GROUP`; для 0 и 1 значения прежние;
-* карта с уровнями 1..3 принимается; с дырой (1, 3) — отвергается;
+- карта с уровнями 1..3 принимается; с дырой (1, 3) — отвергается;
   с девятью — отвергается по `MAX_LEVELS`;
-* `landing_level`: с 2 над плитой 1 → 1; над открытой землёй → 0;
-* открытый край плиты уровня 2 над плитой уровня 1 валиден (сегодня
+- `landing_level`: с 2 над плитой 1 → 1; над открытой землёй → 0;
+- открытый край плиты уровня 2 над плитой уровня 1 валиден (сегодня
   требует земли);
-* рампа 0 → 2 валидна без промежуточной плиты и отвергается с ней;
-* `RampSample.slope`: прогон в 2 клетки круче прогона в 4; `dir`
+- рампа 0 → 2 валидна без промежуточной плиты и отвергается с ней;
+- `RampSample.slope`: прогон в 2 клетки круче прогона в 4; `dir`
   совпадает со знаком оси; `progress` не изменился;
-* `FallModel::elapsed_at` — обратная к `z_at` (свойство, а не число);
+- `FallModel::elapsed_at` — обратная к `z_at` (свойство, а не число);
   `duration` растёт с высотой;
-* `step_body_level`: ящик за краем плиты приземляется на `landing_level`
+- `step_body_level`: ящик за краем плиты приземляется на `landing_level`
   и меняет группу; ящик в глубине плиты неподвижен; на клетке рампы
   уровень не меняется;
-* `dynamic_map_data` пишет 5 полей при новой схеме и 3 при старой;
+- `dynamic_map_data` пишет 5 полей при новой схеме и 3 при старой;
   покоящееся тело по-прежнему не шлёт хвост;
-* `connect_ledges` строит ребро на уровень 1, а не на 0, если под
+- `connect_ledges` строит ребро на уровень 1, а не на 0, если под
   обрывом плита; штраф растёт с высотой;
-* новые фикстуры: `bad-levels-too-many.json`,
+- новые фикстуры: `bad-levels-too-many.json`,
   `bad-ramp-through-slab.json`, `bad-volumes-unknown-layer.json`,
   `bad-volumes-height.json`, `good-three-levels.json`.
 
@@ -349,7 +349,7 @@ cd /Users/dmitry/Sites/my/vimp \
 
 ## Сделано
 
-* `map.rs`: `MAX_LEVELS = 8` + `const _: () = assert!(MAX_LEVELS <= 8)`,
+- `map.rs`: `MAX_LEVELS = 8` + `const _: () = assert!(MAX_LEVELS <= 8)`,
   побитовый `level_group`, `RampSample { dir, slope, run, axis }`,
   `MapLevels::landing_level`, `FallModel`/`DEFAULT_FALL_TIME`,
   `BodyLevelState`/`BodyLevelEvent`/`step_body_level`/`body_collision_mask`,
@@ -357,11 +357,11 @@ cd /Users/dmitry/Sites/my/vimp \
   `dynamic_map_data(world, with_levels, with_velocities)`, поля `volumes`
   (и `layers` у корня), проверки «рампа сквозь плиту» и «край плиты — на
   `landing_level`», `validate_volumes`.
-* `config.rs`: `EngineConfig.mapFallTime` (дефолт `DEFAULT_FALL_TIME`).
-* `game.rs`: `FallModel` в `EngineSim`, вызов `step_dynamic_levels` в
+- `config.rs`: `EngineConfig.mapFallTime` (дефолт `DEFAULT_FALL_TIME`).
+- `game.rs`: `FallModel` в `EngineSim`, вызов `step_dynamic_levels` в
   начале `step_fixed`, включение `z`/`level` по именам полей 3 и 4 схемы.
-* `nav/navigation.rs`: обрыв ведёт на `landing_level`, `LEDGE_PENALTY`
+- `nav/navigation.rs`: обрыв ведёт на `landing_level`, `LEDGE_PENALTY`
   умножается на высоту падения.
-* Тесты: 13 новых (11 в `map.rs`, 2 в `nav/navigation.rs`), 159 зелёных;
+- Тесты: 13 новых (11 в `map.rs`, 2 в `nav/navigation.rs`), 159 зелёных;
   5 новых фикстур корпуса.
-* Журнал `packages/engine/core/CHANGELOG.md` и `docs/en|ru/core.md`.
+- Журнал `packages/engine/core/CHANGELOG.md` и `docs/en|ru/core.md`.

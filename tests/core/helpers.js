@@ -39,7 +39,9 @@ export const makeCore = (overrides = {}) => {
   const GameCore = loadGameCore();
 
   return new GameCore(
-    JSON.stringify(buildCoreConfig(tanksGameConfig, { seed: 42, ...overrides })),
+    JSON.stringify(
+      buildCoreConfig(tanksGameConfig, { seed: 42, ...overrides }),
+    ),
   );
 };
 
@@ -78,7 +80,10 @@ export const makeClientCore = (overrides = {}) => {
 export const frameBuffer = core => {
   const bytes = core.frame_bytes();
 
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  );
 };
 
 /**

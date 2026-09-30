@@ -16,6 +16,7 @@ npm run sim:scenarios -- --determinism 2>&1 | grep -E "❌|failed"
 ```
 
 Всё зелёное. Ожидаемые приросты относительно базовой линии (`README.md`):
+
 - `vitest`: +2 теста: `tests/config/client.test.js`, `tests/client/parts/effects/PuffEffect.test.js`;
 - `cargo`: +1 юнит-тест в `surface.rs` и +1 в `core/tests/sim.rs`.
 
@@ -25,6 +26,7 @@ npm run sim:scenarios -- --determinism 2>&1 | grep -E "❌|failed"
 ## 7.2. Сверка изменений
 
 `git status --short` и `git diff --stat`. Изменены должны быть только файлы из этапов:
+
 - этап 1 — `src/config/client.js`, `tests/config/client.test.js`, `docs/{en,ru}/configuration.md`,
   `docs/{en,ru}/extending.md`;
 - этап 2 — `core/src/{surface,tank,tanks}.rs`, `core/src/client/{predictor,map_dynamics}.rs`, `core/tests/sim.rs`,
@@ -39,6 +41,7 @@ npm run sim:scenarios -- --determinism 2>&1 | grep -E "❌|failed"
 `core/pkg-*` в `.gitignore`. Если `.debug/` появился, его можно удалить: это отчёты раннера.
 
 Проверить:
+
 - `CHANGELOG.md → [Unreleased]`: одна новая запись, `### Fixed` про бустер (этап 2), после `### Changed`. Других
   новых записей нет;
 - каждая правка `docs/en/*` имеет пару в `docs/ru/*` и наоборот (`git diff --stat docs`);

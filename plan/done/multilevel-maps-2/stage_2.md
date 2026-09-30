@@ -28,8 +28,17 @@
 const pushLayers = (levelLayers, levelMap, level, solid, floor) => {
   for (const [layer, tiles] of Object.entries(levelLayers || {})) {
     staticData[`s${staticIndex}`] = {
-      type: 'static', spriteSheet, map: levelMap, step, layer, tiles,
-      level, solid, floor, physicsStatic, scale,
+      type: 'static',
+      spriteSheet,
+      map: levelMap,
+      step,
+      layer,
+      tiles,
+      level,
+      solid,
+      floor,
+      physicsStatic,
+      scale,
     };
     staticIndex += 1;
   }
@@ -37,8 +46,13 @@ const pushLayers = (levelLayers, levelMap, level, solid, floor) => {
 
 pushLayers(layers, map, 0, physicsStatic, []);
 for (const [key, levelData] of Object.entries(data.levels || {})) {
-  pushLayers(levelData.layers, levelData.map, Number(key),
-             levelData.walls || [], levelData.floor || []);
+  pushLayers(
+    levelData.layers,
+    levelData.map,
+    Number(key),
+    levelData.walls || [],
+    levelData.floor || [],
+  );
 }
 ```
 
@@ -68,18 +82,18 @@ physicsDynamic, levels, ramps`) — его не трогаем.
 
 ## 2.2 Строка динамики и конфиг падения
 
-* `EngineSim::build_snapshot_blocks` (`core/src/game.rs:307-322`) уже
+- `EngineSim::build_snapshot_blocks` (`core/src/game.rs:307-322`) уже
   спрашивает схему на предмет `optional_from`; научить его так же
   вычислять `with_levels` и передавать флаг в `dynamic_map_data`
   (контракт описан в этапе 1.5).
-* Валидатор схемы (`core/src/config.rs`, проверка `optionalFrom` и ширин)
+- Валидатор схемы (`core/src/config.rs`, проверка `optionalFrom` и ширин)
   обязан принять новую форму.
-* `packages/engine/src/lib/coreConfig.js` — движковая половина конфига
+- `packages/engine/src/lib/coreConfig.js` — движковая половина конфига
   получает `mapFallTime` (по умолчанию 0.35). Помнить правило файла:
   известные движковые ключи ставятся **после** `coreParams`, чтобы игра
   не могла подменить движковую часть контракта; `mapFallTime` — движковый
   ключ, а не `coreParams`.
-* Проверить симметрию `coreConfig.js` ↔ `clientCoreConfig.js` (кодревью
+- Проверить симметрию `coreConfig.js` ↔ `clientCoreConfig.js` (кодревью
   7.7 привело их к общему `flat.coreParams` — не разъехаться снова).
 
 ## 2.3 Правила контракта E4/E5
@@ -192,22 +206,22 @@ cd /Users/dmitry/Sites/my/vimp \
 
 ## Сделано
 
-* `client/main.js`: `pushLayers` получил шестой аргумент `volumes`, парт
+- `client/main.js`: `pushLayers` получил шестой аргумент `volumes`, парт
   статического слоя — поле `volume` (высота слоя в уровнях, 0 — плоский).
-* `lib/gameConfigView.js` + `lib/coreConfig.js`: `mapFallTime` в
+- `lib/gameConfigView.js` + `lib/coreConfig.js`: `mapFallTime` в
   движковой половине конфига ядра (`engine.mapFallTime`).
-* `contract/rules/e4-map-layers.js`: потолок `MAX_LEVELS = 8`, рампа
+- `contract/rules/e4-map-layers.js`: потолок `MAX_LEVELS = 8`, рампа
   сквозь плиту промежуточного уровня, высоты `volumes` (уровень 0 и
   каждый уровень), край плиты сверяется с `landing_level`, а не с землёй.
   Все 19 фикстур общего корпуса зелёные с обеих сторон.
-* `lib/capabilities.js`: `map.levelsN` (`since: '0.31.0'`);
+- `lib/capabilities.js`: `map.levelsN` (`since: '0.31.0'`);
   `contract/surface.json` пересобран (две добавленные записи).
-* Тесты: высоты и незнакомые поля карты в `scaleMapData`, открытый край
+- Тесты: высоты и незнакомые поля карты в `scaleMapData`, открытый край
   над нижней плитой (E4), обход всех уровней (E5), `mapFallTime` как
   движковый ключ (`coreConfig`). `npx eslint .` чист, `npx vitest run` —
   2318 зелёных, `cargo test --workspace` — 159 зелёных.
-* Журналы: `packages/engine/CHANGELOG.md` (`[Unreleased]`),
+- Журналы: `packages/engine/CHANGELOG.md` (`[Unreleased]`),
   `packages/engine/core/CHANGELOG.md` (`### Migration`).
-* Документация: `docs/en|ru/plugin-api.md` (capability, `volumes`,
+- Документация: `docs/en|ru/plugin-api.md` (capability, `volumes`,
   `volume` в парте, N уровней), `configuration.md` (`mapFallTime`,
   `volumes`), `debugging.md` (`dynamicLevels`).

@@ -36,6 +36,7 @@ export default class WreckScorch {
 тащить.
 
 Тела перенести из `WreckFire` без изменения формул:
+
 - конструктор = бывший `_addScorch` после проверок. Случайная текстура, поворот, `alpha = 0`, `zIndex`,
   `scale = size·sizeScale / contentSize`, `stage.addChild(sprite)`, `stage.sortChildren()`;
 - `render` = блок `if (this._scorch) { … }` из `_render`.
@@ -46,7 +47,7 @@ export default class WreckScorch {
   удаляются;
 - `_addScorch` оставляет проверки (`enabled`, ассет, `parent`, отложенность в полёте из этапа 1) и создаёт
   `new WreckScorch(this.parent, asset, { x: this._x, y: this._y, z: this._z, level: this._level,
-  sizeScale: this._sizeScale })`;
+sizeScale: this._sizeScale })`;
 - `_stepScorch(dt)` → `this._scorch?.step(dt)`;
 - в `_render` → `this._scorch?.render(camera, this._levelView)`;
 - `_scorchSettled()` → `!this._scorchPending && (!this._scorch || this._scorch.settled)`;

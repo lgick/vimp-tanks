@@ -43,7 +43,8 @@ export function createOcclusion({ getMap, cfg }) {
       return;
     }
 
-    const inside = (col, row) => col >= 0 && col < cols && row >= 0 && row < rows;
+    const inside = (col, row) =>
+      col >= 0 && col < cols && row >= 0 && row < rows;
 
     for (const [level, contributions] of tops) {
       let grid = null;
@@ -103,9 +104,10 @@ export function createOcclusion({ getMap, cfg }) {
       return null;
     }
 
-    const laneAt = index => (ramp && index >= 0 && ramp.cells[index] > 0
-      ? ramp.lanes[ramp.cells[index] - 1]
-      : null);
+    const laneAt = index =>
+      ramp && index >= 0 && ramp.cells[index] > 0
+        ? ramp.lanes[ramp.cells[index] - 1]
+        : null;
     // полоса, на которой стоит сама фара: танк на склоне светит по ней
     // как раньше, а соседние горки загораживают его свет по общим правилам
     const home = laneAt(
@@ -322,10 +324,7 @@ export function createOcclusion({ getMap, cfg }) {
               forward,
               uvOf: (px, py) => coneUv(px, py, frame),
               wallAt: (wx, wy) =>
-                Math.max(
-                  volumeAt(level, wx, wy),
-                  rampHeightAt(level, wx, wy),
-                ),
+                Math.max(volumeAt(level, wx, wy), rampHeightAt(level, wx, wy)),
               cellW,
               cellH,
               height: wash.height,

@@ -12,14 +12,14 @@ framework, the generic Rust engine crate — see the engine's own docs:
 
 ## Sections
 
-| Page | Covers |
-| --- | --- |
-| [getting-started.md](getting-started.md) | Local setup: install, Rust toolchain, building the WASM core, linking against a local engine checkout, tests |
-| [architecture.md](architecture.md) | This plugin's layout, how it plugs into the engine, the core's boundary, key invariants |
-| [gameplay.md](gameplay.md) | Gameplay: rounds, teams, stats, votes, chat commands, controls, weapons, bots, kicks |
-| [core.md](core.md) | Rust game core (`vimp-tanks-core`): layout, ABI (commands/events/frames), WASM build, tests |
-| [configuration.md](configuration.md) | This plugin's own configuration: `game.js`/`client.js` halves, auth form, sounds, snapshot schema, game data (models/weapons/maps) |
-| [extending.md](extending.md) | Adding content: new maps, weapons, sounds, client entities |
+| Page                                     | Covers                                                                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| [getting-started.md](getting-started.md) | Local setup: install, Rust toolchain, building the WASM core, linking against a local engine checkout, tests                       |
+| [architecture.md](architecture.md)       | This plugin's layout, how it plugs into the engine, the core's boundary, key invariants                                            |
+| [gameplay.md](gameplay.md)               | Gameplay: rounds, teams, stats, votes, chat commands, controls, weapons, bots, kicks                                               |
+| [core.md](core.md)                       | Rust game core (`vimp-tanks-core`): layout, ABI (commands/events/frames), WASM build, tests                                        |
+| [configuration.md](configuration.md)     | This plugin's own configuration: `game.js`/`client.js` halves, auth form, sounds, snapshot schema, game data (models/weapons/maps) |
+| [extending.md](extending.md)             | Adding content: new maps, weapons, sounds, client entities                                                                         |
 
 ## Where to start
 

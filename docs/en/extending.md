@@ -215,7 +215,7 @@ lengthen the landing pad or keep the plate away from the ramp's run.
    atmosphere, bright enough (≈ 0.35–0.45) for enemies to stay readable
    ([configuration.md](configuration.md#night-lighting-gamelighting)).
 2. Place lamps by grid cell: `lamps: [{ cell: [col, row], level, radius,
-   color, intensity, head, flicker }]`. The cell must be inside the grid and
+color, intensity, head, flicker }]`. The cell must be inside the grid and
    the level must exist. A lamp lights only its own level: a level-0 lamp
    under the bridge does not light the slab, and a bridge lamp does not
    spill off the slab. A lamp with `head: true` also gets light shafts in
@@ -347,6 +347,7 @@ Steps:
    controller itself — otherwise the sound registered in the constructor
    would never be released. A repeated `run()` is ignored: it would raise a
    second pair of effects over the first and lose the references to it.
+
 4. Register the entity in `src/config/client.js`: `parts.gameSets`
    (snapshot key → classes) and `parts.entitiesOnCanvas` (class →
    canvas).
@@ -374,7 +375,7 @@ Steps:
 1. Add an entry in `src/config/sounds.js`: `file`, `priority`, `volume`,
    optionally `loop`.
 2. Put the source file into `assets/audio-raw/` and run `npm run
-   build:assets` — `audio:process` normalizes it (ffmpeg) and emits
+build:assets` — `audio:process` normalizes it (ffmpeg) and emits
    **`.webm` and `.mp3`** (the codec list — `codecList`) into
    `dist/sounds/`, served via `assetsBase`.
 3. The `loop` flag also picks the filter chain in

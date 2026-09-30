@@ -57,11 +57,7 @@ const makeSign = (lighting, animated = new Container()) =>
   });
 
 describe('ownedBy: владелец вывески и декали', () => {
-  const items = [
-    { level: 1, layer: 1 },
-    { level: 1, layer: 2 },
-    { layer: 1 },
-  ];
+  const items = [{ level: 1, layer: 1 }, { level: 1, layer: 2 }, { layer: 1 }];
 
   it('только элементы с совпадающими (level, layer)', () => {
     expect(ownedBy(items, 1, 1)).toEqual([items[0]]);
@@ -98,7 +94,13 @@ describe('NeonSign', () => {
     expect(animated.children).toHaveLength(0);
     expect(neon.core.parent?.label).toBe('emissive-1');
     expect(addLight).toHaveBeenCalledWith(
-      expect.objectContaining({ level: 1, x: 45, y: 25, color: sign.color, radius: 80 }),
+      expect.objectContaining({
+        level: 1,
+        x: 45,
+        y: 25,
+        color: sign.color,
+        radius: 80,
+      }),
     );
   });
 
@@ -125,24 +127,27 @@ describe('NeonSign', () => {
     ['день', () => createLighting()],
     ['lighting.enabled = false', () => createLighting({ enabled: false })],
     ['нет сервиса', () => null],
-  ])('%s: addEmissive → false, вывеска в animated и видна, света нет', (name, make) => {
-    const lighting = make();
-    const addLight = lighting ? vi.spyOn(lighting, 'addLight') : null;
-    const animated = new Container();
-    const neon = makeSign(lighting, animated);
+  ])(
+    '%s: addEmissive → false, вывеска в animated и видна, света нет',
+    (name, make) => {
+      const lighting = make();
+      const addLight = lighting ? vi.spyOn(lighting, 'addLight') : null;
+      const animated = new Container();
+      const neon = makeSign(lighting, animated);
 
-    neon.update(null, null, null);
+      neon.update(null, null, null);
 
-    expect(neon.emissive).toBe(false);
-    expect(animated.children).toEqual([neon.glow, neon.core]);
-    expect(neon.core.position.x).toBe(45);
-    expect(neon.core.alpha).toBe(1);
-    expect(neon.core.visible).toBe(true);
+      expect(neon.emissive).toBe(false);
+      expect(animated.children).toEqual([neon.glow, neon.core]);
+      expect(neon.core.position.x).toBe(45);
+      expect(neon.core.alpha).toBe(1);
+      expect(neon.core.visible).toBe(true);
 
-    if (addLight) {
-      expect(addLight).not.toHaveBeenCalled();
-    }
-  });
+      if (addLight) {
+        expect(addLight).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('эмиссив: позиция по проекции уровня, мерцание в alpha', () => {
     const neon = makeSign(nightLighting());
@@ -236,7 +241,11 @@ describe('layerAnimations: сборка и освобождение', () => {
     expect(state.signs).toHaveLength(1);
 
     Ticker.shared.lastTime += 16;
-    updateLayerAnimations(state, { camera: { x: 0, y: 0 }, levelView: null, screen: null });
+    updateLayerAnimations(state, {
+      camera: { x: 0, y: 0 },
+      levelView: null,
+      screen: null,
+    });
 
     const release = destroyLayerAnimations(state);
 

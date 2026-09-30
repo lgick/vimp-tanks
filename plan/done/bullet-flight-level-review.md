@@ -96,6 +96,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 (`k ≥ 1` в обоих диапазонах, поэтому `has_floor(0) == true` на правило не влияет.)
 
 В `ray_segments`:
+
 - рядом с `current` завести `let mut prev_center: Option<[f32; 2]> = None;` с комментарием «центр предыдущей
   клетки луча (`fly_through_slabs`)»;
 - в замыкании `walk_ray_cells` сначала вычислить `center`, потом `fly`:
@@ -145,6 +146,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 ### 1.3. Предиктор: тест в `core/src/client/shot.rs`
 
 Рядом с `tracer_from_the_slope_climbs_over_the_slab` добавить `tracer_down_the_slope_stays_on_the_slab_it_flies_over`:
+
 - `apply_map(&mut shot, &layered_shot_map())` (плита уровня 1 в колонках 3..5, клетка 10) и
   `put_tank(&mut shot, bridge_tank_row(35.0, 5.0))` (чужой танк на плите, уровень 1);
 - стрелок: `RenderState { angle: std::f32::consts::PI, z: 1.3, slope_vec: [0.5, 0.0], ..render_at_level(55.0, 5.0, 1) }`.
@@ -157,6 +159,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 
 Новый тест `shot_down_the_upper_ramp_hits_a_tank_on_the_terrace` рядом с тестами `terraces_map_json()`/`terraces_cell`
 (≈ 2135+):
+
 - `core.load_map(terraces_map_json())`;
 - стрелок `1` — `terraces_cell(28.0, 21.0)`, угол `180.0` (носом на запад, кормой к подножию `rampStep`
   x 31..33); цель `2` — `terraces_cell(20.0, 21.0)`, угол `0.0`, команда 2. `steps(&mut core, 2)`, проверить
@@ -251,6 +254,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 (≈ 848–853) вызывает `turret_top_per_size()` для каждого танка в каждом сегменте.
 
 **Решение.**
+
 1. `core/src/config.rs`: после `pub struct ModelConfig { … }` добавить
    ```rust
    impl ModelConfig {
@@ -284,6 +288,7 @@ fn fly_through_slabs(levels: &MapLevels, prev: u8, raw: u8, prev_center: [f32; 2
 
 **Решение.** Сменить тип поля на `pub wall_heights: BTreeMap<u8, BTreeMap<i32, f32>>`. serde_json разбирает
 строковые ключи объекта в целые, в том числе из `serde_json::Value`. Тогда:
+
 ```rust
 pub fn wall_height(&self, level: u8, tile: i32) -> f32 {
     self.wall_heights
@@ -293,6 +298,7 @@ pub fn wall_height(&self, level: u8, tile: i32) -> f32 {
         .unwrap_or(f32::INFINITY)
 }
 ```
+
 Doc-комментарий поля: «уровень → id тайла → высота объёма в уровнях (ключи JSON — строки "0", "12", разбираются в
 числа)». Из doc метода убрать фразу «разбор ключей на лету дешёвый».
 
@@ -320,7 +326,7 @@ Doc-комментарий поля: «уровень → id тайла → вы
 3. `ImpactEffect.js`, шапка класса (≈ 12–14): «Осколки попадания в стену рождаются на высоте `startK`» →
    «Осколки попадания в стену, в грань насыпи и воздушного попадания рождаются на высоте `startK`».
 4. `core/src/bots/controller.rs`, `execute_aim_and_shoot` (≈ 583–625): блок `let Some(target_tank) =
-   game.tanks.get(&target) else { return; };` перенести в начало ветки `if let Some(levels) = game.levels`, до
+game.tanks.get(&target) else { return; };` перенести в начало ветки `if let Some(levels) = game.levels`, до
    `bullet_line`/`ray_segments`. Цели нет — нарезать луч незачем. Поведение не меняется.
 5. Прогнать prettier **только** по изменённым JS-файлам этапа (`npx prettier --write <файлы>`). Если он
    переформатирует чужие строки, откатить их и оставить только правки этапа.

@@ -42,25 +42,25 @@ const BALL_UNIT = Array.from({ length: BALL_SIDES }, (_, i) => {
 В `muzzleFlashShape` цикл шара
 
 ```js
-      const radius = config.ball.radius * layer.scale * size;
-      const points = [];
+const radius = config.ball.radius * layer.scale * size;
+const points = [];
 
-      for (let i = 0; i < BALL_SIDES; i += 1) {
-        const angle = (i / BALL_SIDES) * Math.PI * 2;
+for (let i = 0; i < BALL_SIDES; i += 1) {
+  const angle = (i / BALL_SIDES) * Math.PI * 2;
 
-        points.push(Math.cos(angle) * radius, Math.sin(angle) * radius);
-      }
+  points.push(Math.cos(angle) * radius, Math.sin(angle) * radius);
+}
 ```
 
 заменить на
 
 ```js
-      const radius = config.ball.radius * layer.scale * size;
-      const points = [];
+const radius = config.ball.radius * layer.scale * size;
+const points = [];
 
-      for (const [unitX, unitY] of BALL_UNIT) {
-        points.push(unitX * radius, unitY * radius);
-      }
+for (const [unitX, unitY] of BALL_UNIT) {
+  points.push(unitX * radius, unitY * radius);
+}
 ```
 
 `flatMap` не использовать: он аллоцирует массив на каждую вершину.
@@ -70,7 +70,7 @@ const BALL_UNIT = Array.from({ length: BALL_SIDES }, (_, i) => {
 В начале `muzzleFlashShape`, рядом с `const baseAngle = …`, объявить
 
 ```js
-  const layerColor = layer => (layer.core ? config.coreColor : config.color);
+const layerColor = layer => (layer.core ? config.coreColor : config.color);
 ```
 
 - В цикле языков `const color = layer.core ? config.coreColor : config.color;` → `const color = layerColor(layer);`.
@@ -93,24 +93,13 @@ const BALL_UNIT = Array.from({ length: BALL_SIDES }, (_, i) => {
 В `describe('PuffEffect', …)` после теста `'спрайт на клуб, завершается по самому долгому клубу'` добавить
 
 ```js
-  // поворот клуба — из внедрённого rng, а не из Math.random: эффект
-  // детерминирован в тестах
-  it('поворот спрайтов берётся из rng', () => {
-    const effect = new PuffEffect(
-      0,
-      0,
-      1,
-      0,
-      () => {},
-      assets,
-      impactSmoke,
-      fixed(0.5),
-    );
+// поворот клуба — из внедрённого rng, а не из Math.random: эффект
+// детерминирован в тестах
+it('поворот спрайтов берётся из rng', () => {
+  const effect = new PuffEffect(0, 0, 1, 0, () => {}, assets, impactSmoke, fixed(0.5));
 
-    effect.sprites.forEach(sprite =>
-      expect(sprite.rotation).toBeCloseTo(Math.PI, 10),
-    );
-  });
+  effect.sprites.forEach(sprite => expect(sprite.rotation).toBeCloseTo(Math.PI, 10));
+});
 ```
 
 `fixed`, `assets` и `impactSmoke` в файле уже объявлены или импортированы (стр. 7–13). С `Math.random` тест упал бы.

@@ -322,7 +322,10 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
   // --- маски этажей ---
 
   // все карты освещённости карты: обычные и крыш
-  const allLevelMaps = () => [...map.levels.values(), ...map.roofLevels.values()];
+  const allLevelMaps = () => [
+    ...map.levels.values(),
+    ...map.roofLevels.values(),
+  ];
 
   // вклады объёмов по уровням: level -> [{ cells, volume }]
   const volumeTops = () => volumes?.levels() ?? new Map();
@@ -492,7 +495,14 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       return null;
     }
 
-    const view = projectLight(light.x, light.y, light.z ?? light.level, camera, stage, shear);
+    const view = projectLight(
+      light.x,
+      light.y,
+      light.z ?? light.level,
+      camera,
+      stage,
+      shear,
+    );
     // раскладка текстуры — та же, что у вееров фар и света на клиньях
     // (`frameOf`), в масштабе проекции источника
     const frame = frameOf(light, asset);
@@ -572,12 +582,17 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       // подножия рамп, ведущих на уровни источника. Уровень, в чью карту
       // источник уже светит (танк на рампе — `levels [0, 1]`), не
       // получает его второй раз
-      const feet = spill > 0
-        ? own.flatMap(level => rampTargets.get(level) || [])
-            .filter(level => !own.includes(level))
-        : [];
+      const feet =
+        spill > 0
+          ? own
+              .flatMap(level => rampTargets.get(level) || [])
+              .filter(level => !own.includes(level))
+          : [];
 
-      if (count >= cfg.maxLights || (levels.length === 0 && feet.length === 0)) {
+      if (
+        count >= cfg.maxLights ||
+        (levels.length === 0 && feet.length === 0)
+      ) {
         return;
       }
 
@@ -652,7 +667,14 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
           ?.ramps.filter(lane => own.includes(lane.to));
 
         if (
-          rampLights.push(perRamp, level, lanes, light, item, item.alpha * spill)
+          rampLights.push(
+            perRamp,
+            level,
+            lanes,
+            light,
+            item,
+            item.alpha * spill,
+          )
         ) {
           count += 1;
         }
@@ -710,11 +732,7 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
       levelMap.layout(perLevel.get(levelMap.level) || []);
 
       if (!levelMap.roof) {
-        levelMap.layoutWashes(
-          perWash.get(levelMap.level) || [],
-          camera,
-          shear,
-        );
+        levelMap.layoutWashes(perWash.get(levelMap.level) || [], camera, shear);
       }
       // у карты крыш рамп нет: их свет — только в обычной карте подножия
       levelMap.layoutRampLights(
@@ -736,7 +754,12 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
     }
 
     // нарисованная точка игрока: крыша закрывает её, а не мировую
-    const player = offsetPoint(levelView.x, levelView.y, camera, levelView.z * shear);
+    const player = offsetPoint(
+      levelView.x,
+      levelView.y,
+      camera,
+      levelView.z * shear,
+    );
 
     for (const levelMap of allLevelMaps()) {
       if (levelMap.level < 1) {
@@ -793,7 +816,14 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         continue;
       }
 
-      const view = projectLight(lamp.x, lamp.y, lamp.level, camera, stage, shear);
+      const view = projectLight(
+        lamp.x,
+        lamp.y,
+        lamp.level,
+        camera,
+        stage,
+        shear,
+      );
 
       sprite.position.set(view.x, view.y);
       sprite.scale.set(view.scale);
@@ -1077,7 +1107,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         return false;
       }
 
-      const camera = levelView ? levelView.camera() : cameraCenter(stage, renderer);
+      const camera = levelView
+        ? levelView.camera()
+        : cameraCenter(stage, renderer);
 
       if (!camera) {
         return false;
@@ -1116,7 +1148,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
 
       return (
         isNight() &&
-        Boolean(shafts?.enabled && shafts.shadows && shafts.maxShadowCasters > 0)
+        Boolean(
+          shafts?.enabled && shafts.shadows && shafts.maxShadowCasters > 0,
+        )
       );
     },
 
@@ -1129,7 +1163,9 @@ export function createLighting(cfg = lightingConfig, deps = {}) {
         return;
       }
 
-      const camera = levelView ? levelView.camera() : cameraCenter(stage, renderer);
+      const camera = levelView
+        ? levelView.camera()
+        : cameraCenter(stage, renderer);
       const screen = renderer.screen;
 
       if (!camera || !screen) {
