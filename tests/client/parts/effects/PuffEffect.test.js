@@ -38,6 +38,15 @@ describe('rollPuffs', () => {
   it('count 0 — клубов нет', () => {
     expect(rollPuffs({ ...impactSmoke, count: 0 }, 1, 0)).toEqual([]);
   });
+
+  it('поворот спрайта — из rng, в пределах полного оборота', () => {
+    const half = rollPuffs(impactSmoke, -1, 0, fixed(0.5));
+
+    half.forEach(puff => expect(puff.rotation).toBeCloseTo(Math.PI, 10));
+    rollPuffs(impactSmoke, -1, 0, fixed(0)).forEach(puff =>
+      expect(puff.rotation).toBe(0),
+    );
+  });
 });
 
 describe('puffState', () => {
@@ -102,9 +111,9 @@ describe('PuffEffect', () => {
     expect(effect.sprites.every(sprite => !sprite.visible)).toBe(true);
   });
 
-  // поворот клуба — из внедрённого rng, а не из Math.random: эффект
-  // детерминирован в тестах
-  it('поворот спрайтов берётся из rng', () => {
+  // поворот спрайта — из раскладки клуба (внедрённый rng, не Math.random):
+  // эффект детерминирован в тестах
+  it('спрайт повёрнут на поворот своего клуба', () => {
     const effect = new PuffEffect(
       0,
       0,
@@ -116,8 +125,9 @@ describe('PuffEffect', () => {
       fixed(0.5),
     );
 
-    effect.sprites.forEach(sprite =>
-      expect(sprite.rotation).toBeCloseTo(Math.PI, 10),
-    );
+    effect.sprites.forEach((sprite, i) => {
+      expect(sprite.rotation).toBe(effect.puffs[i].rotation);
+      expect(sprite.rotation).toBeCloseTo(Math.PI, 10);
+    });
   });
 });

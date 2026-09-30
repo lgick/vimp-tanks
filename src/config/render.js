@@ -398,9 +398,6 @@ const flameLayers = [
 // долю
 const flameShrink = 0.3;
 
-// цвет ударной волны вспышек
-const shockRingColor = 0xffe2b0;
-
 // трассер выстрела hitscan (`src/client/parts/effects/shot/TracerEffect.js`).
 // Длины и ширины — мировые единицы, время — мс
 export const tracer = {
@@ -479,12 +476,10 @@ export const muzzleFlash = {
   // ореолом вокруг танка
   ring: null,
 
-  // мягкий край: те же языки, нарисованные слоями — шире и тусклее снаружи,
-  // уже и ярче внутри. `core: true` — слой цвета ядра
+  // мягкий край слоями — общий с разрывом снаряда (flameLayers)
   layers: flameLayers,
 
-  // к концу вспышка скорее гаснет, чем сжимается: размер падает только на
-  // эту долю
+  // доля сжатия к концу вспышки — общая с разрывом снаряда (flameShrink)
   shrink: flameShrink,
 
   // те же цвета, что у трассера (phosphorColors)
@@ -509,7 +504,7 @@ export const impactFlash = {
     width: 0.8,
     alpha: 0.3,
     duration: 150,
-    color: shockRingColor,
+    color: 0xffe2b0,
   },
   layers: flameLayers,
   shrink: flameShrink,

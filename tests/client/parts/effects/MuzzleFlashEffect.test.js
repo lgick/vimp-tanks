@@ -132,6 +132,26 @@ describe('muzzleFlashShape', () => {
 
     expect(polygons).toHaveLength(perLayer * muzzleFlash.layers.length);
   });
+
+  // у `impactFlash` нет `sideWidth`: включи ему `sideLength` без ширины —
+  // вершины боковых языков станут NaN, и Pixi молча ничего не нарисует
+  it('вершины вспышек из render.js — конечные числа', () => {
+    for (const config of [muzzleFlash, impactFlash]) {
+      const polygons = muzzleFlashShape({
+        dirX: 1,
+        dirY: 0,
+        t: 0.5,
+        roll: rollMuzzleFlash(config, fixed(0.5)),
+        config,
+      });
+
+      expect(polygons.length).toBeGreaterThan(0);
+
+      for (const { points } of polygons) {
+        expect(points.every(Number.isFinite)).toBe(true);
+      }
+    }
+  });
 });
 
 // у дула кольца нет (`muzzleFlash.ring: null`) — кольцо проверяется на

@@ -1417,8 +1417,8 @@ the client's `rigid_body::integrate` after it — moves a body with the velocity
 `1 + linear·dt` is exactly the velocity that moved the body over the previous
 step. With plain `p − v·dt` the look-back fell short by `v·linear·dt²`
 (≈ 0.03 units at 130 u/s), and a body whose previous centre lay in that strip
-before the plate's edge lost the impulse — about 2.5 % of entries, and every
-straight full-throttle run from the `downtown` respawn `spawn(9, 35)`. A latch was rejected: a frame carries the position after
+before the plate's edge lost the impulse — a `linear·dt` share of the entry
+phases (2.5 % with damping 3 at 120 Hz), whatever the speed. A latch was rejected: a frame carries the position after
 integration, and nothing in it tells whether the host has already judged the
 entry at that step; map bodies have no history at all, and the own tank's
 history does not cover the frame after `reset` or an RTT jump. A function of

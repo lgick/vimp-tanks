@@ -47,6 +47,10 @@ const BALL_UNIT = Array.from({ length: BALL_SIDES }, (_, i) => {
   return [Math.cos(angle), Math.sin(angle)];
 });
 
+// цвет слоя: `core: true` — цвет ядра, иначе цвет пламени
+const layerColor = (layer, config) =>
+  layer.core ? config.coreColor : config.color;
+
 /**
  * Полная длительность вспышки, мс: языки или ударное кольцо — что дольше.
  *
@@ -107,7 +111,6 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
   const glow = life * life;
   const size = 1 - config.shrink * (1 - life);
   const baseAngle = Math.atan2(dirY, dirX);
-  const layerColor = layer => (layer.core ? config.coreColor : config.color);
   const polygons = [];
 
   // язык: треугольник от дула вдоль угла `angle`
@@ -128,7 +131,7 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
 
   for (const layer of config.layers) {
     const scale = layer.scale * size;
-    const color = layerColor(layer);
+    const color = layerColor(layer, config);
     const alpha = layer.alpha * glow;
 
     if (alpha <= 0) {
@@ -177,7 +180,7 @@ export function muzzleFlashShape({ dirX, dirY, t, roll, config }) {
 
       polygons.push({
         points,
-        color: layerColor(layer),
+        color: layerColor(layer, config),
         alpha,
       });
     }

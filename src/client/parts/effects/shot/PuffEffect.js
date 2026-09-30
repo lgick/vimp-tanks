@@ -4,15 +4,16 @@ import { clamp } from 'vimp-engine/lib/math.js';
 import { impactSmoke as impactSmokeConfig } from '../../../../config/render.js';
 
 /**
- * Клубы одного разрыва: направление, скорость, размер, время жизни и цвет
- * каждого — случайные в пределах конфига. Считаются раз при попадании.
+ * Клубы одного разрыва: направление, скорость, размер, время жизни, цвет и
+ * поворот спрайта каждого — случайные в пределах конфига. Считаются раз при
+ * попадании.
  *
  * @param {object} config  `impactSmoke` из src/config/render.js
  * @param {number} dirX    направление выброса (к стрелку), единичный вектор
  * @param {number} dirY
  * @param {() => number} rng  0..1
  * @returns {{ vx: number, vy: number, size: number, lifetime: number,
- *   color: number }[]}
+ *   color: number, rotation: number }[]}
  */
 export function rollPuffs(config, dirX, dirY, rng = Math.random) {
   const puffs = [];
@@ -34,6 +35,7 @@ export function rollPuffs(config, dirX, dirY, rng = Math.random) {
       size: range(config.size, rng()),
       lifetime: range(config.lifetime, rng()),
       color: config.colors[Math.floor(rng() * config.colors.length)],
+      rotation: rng() * Math.PI * 2,
     });
   }
 
@@ -105,7 +107,7 @@ export default class PuffEffect extends BaseEffect {
 
       sprite.anchor.set(0.5);
       sprite.tint = puff.color;
-      sprite.rotation = rng() * Math.PI * 2;
+      sprite.rotation = puff.rotation;
       this.addChild(sprite);
 
       return sprite;
