@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.14] - 2026-09-30
+
 ### Changed
 
 - Bots kill more slowly: the `normal` and `hard` presets react later, aim
