@@ -140,6 +140,18 @@ describe('clientConfig.componentDependencies (src/config/client.js)', () => {
     names.forEach(name => expect(bakers[name]).toBeTypeOf('function'));
   });
 
+  // клуб дыма разрыва: ассеты раздаются по компоненту — без своей записи
+  // ShotEffect молча остаётся без дыма, и ошибок при этом нет
+  it('ShotEffect получает текстуру дыма разрыва', () => {
+    const names = clientConfig.parts.bakedAssets.vimp
+      .filter(asset => asset.component === 'ShotEffect')
+      .map(asset => asset.name);
+
+    expect(names).toContain('impactParticleTexture');
+    expect(names).toContain('smokeTexture');
+    names.forEach(name => expect(bakers[name]).toBeTypeOf('function'));
+  });
+
   // только свой танк пишет в levelView; свой танк и свой выстрел вдобавок
   // звучат непространственно (spatial: false) — источник на слушателе HRTF
   // сворачивает в гул

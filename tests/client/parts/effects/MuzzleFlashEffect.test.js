@@ -133,12 +133,16 @@ describe('muzzleFlashShape', () => {
   });
 });
 
+// у дула кольца нет (`muzzleFlash.ring: null`) — кольцо проверяется на
+// вспышке с кольцом разрыва
+const withRing = { ...muzzleFlash, ring: impactFlash.ring };
+
 describe('muzzleRingShape', () => {
-  const { ring } = muzzleFlash;
+  const { ring } = withRing;
 
   it('растёт быстро в начале и гаснет по квадрату', () => {
-    const start = muzzleRingShape(0, muzzleFlash);
-    const half = muzzleRingShape(ring.duration / 2, muzzleFlash);
+    const start = muzzleRingShape(0, withRing);
+    const half = muzzleRingShape(ring.duration / 2, withRing);
 
     expect(start.radius).toBe(0);
     expect(start.alpha).toBeCloseTo(ring.alpha, 6);
@@ -149,13 +153,13 @@ describe('muzzleRingShape', () => {
   });
 
   it('после duration и без ring — null', () => {
-    expect(muzzleRingShape(ring.duration, muzzleFlash)).toBeNull();
-    expect(muzzleRingShape(0, { ...muzzleFlash, ring: null })).toBeNull();
+    expect(muzzleRingShape(ring.duration, withRing)).toBeNull();
+    expect(muzzleRingShape(0, muzzleFlash)).toBeNull();
   });
 
   it('muzzleFlashLife — по более долгой из частей', () => {
-    expect(muzzleFlashLife(muzzleFlash)).toBe(
-      Math.max(muzzleFlash.duration, ring.duration),
+    expect(muzzleFlashLife(withRing)).toBe(
+      Math.max(withRing.duration, ring.duration),
     );
     expect(muzzleFlashLife({ duration: 50, ring: null })).toBe(50);
   });
@@ -169,17 +173,17 @@ describe('MuzzleFlashEffect', () => {
       1,
       0,
       () => {},
-      muzzleFlash,
+      withRing,
       fixed(0.5),
     );
 
-    flash._update(muzzleFlash.duration);
+    flash._update(withRing.duration);
 
     // языков уже нет, кольцо ещё рисуется
     expect(flash.isComplete).toBe(false);
     expect(flash.graphics.bounds.width).toBeGreaterThan(0);
 
-    flash._update(muzzleFlash.ring.duration);
+    flash._update(withRing.ring.duration);
     expect(flash.isComplete).toBe(true);
   });
 

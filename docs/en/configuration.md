@@ -181,7 +181,11 @@ engine's `buildClientConfig.js` with its own `clientDefaults.js`.
   the tank, the tank shadow, the bomb, track marks, radar
   blips. Each entry: `name`
   (texture id), `component` (who owns it), `params` (generation
-  parameters). `explosionTexture`, `smokeTexture`, `dustTexture` and
+  parameters). Assets are handed out per `component`: a part receives only
+  the entries of its own component, so a texture two parts need is declared
+  twice — `smokeTexture` has one entry for `Smoke` and one for `ShotEffect`
+  (the hit puff, `PuffEffect`), both with the same `params`
+  (`smokeTextureParams`). `explosionTexture`, `smokeTexture`, `dustTexture` and
   `impactParticleTexture` are baked by a single `blurredCircleTexture`
   baker and differ only by `params` (`radius`, `blur`, `quality`,
   `color`); it returns `{ texture, contentSize }`, where `contentSize` is
@@ -372,14 +376,14 @@ and brake have their own strips.
 | `spikes`, `length`, `width`, `spread`, `jitter` | Irregular flame tongues forward: how many, length and base width (world units), angular spread around the shot (rad) and the length spread (share). Angle and length are random per shot and fixed for its lifetime — the shape does not flicker |
 | `sideLength`, `sideWidth` | The two side jets of the muzzle brake (also with a random length); `sideLength: 0` — none |
 | `ball` | `{ radius }` — the fireball at the muzzle: a circle drawn in the same `layers` as the tongues. `null` — none |
-| `ring` | `{ radius, width, alpha, duration, color }` — the blast wave: a ring grows from the muzzle to `radius` over `duration` ms (fast at first) and fades quadratically. It outlives the tongues: the flash ends by the longer of `duration` and `ring.duration`. `null` — none |
+| `ring` | `{ radius, width, alpha, duration, color }` — the blast wave: a ring grows from the muzzle to `radius` over `duration` ms (fast at first) and fades quadratically. It outlives the tongues: the flash ends by the longer of `duration` and `ring.duration`. `null` — none (the default at the muzzle: there the ring read as a halo around the tank) |
 | `layers` | Soft edge without textures: the same tongues drawn in layers `{ scale, alpha, core }` — wider and dimmer outside, narrower and brighter inside; `core` — the layer in `coreColor` |
 | `shrink` | The flash fades rather than shrinks: brightness falls quadratically, the size only by this share |
 | `color`, `coreColor` | Flame and core colours, the same as the tracer's (additive) |
 
 | `impactFlash` | Meaning |
 | --- | --- |
-| all fields | The shell burst at a `w1` hit point — the same `MuzzleFlashEffect` with the same fields as `muzzleFlash`, but the tongues fan back toward the shooter (a wide `spread`), without side jets and with a smaller ring. It stands at the visible end of the tracer: on a wall's face at barrel height, on a ramp slope, or — if a crate moved during the flight — at the recomputed hit point, like the debris. While it runs over a wall face turned to the camera, the shot effect stays above the occluder. The night light at the hit point is `lighting.flash.hit` |
+| all fields | The shell burst at a `w1` hit point — the same `MuzzleFlashEffect` with the same fields as `muzzleFlash`, but the tongues fan back toward the shooter (a wide `spread`), without side jets and with a shock ring. It stands at the visible end of the tracer: on a wall's face at barrel height, on a ramp slope, or — if a crate moved during the flight — at the recomputed hit point, like the debris. While it runs over a wall face turned to the camera, the shot effect stays above the occluder. The night light at the hit point is `lighting.flash.hit` |
 
 | `impactSmoke` | Meaning |
 | --- | --- |

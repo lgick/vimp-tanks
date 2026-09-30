@@ -19,8 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - The `w1` shot looks like a tank gun rather than a pistol: the muzzle
   flash is about twice as long and lasts longer, with stronger muzzle-brake
-  jets, a fireball at the muzzle and an expanding shock ring
-  (`muzzleFlash.ball`, `muzzleFlash.ring`); the night shot flash is wider and
+  jets and a fireball at the muzzle (`muzzleFlash.ball`); the night shot flash is wider and
   brighter (`lighting.flash.shot`); the tracer stays a thin line whose tail
   now narrows toward the muzzle (`tracer.taper`).
 - Tank is twice as slow (`maxForwardSpeed` 130, `maxReverseSpeed` −65) and the
@@ -41,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `src/data/models.js`).
 - Hitscan bullet (`w1`) hit impulse lowered 5× (`impulseMagnitude` 1500000) so
   a hit no longer spins the tank around (`src/data/weapons.js`).
+
+### Fixed
+
+- A boost plate no longer skips its push for some entry positions — among
+  them every straight full-throttle run from the `downtown` respawn in front
+  of the parking-roof ramp: the entry check now accounts for the body's
+  linear damping when it looks one step back (`surface::boost_dv`).
 
 ## [0.22.14] - 2026-09-30
 

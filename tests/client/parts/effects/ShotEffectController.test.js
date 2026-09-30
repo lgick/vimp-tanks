@@ -319,8 +319,8 @@ describe('ShotEffectController: вспышка у дула', () => {
     // шагает отдельно
     expect(controller._isDestroyed).toBe(false);
 
-    // языки уже погасли, ударное кольцо ещё идёт
-    controller.flash._update(controller.flash.config.duration);
+    // языки ещё горят
+    controller.flash._update(controller.flash.config.duration / 2);
     expect(controller._isDestroyed).toBe(false);
 
     controller.flash._update(muzzleFlashLife(controller.flash.config));

@@ -622,6 +622,7 @@ impl Tank {
                 position.y,
                 start_velocity.x,
                 start_velocity.y,
+                model.damping.linear,
                 dt,
             );
 

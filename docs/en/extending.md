@@ -438,7 +438,12 @@ The live tank and its wreck are a low-poly model (`src/client/tank3d/`):
    `explosionTexture`/`smokeTexture`/`impactParticleTexture` all map to
    `blurredCircleTexture` in `bakers/index.js`, differing only by
    `params`. A shape of its own gets a baker of its own — that is what
-   `tankShadowTexture` (the hull silhouette) is.
+   `tankShadowTexture` (the hull silhouette) is. The entry's `component`
+   decides who gets the texture: assets are handed out per component, so a
+   texture another part already bakes still needs an entry of your own (the
+   same `name`, your `component`). Without it the part silently gets
+   `undefined` — the engine's `bakedAssets` contract checks only that the
+   name has a baker.
 4. If it needs services (`renderer`, `soundManager`), add the class to
    `componentDependencies`.
 

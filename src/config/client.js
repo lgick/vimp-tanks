@@ -10,6 +10,15 @@ import {
   animations,
 } from './render.js';
 
+// белый размытый круг дыма: один рецепт для дыма танка (`Smoke`) и клуба
+// разрыва снаряда (`ShotEffect` → PuffEffect)
+const smokeTextureParams = {
+  radius: 3, // базовый радиус частицы дыма
+  blur: 1, // размытие для мягкости
+  quality: 40, // проходов размытия
+  color: 0xffffff, // цвет для последующего tint'а
+};
+
 // Игровая половина клиентского CONFIG_DATA: сущности рендера, канвасы,
 // keyset игрока, схемы panel/stat, тексты chat/vote/gameInform. Движковые
 // дефолты — src/config/clientDefaults.js; merge выполняет buildClientConfig
@@ -66,6 +75,13 @@ export default {
           },
         },
         {
+          // клуб дыма разрыва (`PuffEffect`): ассеты раздаются по компоненту,
+          // поэтому ShotEffect получает свою запись той же текстуры
+          name: 'smokeTexture',
+          component: 'ShotEffect',
+          params: smokeTextureParams,
+        },
+        {
           name: 'funnelTexture',
           component: 'ExplosionEffect',
           params: {
@@ -84,12 +100,7 @@ export default {
         {
           name: 'smokeTexture',
           component: 'Smoke',
-          params: {
-            radius: 3, // базовый радиус частицы дыма
-            blur: 1, // размытие для мягкости
-            quality: 40, // проходов размытия
-            color: 0xffffff, // цвет для последующего tint'а
-          },
+          params: smokeTextureParams,
         },
         {
           name: 'tankTexture',

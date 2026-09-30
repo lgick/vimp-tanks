@@ -432,7 +432,12 @@ npm run dev                   # глазами: room.map в src/standalone.js
    `explosionTexture`/`smokeTexture`/`impactParticleTexture` в
    `bakers/index.js` указывают на `blurredCircleTexture` и различаются
    только `params`. У своей фигуры — свой baker: таков
-   `tankShadowTexture` (силуэт корпуса).
+   `tankShadowTexture` (силуэт корпуса). Кому достанется текстура, решает
+   `component` записи: ассеты раздаются по компонентам, поэтому для
+   текстуры, которую уже печёт другая часть, всё равно нужна своя запись
+   (то же `name`, свой `component`). Без неё часть молча получит
+   `undefined` — контракт движка `bakedAssets` проверяет только, что у
+   имени есть baker.
 4. Если нужны сервисы (`renderer`, `soundManager`), добавьте класс в
    `componentDependencies`.
 

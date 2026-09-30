@@ -1404,12 +1404,21 @@ only by the idle braking (`brakingFactor` 0.3 against damping 3 —
 **The boost entry has no state.** Entering a plate is a pure function of the body's
 current position and velocity. The impulse
 `dir · min(boostDv, max(0, boostMaxSpeed − v·dir))` fires if the body is not
-airborne, the centre cell is a boost with direction `dir`, the cell
-`p − v·dt` on the same level is NOT a boost with the same `dir` (off the grid
-counts as "not a boost"), and `v·dir ≥ minEntrySpeed`. The rule is "not a boost
-with the same dir", not "another cell": crossing the cells of one plate (a 2×3
-plate) gives one impulse, while neighbouring plates with different `dir` are
-different boosts. A latch was rejected: a frame carries the position after
+airborne, the centre cell is a boost with direction `dir`, the cell of the
+previous step `p − v·(1 + linear·dt)·dt` on the same level is NOT a boost with
+the same `dir` (off the grid counts as "not a boost"), and
+`v·dir ≥ minEntrySpeed`. The rule is "not a boost with the same dir", not
+"another cell": crossing the cells of one plate (a 2×3 plate) gives one
+impulse, while neighbouring plates with different `dir` are different boosts.
+The factor `1 + linear·dt` (`linear` is the body's own linear damping: the tank
+model's `damping.linear`, a map body's damping) is there because Rapier — and
+the client's `rigid_body::integrate` after it — moves a body with the velocity
+*before* damping and stores the damped one: the step-start velocity times
+`1 + linear·dt` is exactly the velocity that moved the body over the previous
+step. With plain `p − v·dt` the look-back fell short by `v·linear·dt²`
+(≈ 0.03 units at 130 u/s), and a body whose previous centre lay in that strip
+before the plate's edge lost the impulse — about 2.5 % of entries, and every
+straight full-throttle run from the `downtown` respawn `spawn(9, 35)`. A latch was rejected: a frame carries the position after
 integration, and nothing in it tells whether the host has already judged the
 entry at that step; map bodies have no history at all, and the own tank's
 history does not cover the frame after `reset` or an RTT jump. A function of
@@ -1464,7 +1473,8 @@ it — `tank_mix` (the angle from the body), `apply_slick` over that mix,
 so any read after the lateral impulse or the thrust is already different;
 `step_throttle`; `v_rel`; the lateral impulse `lateral_dv_on`;
 `drive_accel_on`; the drag impulse, then the boost impulse (`boost_dv` gets
-`(vx0, vy0)` and the step's `dt`, both for `minEntrySpeed` and for `prev`;
+`(vx0, vy0)`, the model's `damping.linear` and the step's `dt`, both for
+`minEntrySpeed` and for `prev`;
 when it fires, `start_boost_hold`), then the hold's damping compensation
 `boost_damping_dv(v0)`; `engine_load` from the relative forward speed (with no gas on a belt the load
 stays `0`, the engine does not howl); the turn

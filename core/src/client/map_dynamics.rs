@@ -487,7 +487,8 @@ impl PredictedBodies for MapDynamics {
             let falling = body.falling.is_some();
             let (mix, kind) = surface::body_mix(map, body.level, falling, x, y);
             let (drag_x, drag_y) = surface::body_dv(mix, kind, ctx.rules, vx, vy, dt);
-            let (boost_x, boost_y) = surface::boost_dv(map, body.level, falling, x, y, vx, vy, dt);
+            let (boost_x, boost_y) =
+                surface::boost_dv(map, body.level, falling, x, y, vx, vy, body.body.linear_damping, dt);
 
             body.body.vx += drag_x + boost_x;
             body.body.vy += drag_y + boost_y;

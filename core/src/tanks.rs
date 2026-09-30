@@ -1569,8 +1569,17 @@ impl TanksSim {
             let vel = body.linvel();
             let (mix, kind) = surface::body_mix(surfaces, state.level, falling, center.x, center.y);
             let (drag_x, drag_y) = surface::body_dv(mix, kind, &self.surface_rules, vel.x, vel.y, dt);
-            let (boost_x, boost_y) =
-                surface::boost_dv(surfaces, state.level, falling, center.x, center.y, vel.x, vel.y, dt);
+            let (boost_x, boost_y) = surface::boost_dv(
+                surfaces,
+                state.level,
+                falling,
+                center.x,
+                center.y,
+                vel.x,
+                vel.y,
+                body.linear_damping(),
+                dt,
+            );
             let dv = Vector::new(drag_x + boost_x, drag_y + boost_y);
 
             if dv.x != 0.0 || dv.y != 0.0 {

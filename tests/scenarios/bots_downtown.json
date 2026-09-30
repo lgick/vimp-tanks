@@ -7,7 +7,7 @@
     { "tick": 0, "op": "join", "who": "p1", "team": "team1" },
     { "tick": 60, "op": "chat", "who": "p1", "text": "/bot 7" }
   ],
-  "unusedSnapshotKeys": ["c2"],
+  "unusedSnapshotKeys": ["c2", "w2", "w2e"],
   "divergence": null,
   "ticks": 7200,
   "dumpTicks": [1800, 3600, 5400, 7200]

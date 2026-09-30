@@ -288,7 +288,7 @@ the snapshot schema or the panel. The scenarios:
 | `bridge.json` | `overpass`: up the west ramp, across the bridge in the middle lane (the outer ones hold boxes), coasting down the east ramp — `level` goes 0 → 1 → 0 in the dumps |
 | `fall.json` | `overpass`: off a gap in the railings — `Airborne`, `z` down to 0, landing at level 0 |
 | `crosslevel.json` | `overpass`: two players on different levels, hitscan across the levels and a bomb on the slab that does not touch the tank underneath |
-| `selfblast.json` | the same run carried on: the player switches to `w2` and drops a bomb under himself — the blast throws him ~50 units |
+| `selfblast.json` | the same run carried on: the player switches to `w2` and drops a bomb under himself — the blast throws him ~30 units |
 | `bots_bridge.json` | `overpass`: a player plus `/bot 2` over a long run — bots use the ramp and do not get stuck (invariants 10/11) |
 | `terraces_climb.json` | `terraces`: up the steep 0 → 2 run in one drive and back down in reverse — `z` runs 0 → 2 in the dumps |
 | `terraces_backside.json` | `terraces`: two players enter the same run through the wrong side — from the passage under the slab and from the flank; neither is lifted |

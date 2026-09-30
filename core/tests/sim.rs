@@ -3088,6 +3088,31 @@ fn boost_fires_once_per_entry() {
     assert_eq!(count_boosts(&mut core, 1, 60), 0, "стоянка на плите — ни одного");
 }
 
+#[test]
+fn boost_fires_for_every_entry_phase() {
+    // фаза въезда — где стоял центр на шаге до плиты. Проекция `p − v·dt` без
+    // поправки на демпфирование недолетала до прошлой позиции на v·linear·dt²
+    // (≈0.05 при 260), и въезд из этой полосы перед кромкой терял импульс.
+    // 100 стартов с шагом 0.024 покрывают больше одного шага пути (≈2.2).
+    // Бустер с удержанием: импульс 220 при любой фазе много выше порога 60
+    let plate = |x: usize, y: usize| if (10..13).contains(&x) && (10..12).contains(&y) { 47 } else { 0 };
+    let map = surface_map_json(40, plate, boost_game(47, "east"));
+    let missed: Vec<f32> = (0..100)
+        .map(|i| 200.0 + i as f32 * 0.024)
+        .filter(|&x| {
+            let mut core = make_core_with_held_boost();
+
+            core.load_map(&map).unwrap();
+            core.spawn_actor(1, "m1", 1, x, 336.0, 0.0).unwrap();
+            core.apply_input(1, 1, "down", "forward");
+
+            count_boosts(&mut core, 1, 150) != 1
+        })
+        .collect();
+
+    assert!(missed.is_empty(), "въезд без ровно одного импульса со старта x = {missed:?}");
+}
+
 /// Ядро с бустером удержания; общий конфиг теста держит старую плиту без
 /// удержания — проверку обратной совместимости. Числа — под скорость
 /// фикстуры 260 и дают то же, что `src/config/game.js` при 130: импульс

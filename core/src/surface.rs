@@ -577,12 +577,22 @@ pub fn body_dv(
 /// истории дают тот же результат, что хост.
 ///
 /// Импульс, если тело не в полёте, клетка центра — бустер с направлением
-/// `dir`, клетка `p − v·dt` того же уровня — НЕ бустер с тем же `dir` (вне
-/// сетки — не бустер) и `v·dir ≥ minEntrySpeed`. Условие «не бустер с тем же
-/// `dir`», а не «другая клетка»: переход между клетками одной плиты не
-/// должен давать повторный импульс.
+/// `dir`, клетка прошлого шага `p − v·(1 + linear_damping·dt)·dt` того же
+/// уровня — НЕ бустер с тем же `dir` (вне сетки — не бустер) и
+/// `v·dir ≥ minEntrySpeed`. Условие «не бустер с тем же `dir`», а не «другая
+/// клетка»: переход между клетками одной плиты не должен давать повторный
+/// импульс.
 ///
-/// `vx`/`vy` — скорость НАЧАЛА шага, до всех импульсов шага.
+/// Множитель `1 + linear_damping·dt`: Rapier (и клиентский
+/// `rigid_body::integrate` движка) сдвигает тело скоростью ДО демпфирования,
+/// а хранит задемпфированную — скорость начала шага, умноженная на него, и
+/// есть скорость, с которой тело прошло прошлый шаг. Без множителя проекция
+/// недолетала на `v·linear_damping·dt²` (≈0.03 при 130 ед/с), и въезд с
+/// прошлым центром в этой полосе перед кромкой терял импульс.
+///
+/// `vx`/`vy` — скорость НАЧАЛА шага, до всех импульсов шага;
+/// `linear_damping` — линейное демпфирование самого тела (модель танка,
+/// тело карты).
 #[allow(clippy::too_many_arguments)]
 pub fn boost_dv(
     map: &SurfaceMap,
@@ -592,6 +602,7 @@ pub fn boost_dv(
     y: f32,
     vx: f32,
     vy: f32,
+    linear_damping: f32,
     dt: f32,
 ) -> (f32, f32) {
     if airborne {
@@ -603,8 +614,10 @@ pub fn boost_dv(
     else {
         return (0.0, 0.0);
     };
+    // смещение прошлого шага: скорость до демпфирования (см. выше)
+    let back = (1.0 + linear_damping * dt) * dt;
     let from_same_plate = matches!(
-        map.sample(level, x - vx * dt, y - vy * dt),
+        map.sample(level, x - vx * back, y - vy * back),
         Some((_, SurfaceKind::Boost { .. }, prev_dir)) if prev_dir == dir
     );
 
@@ -982,16 +995,30 @@ mod tests {
         let y = 25.0;
 
         // прошлая клетка — асфальт: въезд
-        assert_eq!(boost_dv(&map, 0, false, 30.5, y, 120.0, 0.0, DT), (160.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 30.5, y, 120.0, 0.0, 0.0, DT), (160.0, 0.0));
         // прошлая клетка — та же плита: повторного импульса нет
-        assert_eq!(boost_dv(&map, 0, false, 45.0, y, 120.0, 0.0, DT), (0.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 45.0, y, 120.0, 0.0, 0.0, DT), (0.0, 0.0));
         // в полёте, против стрелки и ниже порога — ничего
-        assert_eq!(boost_dv(&map, 0, true, 30.5, y, 120.0, 0.0, DT), (0.0, 0.0));
-        assert_eq!(boost_dv(&map, 0, false, 59.5, y, -120.0, 0.0, DT), (0.0, 0.0));
-        assert_eq!(boost_dv(&map, 0, false, 30.05, y, 10.0, 0.0, DT), (0.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, true, 30.5, y, 120.0, 0.0, 0.0, DT), (0.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 59.5, y, -120.0, 0.0, 0.0, DT), (0.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 30.05, y, 10.0, 0.0, 0.0, DT), (0.0, 0.0));
         // потолок скорости срезает импульс
-        assert_eq!(boost_dv(&map, 0, false, 30.5, y, 300.0, 0.0, DT), (40.0, 0.0));
-        assert_eq!(boost_dv(&map, 0, false, 31.0, y, 400.0, 0.0, DT), (0.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 30.5, y, 300.0, 0.0, 0.0, DT), (40.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 31.0, y, 400.0, 0.0, 0.0, DT), (0.0, 0.0));
+    }
+
+    #[test]
+    fn boost_entry_accounts_for_damping() {
+        // тело прошло прошлый шаг скоростью до демпфирования: v·(1 + l·dt)·dt
+        let map = boost_strip("east");
+
+        // p − v·dt = 30.01 — уже плита, p − v·(1 + 3·dt)·dt = 29.985 — асфальт:
+        // въезд, а не «та же плита»
+        assert_eq!(boost_dv(&map, 0, false, 31.01, 25.0, 120.0, 0.0, 3.0, DT), (160.0, 0.0));
+        // без демпфирования — прежняя проекция, импульса нет
+        assert_eq!(boost_dv(&map, 0, false, 31.01, 25.0, 120.0, 0.0, 0.0, DT), (0.0, 0.0));
+        // шаг после въезда: прошлая точка на плите — повтора нет
+        assert_eq!(boost_dv(&map, 0, false, 45.0, 25.0, 120.0, 0.0, 3.0, DT), (0.0, 0.0));
     }
 
     #[test]
@@ -999,7 +1026,7 @@ mod tests {
         let grid0 = grid(6, 10, |x, _| i32::from(x == 0) * 47);
         let map = build_flat(&grid0, json!({ "0": { "47": { "type": "boost", "dir": "east" } } })).unwrap();
 
-        assert_eq!(boost_dv(&map, 0, false, 0.5, 25.0, 120.0, 0.0, DT), (160.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 0.5, 25.0, 120.0, 0.0, 0.0, DT), (160.0, 0.0));
     }
 
     #[test]
@@ -1019,7 +1046,7 @@ mod tests {
         .unwrap();
 
         // въезд с плиты «восток» на плиту «юг» со скоростью на юго-восток
-        assert_eq!(boost_dv(&map, 0, false, 40.5, 25.0, 120.0, 120.0, DT), (0.0, 160.0));
+        assert_eq!(boost_dv(&map, 0, false, 40.5, 25.0, 120.0, 120.0, 0.0, DT), (0.0, 160.0));
     }
 
     // та же полоса, но плита с удержанием
@@ -1041,7 +1068,7 @@ mod tests {
         let mut state = LevelState::default();
 
         // импульс прежний бит-в-бит, удержания нет
-        assert_eq!(boost_dv(&map, 0, false, 30.5, 25.0, 120.0, 0.0, DT), (160.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 30.5, 25.0, 120.0, 0.0, 0.0, DT), (160.0, 0.0));
         start_boost_hold(&map, &mut state, 30.5, 25.0);
         assert_eq!(state, LevelState::default());
         assert_eq!(boost_hold_mix(SurfaceMix::NEUTRAL, &state), SurfaceMix::NEUTRAL);
@@ -1053,7 +1080,7 @@ mod tests {
         let map = held_boost_strip();
         let mut state = LevelState::default();
 
-        assert_eq!(boost_dv(&map, 0, false, 30.5, 25.0, 120.0, 0.0, DT), (160.0, 0.0));
+        assert_eq!(boost_dv(&map, 0, false, 30.5, 25.0, 120.0, 0.0, 0.0, DT), (160.0, 0.0));
         start_boost_hold(&map, &mut state, 30.5, 25.0);
         assert_eq!((state.boost_left, state.boost_factor), (1.2, 1.8));
         assert_eq!(boost_hold_mix(SurfaceMix::NEUTRAL, &state).max_speed, 1.8);

@@ -1181,6 +1181,7 @@ impl Predictor {
                 self.state.y,
                 start_vx,
                 start_vy,
+                damping.0,
                 dt,
             );
 

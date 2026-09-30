@@ -134,11 +134,8 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
       const cell = v => (v + 0.5) * tile;
 
       core.load_map(JSON.stringify(downtown));
-      // полтайла до респауна «бустер → рампа → крыша-парковка» (cell(9)):
-      // с самого респауна на maxForwardSpeed 130 танк въезжает на плиту так,
-      // что `p − v·dt` (surface::boost_dv) уже на ней, и импульса нет —
-      // граничный случай ядра, не правило этого теста
-      core.spawn_actor(1, 'm1', 1, cell(8.5), cell(35), 0);
+      // респаун «бустер → рампа → крыша-парковка»
+      core.spawn_actor(1, 'm1', 1, cell(9), cell(35), 0);
       core.apply_input(1, 1, 'down', 'forward');
 
       let peak = 0;
