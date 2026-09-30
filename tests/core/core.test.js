@@ -639,6 +639,261 @@ describe.skipIf(!coreAvailable)('GameCore (nodejs-таргет)', () => {
     });
   });
 
+  // Отброс танка от попадания w1 на игровых models.js/weapons.js: сдвиг цели
+  // через 180 тиков (1.5 с) после выстрела и доворот корпуса. Поза — из
+  // player-блока кадра: в строке m1 угол округлён до 0.01 рад (≈ 0.57°).
+  // Едущая цель сравнивается с тем же заездом без выстрела — иначе в сдвиг
+  // попал бы её собственный ход. Допуски: «~5 ед.» ± 1.5. На ходу эталон —
+  // ~4.3 ед. (вперёд по асфальту, в лоб): ядро подгоняет под него остальные
+  // ходы моделью тяги (`motion::drive_shift`), точной до ~15 %
+  describe('w1: отброс танка (hitResponse)', () => {
+    // стрелок — в ORIGIN с курсом 0; координаты цели ниже — от него
+    const ORIGIN = [100, 500];
+
+    // [x, y, angle] танка из player-блока свежего кадра, x/y — от стрелка
+    const pose = (core, id) => {
+      core.pack_body();
+      core.pack_frame(0, 1, false, 0, 0, false, undefined, id);
+
+      const [x, y, angle] = decode(frameBuffer(core)).player.state;
+
+      return [x - ORIGIN[0], y - ORIGIN[1], angle];
+    };
+
+    // разница углов, градусы, в (−180, 180]
+    const turnDeg = (after, before) =>
+      (Math.atan2(Math.sin(after - before), Math.cos(after - before)) * 180) /
+      Math.PI;
+
+    const change = (after, before) => ({
+      shift: Math.hypot(after[0] - before[0], after[1] - before[1]),
+      turn: turnDeg(after[2], before[2]),
+    });
+
+    // ядро с полем без стен, вся земля которого — поверхность surface (сетка
+    // 120×60 клеток по 19.2 ед.); без surface — без карты, асфальт
+    const makeField = surface => {
+      const core = makeCore();
+
+      if (surface) {
+        core.load_map(
+          JSON.stringify({
+            ...poolMini,
+            map: Array.from({ length: 60 }, () => Array(120).fill(0)),
+            physicsStatic: [],
+            physicsDynamic: [],
+            game: { surfaces: { 0: { 0: surface } } },
+          }),
+        );
+      }
+
+      core.spawn_actor(1, 'm1', 1, ORIGIN[0], ORIGIN[1], 0);
+
+      return core;
+    };
+
+    // стоящая цель (команда 2) на (x, y) с курсом angle
+    const standingHit = (x, y, angle, surface) => {
+      const core = makeField(surface);
+
+      core.spawn_actor(2, 'm1', 2, ORIGIN[0] + x, ORIGIN[1] + y, angle);
+      stepTicks(core, 2);
+
+      const before = pose(core, 2);
+
+      core.apply_input(1, 1, 'down', 'fire');
+      stepTicks(core, 1);
+      core.apply_input(1, 2, 'up', 'fire');
+      stepTicks(core, 180);
+
+      return change(pose(core, 2), before);
+    };
+
+    // едущая цель (зажатые клавиши keys): поза через 180 тиков после
+    // выстрела. Выстрел — на тике fireTick хода или в первом тике, где
+    // shouldFire(поза цели) истинно (позу считаем, только если её ждёт
+    // предикат); withShot — стрелять ли
+    const drive = (
+      withShot,
+      { x, y, angle, keys, surface, fireTick, shouldFire },
+    ) => {
+      const core = makeField(surface);
+      let fired = -1;
+
+      core.spawn_actor(2, 'm1', 2, ORIGIN[0] + x, ORIGIN[1] + y, angle);
+      stepTicks(core, 2);
+      keys.forEach((key, index) => {
+        core.apply_input(2, index + 1, 'down', key);
+      });
+
+      for (let tick = 0; tick < 600; tick += 1) {
+        if (
+          fired < 0 &&
+          (shouldFire ? shouldFire(pose(core, 2)) : tick === fireTick)
+        ) {
+          fired = tick;
+
+          if (withShot) {
+            core.apply_input(1, 1, 'down', 'fire');
+          }
+        }
+
+        if (withShot && fired >= 0 && tick === fired + 1) {
+          core.apply_input(1, 2, 'up', 'fire');
+        }
+
+        if (fired >= 0 && tick >= fired + 180) {
+          break;
+        }
+
+        stepTicks(core, 1);
+      }
+
+      return pose(core, 2);
+    };
+
+    const drivingHit = ride => change(drive(true, ride), drive(false, ride));
+
+    // заезды по оси выстрела: к стрелку и от него, вперёд и задом; выстрел
+    // на 150-м тике хода
+    const rides = {
+      'едущий к стрелку, в лоб': { x: 400, angle: 180, keys: ['forward'] },
+      'едущий от стрелка, в корму': { x: 60, angle: 0, keys: ['forward'] },
+      'задним ходом от стрелка, в лоб': { x: 60, angle: 180, keys: ['back'] },
+      'задним ходом к стрелку, в корму': { x: 400, angle: 0, keys: ['back'] },
+    };
+
+    it('стоящий танк в лоб через центр сдвигается на ~5 ед. без поворота', () => {
+      const { shift, turn } = standingHit(60, 0, 180);
+
+      expect(shift).toBeGreaterThanOrEqual(3.5);
+      expect(shift).toBeLessThanOrEqual(6.5);
+      expect(Math.abs(turn)).toBeLessThan(0.1);
+    });
+
+    it('стоящий танк в борт через центр сдвигается на ~5 ед. без поворота', () => {
+      const { shift, turn } = standingHit(60, 0, 90);
+
+      expect(shift).toBeGreaterThanOrEqual(3.5);
+      expect(shift).toBeLessThanOrEqual(6.5);
+      expect(Math.abs(turn)).toBeLessThan(0.1);
+    });
+
+    it('стоящий танк в борт у кормы доворачивает не больше 1°', () => {
+      // курс +y, центр в 5.5 ед. за линией выстрела — пуля входит у кормы
+      const { shift, turn } = standingHit(60, 5.5, 90);
+
+      expect(Math.abs(turn)).toBeGreaterThan(0.1);
+      expect(Math.abs(turn)).toBeLessThanOrEqual(1);
+      expect(shift).toBeGreaterThanOrEqual(3);
+      expect(shift).toBeLessThanOrEqual(7);
+    });
+
+    it.each(Object.entries(rides))(
+      '%s: сдвиг ~5 ед. без поворота',
+      (_, ride) => {
+        const { shift, turn } = drivingHit({ ...ride, y: 0, fireTick: 150 });
+
+        expect(shift).toBeGreaterThanOrEqual(3.5);
+        expect(shift).toBeLessThanOrEqual(6.5);
+        expect(Math.abs(turn)).toBeLessThan(0.1);
+      },
+    );
+
+    // газ ещё набирается, скорость ниже потолка: тяга гасит толчок слабее,
+    // и ядро подгоняет его под путь эталона по текущим скорости и газу
+    it.each([3, 10, 30])(
+      'трогающийся с места танк (газ %i тиков) в лоб сдвигается на ~5 ед.',
+      fireTick => {
+        const { shift } = drivingHit({
+          x: 400,
+          y: 0,
+          angle: 180,
+          keys: ['forward'],
+          fireTick,
+        });
+
+        expect(shift).toBeGreaterThanOrEqual(3.5);
+        expect(shift).toBeLessThanOrEqual(6.5);
+      },
+    );
+
+    // обе клавиши: на потолке `drive_accel_on` включает задний ход
+    it('танк с зажатыми обеими клавишами хода в корму сдвигается на ~5 ед.', () => {
+      const { shift } = drivingHit({
+        x: 60,
+        y: 0,
+        angle: 0,
+        keys: ['forward', 'back'],
+        fireTick: 150,
+      });
+
+      expect(shift).toBeGreaterThanOrEqual(3.5);
+      expect(shift).toBeLessThanOrEqual(6.5);
+    });
+
+    it('едущий поперёк танк в борт через центр сдвигается на ~5 ед.', () => {
+      const { shift, turn } = drivingHit({
+        x: 150,
+        y: -160,
+        angle: 90,
+        keys: ['forward'],
+        shouldFire: ([, y]) => y >= -0.5,
+      });
+
+      expect(shift).toBeGreaterThanOrEqual(3);
+      expect(shift).toBeLessThanOrEqual(8);
+      expect(Math.abs(turn)).toBeLessThan(0.1);
+    });
+
+    it('едущий поперёк танк в борт у кормы доворачивает не больше 1°', () => {
+      // курс +y: центр уже в 4+ ед. за линией выстрела — пуля входит у
+      // кормы. Доворот уводит путь навстречу толчку (≤ 1° — до ~3 ед. за
+      // 1.5 с), поэтому сдвиг меньше, чем через центр
+      const { shift, turn } = drivingHit({
+        x: 150,
+        y: -160,
+        angle: 90,
+        keys: ['forward'],
+        shouldFire: ([, y]) => y >= 4,
+      });
+
+      expect(Math.abs(turn)).toBeGreaterThan(0.1);
+      expect(Math.abs(turn)).toBeLessThanOrEqual(1);
+      expect(shift).toBeGreaterThanOrEqual(1.5);
+      expect(shift).toBeLessThanOrEqual(8);
+    });
+
+    // множители заданы для асфальта; на других поверхностях ядро
+    // подгоняет толчок под сопротивление и тягу под гусеницами — сдвиг тот же
+    describe.each(['sand', 'mud', 'water', 'oil'])(
+      'на поверхности %s',
+      surface => {
+        it.each([
+          ['в лоб', 180],
+          ['в борт', 90],
+        ])('стоящий танк %s сдвигается на ~5 ед.', (_, angle) => {
+          const { shift } = standingHit(60, 0, angle, surface);
+
+          expect(shift).toBeGreaterThanOrEqual(3.5);
+          expect(shift).toBeLessThanOrEqual(6.5);
+        });
+
+        it.each(Object.entries(rides))('%s: сдвиг ~5 ед.', (_, ride) => {
+          const { shift } = drivingHit({
+            ...ride,
+            y: 0,
+            surface,
+            fireTick: 150,
+          });
+
+          expect(shift).toBeGreaterThanOrEqual(3.5);
+          expect(shift).toBeLessThanOrEqual(6.5);
+        });
+      },
+    );
+  });
+
   describe('handoff (Spike B)', () => {
     it('serialize/deserialize продолжает симуляцию бит-в-бит', () => {
       core.load_map(JSON.stringify(poolMini));

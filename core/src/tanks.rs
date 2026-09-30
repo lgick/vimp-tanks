@@ -703,7 +703,7 @@ impl GameSim<TanksGame> for TanksSim {
 
                 match kind {
                     WeaponKind::Hitscan => {
-                        let tracer = self.process_hitscan(ctx, id, weapon_index, &shot);
+                        let tracer = self.process_hitscan(ctx, id, weapon_index, &shot, dt);
 
                         self.new_tracers.entry(weapon_index).or_default().push(tracer);
                     }
@@ -1772,7 +1772,14 @@ impl TanksSim {
     }
 
     /// Мгновенный выстрел лучом (порт HitscanService.processShot).
-    fn process_hitscan(&mut self, ctx: &mut SimCtx, shooter_id: u32, weapon_index: usize, shot: &ShotCommand) -> TracerRow {
+    fn process_hitscan(
+        &mut self,
+        ctx: &mut SimCtx,
+        shooter_id: u32,
+        weapon_index: usize,
+        shot: &ShotCommand,
+        dt: f32,
+    ) -> TracerRow {
         let weapon = self.weapons[weapon_index].clone();
         let range = weapon.range.unwrap_or(1000.0);
         // величина импульса — не зависит от дальности оружия (см. weapons.js);
@@ -1949,7 +1956,37 @@ impl TanksSim {
                         // если тело динамическое, то применение физического импульса
                         // (от нормализованного направления — величина не зависит от range)
                         if impulse_magnitude > 0.0 && body.is_dynamic() {
-                            body.apply_impulse_at_point(dir * impulse_magnitude, impact, true);
+                            let impulse = dir * impulse_magnitude;
+                            // танк с `hitResponse` принимает удар в осях корпуса; остальные тела
+                            // (и танк без блока) — в точке попадания
+                            let response = match BodyTag::decode(body.user_data) {
+                                Some(BodyTag::Player { game_id, .. }) => self.tanks.get(&game_id).and_then(|tank| {
+                                    let model = self.models.get(&tank.model)?;
+
+                                    model.hit_response.map(|response| (tank, model, response))
+                                }),
+                                _ => None,
+                            };
+
+                            if let Some((tank, model, response)) = response {
+                                let (linear, torque) = tank.hit_impulse(
+                                    body,
+                                    impulse,
+                                    impact,
+                                    model,
+                                    &response,
+                                    &self.key_bits,
+                                    &self.level_rules,
+                                    self.surfaces.as_ref(),
+                                    &self.surface_rules,
+                                    dt,
+                                );
+
+                                body.apply_impulse(linear, true);
+                                body.apply_torque_impulse(torque, true);
+                            } else {
+                                body.apply_impulse_at_point(impulse, impact, true);
+                            }
                         }
 
                         if let Some(BodyTag::Player { game_id, .. }) = BodyTag::decode(body.user_data) {

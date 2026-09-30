@@ -39,6 +39,22 @@ pub struct Fixture {
     pub restitution: f32,
 }
 
+/// Реакция корпуса на попадание hitscan (`models.js → hitResponse`):
+/// множители импульса в осях корпуса (`hit::hit_impulse`). Нет блока —
+/// импульс в точке попадания, как у любого тела.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HitResponse {
+    /// боковая часть на асфальте; в остальных случаях —
+    /// пропорционально сопротивлению вбок
+    pub lateral_factor: f32,
+    /// продольная часть стоящего танка на асфальте (нет клавиш хода); в
+    /// остальных случаях толчок подгоняется под его путь
+    pub idle_factor: f32,
+    /// доворот корпуса от плеча точки попадания
+    pub spin_factor: f32,
+}
+
 /// Параметры модели танка (src/data/models.js, поле constructor игнорируется).
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +89,10 @@ pub struct ModelConfig {
     pub max_gun_angle: f32,
     pub gun_rotation_speed: f32,
     pub gun_center_speed: f32,
+    /// Реакция корпуса на попадание hitscan (`hitResponse`). Нет в конфиге —
+    /// импульс в точке попадания (`apply_impulse_at_point`), как раньше.
+    #[serde(default)]
+    pub hit_response: Option<HitResponse>,
 }
 
 impl ModelConfig {
@@ -540,6 +560,16 @@ impl SurfaceRules {
                         "surfaces.types.{name}.angularDrag ({}) must be >= -damping.angular \
                          of model '{model_name}' ({})",
                         params.angular_drag, model.damping.angular
+                    ));
+                }
+
+                // то же для линейного: сопротивление ниже нуля разгоняло бы
+                // танк само, а отброс от попадания (`hit`) делил бы на ноль
+                if !(params.drag >= -model.damping.linear) {
+                    return Err(format!(
+                        "surfaces.types.{name}.drag ({}) must be >= -damping.linear \
+                         of model '{model_name}' ({})",
+                        params.drag, model.damping.linear
                     ));
                 }
             }
@@ -1154,6 +1184,31 @@ impl TanksConfig {
             }
         }
 
+        for (name, model) in &self.models {
+            if let Some(hit) = &model.hit_response {
+                if !(hit.lateral_factor.is_finite() && hit.lateral_factor > 0.0) {
+                    return Err(format!(
+                        "models.{name}.hitResponse.lateralFactor must be > 0, got {}",
+                        hit.lateral_factor
+                    ));
+                }
+
+                if !(hit.idle_factor.is_finite() && hit.idle_factor > 0.0) {
+                    return Err(format!(
+                        "models.{name}.hitResponse.idleFactor must be > 0, got {}",
+                        hit.idle_factor
+                    ));
+                }
+
+                if !(0.0..=1.0).contains(&hit.spin_factor) {
+                    return Err(format!(
+                        "models.{name}.hitResponse.spinFactor must be in [0, 1], got {}",
+                        hit.spin_factor
+                    ));
+                }
+            }
+        }
+
         self.surfaces.validate(&self.models)?;
         self.props.validate()?;
         self.bots.validate()?;
@@ -1495,8 +1550,8 @@ mod validate_tests {
         assert_eq!(cfg.weapons.get_index_of("w2"), Some(1));
     }
 
-    fn surface_model() -> ModelConfig {
-        serde_json::from_value(serde_json::json!({
+    fn surface_model_json() -> serde_json::Value {
+        serde_json::json!({
             "currentWeapon": "w1",
             "size": 2,
             "accelerationFactor": 1000,
@@ -1516,8 +1571,11 @@ mod validate_tests {
             "maxGunAngle": 1.4,
             "gunRotationSpeed": 3.0,
             "gunCenterSpeed": 10.0
-        }))
-        .unwrap()
+        })
+    }
+
+    fn surface_model() -> ModelConfig {
+        serde_json::from_value(surface_model_json()).unwrap()
     }
 
     #[test]
@@ -1530,6 +1588,53 @@ mod validate_tests {
 
         model.turret_top = 0.0;
         assert_eq!(model.hit_top(), 1.0);
+    }
+
+    fn config_with_hit_response(response: Option<serde_json::Value>) -> TanksConfig {
+        let mut cfg = config_with_panel_keys(&["health"]);
+        let mut json = surface_model_json();
+
+        if let Some(response) = response {
+            json["hitResponse"] = response;
+        }
+
+        cfg.models.insert("m1".to_string(), serde_json::from_value(json).unwrap());
+        cfg
+    }
+
+    #[test]
+    fn hit_response_is_optional() {
+        let cfg = config_with_hit_response(None);
+
+        assert!(cfg.models["m1"].hit_response.is_none());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn hit_response_is_read_and_validated() {
+        let cfg = config_with_hit_response(Some(serde_json::json!({
+            "lateralFactor": 7.5, "idleFactor": 0.25, "spinFactor": 0.1
+        })));
+        let hit = cfg.models["m1"].hit_response.unwrap();
+
+        assert_eq!(hit.lateral_factor, 7.5);
+        assert_eq!(hit.idle_factor, 0.25);
+        assert_eq!(hit.spin_factor, 0.1);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_hit_response_out_of_range() {
+        for (response, field) in [
+            (serde_json::json!({ "lateralFactor": 0, "idleFactor": 1, "spinFactor": 0 }), "lateralFactor"),
+            (serde_json::json!({ "lateralFactor": 1, "idleFactor": -1, "spinFactor": 0 }), "idleFactor"),
+            (serde_json::json!({ "lateralFactor": 1, "idleFactor": 1, "spinFactor": 1.5 }), "spinFactor"),
+            (serde_json::json!({ "lateralFactor": 1, "idleFactor": 1, "spinFactor": -0.1 }), "spinFactor"),
+        ] {
+            let error = config_with_hit_response(Some(response)).validate().unwrap_err();
+
+            assert!(error.contains(&format!("hitResponse.{field}")), "{field}: {error}");
+        }
     }
 
     fn config_with_surfaces(surfaces: serde_json::Value) -> TanksConfig {
@@ -1629,6 +1734,16 @@ mod validate_tests {
 
         assert!(weaker.validate().is_ok());
         assert!(negative.validate().unwrap_err().contains("angularDrag"));
+    }
+
+    #[test]
+    fn validate_bounds_drag_by_model_damping() {
+        // демпфирование модели — 3
+        let weaker = config_with_surfaces(serde_json::json!({ "types": { "ice": { "drag": -2 } } }));
+        let negative = config_with_surfaces(serde_json::json!({ "types": { "ice": { "drag": -4 } } }));
+
+        assert!(weaker.validate().is_ok());
+        assert!(negative.validate().unwrap_err().contains(".drag"));
     }
 
     #[test]

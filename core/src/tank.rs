@@ -2,10 +2,11 @@ use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::body_tag::BodyTag;
-use crate::config::{KeyConfig, LevelRules, ModelConfig, PanelValue, SurfaceRules, WeaponConfig};
+use crate::config::{HitResponse, KeyConfig, LevelRules, ModelConfig, PanelValue, SurfaceRules, WeaponConfig};
 use crate::level::{Footprint, LevelState, Transit};
 use vimp_engine_core::config::{FieldValue, PLAYER_STATE_LEN};
 use vimp_engine_core::events::CoreEvent;
+use crate::hit;
 use crate::motion::{self, TurretInput};
 use crate::surface::{self, SurfaceMap, SurfaceMix};
 use vimp_engine_core::map::{level_interaction, levels_interaction, levels_interaction_on_ramp};
@@ -450,6 +451,116 @@ impl Tank {
         direction.normalize_or_zero()
     }
 
+    /// Импульс попадания hitscan в осях корпуса (`hit::hit_impulse`):
+    /// `(линейный, вращения)`. `impulse` — импульс попадания в мире,
+    /// `impact` — точка попадания, `dt` — шаг симуляции.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hit_impulse(
+        &self,
+        body: &RigidBody,
+        impulse: Vector,
+        impact: Vector,
+        model: &ModelConfig,
+        response: &HitResponse,
+        bits: &PlayerKeyBits,
+        rules: &LevelRules,
+        surfaces: Option<&SurfaceMap>,
+        surface_rules: &SurfaceRules,
+        dt: f32,
+    ) -> (Vector, f32) {
+        let heading = body.rotation().transform_vector(FORWARD);
+        let lever = impact - body.center_of_mass();
+        let (linear, torque) = hit::hit_impulse(
+            (impulse.x, impulse.y),
+            (lever.x, lever.y),
+            (heading.x, heading.y),
+            self.mass,
+            dt,
+            model,
+            rules,
+            response,
+            &self.hit_state(body, bits, surfaces, surface_rules),
+        );
+
+        (Vector::new(linear.0, linear.1), torque)
+    }
+
+    /// Состояние корпуса для `hit::hit_impulse`: то, от чего зависит, как
+    /// `update` погасит толчок, — поверхность под гусеницами, уровень,
+    /// клавиши хода, газ, скорость вдоль курса. Состояние уровня не
+    /// меняется: остаток масла считается на копии (`LevelState` — `Copy`) с
+    /// `dt` 0.
+    fn hit_state(
+        &self,
+        body: &RigidBody,
+        bits: &PlayerKeyBits,
+        surfaces: Option<&SurfaceMap>,
+        surface_rules: &SurfaceRules,
+    ) -> hit::HitState {
+        let heading = body.rotation().transform_vector(FORWARD);
+        // в полёте `tank_mix` и `apply_slick` отдают смесь как есть —
+        // нейтральную, как её не берёт и `update`
+        let mix = surfaces.map_or(SurfaceMix::NEUTRAL, |map| {
+            let mut level_state = self.level_state;
+            let (half_w, half_h) = (self.width / 2.0, self.height / 2.0);
+
+            Self::track_mix(map, surface_rules, &mut level_state, body, half_w, half_h, 0.0)
+        });
+
+        // зажатые клавиши, а не `keys_for_processing`: тот сбрасывает
+        // разовые события
+        hit::HitState {
+            mix,
+            level_state: self.level_state,
+            grade: self.level_state.grade(heading.x, heading.y),
+            forward: self.current_keys & bits.forward != 0,
+            back: self.current_keys & bits.back != 0,
+            throttle: self.engine_throttle,
+            speed: body.linvel().dot(heading),
+            belt: mix.belt_x * heading.x + mix.belt_y * heading.y,
+        }
+    }
+
+    /// Коэффициенты поверхности под гусеницами: смесь точек гусениц
+    /// (`surface::tank_mix`) и остаток масла (`surface::apply_slick`, двигает
+    /// таймер остатка в `level_state` на `dt`). Одна выборка на `update` и
+    /// `hit_state`.
+    fn track_mix(
+        map: &SurfaceMap,
+        surface_rules: &SurfaceRules,
+        level_state: &mut LevelState,
+        body: &RigidBody,
+        half_w: f32,
+        half_h: f32,
+        dt: f32,
+    ) -> SurfaceMix {
+        let position = body.translation();
+        let angle = body.rotation().angle();
+        let mix = surface::tank_mix(
+            map,
+            surface_rules,
+            level_state,
+            position.x,
+            position.y,
+            angle,
+            half_w,
+            half_h,
+        );
+
+        surface::apply_slick(
+            map,
+            surface_rules,
+            level_state,
+            position.x,
+            position.y,
+            angle,
+            half_w,
+            half_h,
+            mix,
+            dt,
+        )
+    }
+
     /// Обновление логики танка на фиксированном шаге (Tank.updateData).
     /// Порядок операций закреплён паритет-тестом клиентской реплики.
     /// `surfaces` — таблица поверхностей карты; `None` — нейтральный путь.
@@ -532,34 +643,10 @@ impl Tank {
         // после бокового импульса или тяги было бы уже другим. Реплика берёт
         // те же скорости — до всех импульсов шага
         let position = body.translation();
-        let angle = body.rotation().angle();
         let (half_w, half_h) = (self.width / 2.0, self.height / 2.0);
-        let mix = surfaces.map_or(SurfaceMix::NEUTRAL, |map| {
-            surface::tank_mix(
-                map,
-                surface_rules,
-                &self.level_state,
-                position.x,
-                position.y,
-                angle,
-                half_w,
-                half_h,
-            )
-        });
         // остаток масла после съезда: таймер живёт в состоянии уровня
-        let mix = surfaces.map_or(mix, |map| {
-            surface::apply_slick(
-                map,
-                surface_rules,
-                &mut self.level_state,
-                position.x,
-                position.y,
-                angle,
-                half_w,
-                half_h,
-                mix,
-                dt,
-            )
+        let mix = surfaces.map_or(SurfaceMix::NEUTRAL, |map| {
+            Self::track_mix(map, surface_rules, &mut self.level_state, body, half_w, half_h, dt)
         });
         // поднятый потолок скорости на время удержания бустера
         let mix = surface::boost_hold_mix(mix, &self.level_state);
@@ -862,6 +949,7 @@ mod tests {
     use super::*;
     use crate::config::{LevelRules, PanelValue};
     use crate::level::Transit;
+    use crate::map_game::MapGame;
     use indexmap::IndexMap;
 
     fn rules() -> LevelRules {
@@ -917,6 +1005,7 @@ mod tests {
     fn key_bits() -> PlayerKeyBits {
         let keys: IndexMap<String, KeyConfig> = serde_json::from_value(serde_json::json!({
             "forward": { "key": 1 },
+            "back": { "key": 2 },
             "fire": { "key": 128, "type": 1 }
         }))
         .unwrap();
@@ -992,6 +1081,75 @@ mod tests {
         );
 
         assert!(body.linvel().length() > 0.0);
+    }
+
+    // масло в колонках 0..4 (x < 50), клетка 10 ед.
+    fn oil_map() -> (SurfaceMap, SurfaceRules) {
+        let rules: SurfaceRules = serde_json::from_value(serde_json::json!({
+            "trackYawGain": 0.004,
+            "trackSampleX": 0.6,
+            "trackSampleY": 0.75,
+            "types": { "oil": { "grip": 0.08, "brake": 0.1, "slickTime": 1.5 } }
+        }))
+        .unwrap();
+        let game = MapGame::from_value(&serde_json::json!({ "surfaces": { "0": { "7": "oil" } } })).unwrap();
+        let grid: Vec<Vec<i32>> = (0..10)
+            .map(|_| (0..10).map(|x| if x < 5 { 7 } else { 0 }).collect())
+            .collect();
+        let map = SurfaceMap::build(&[&grid], 10.0, &game, &rules).unwrap();
+
+        (map, rules)
+    }
+
+    #[test]
+    fn hit_state_reads_the_keys_throttle_and_speed() {
+        let mut world = PhysicsWorld::new();
+        let mut tank = make_tank(&mut world);
+        let bits = key_bits();
+        let rules = SurfaceRules::default();
+
+        tank.update_keys("down", bits.back, &bits);
+        tank.engine_throttle = 0.4;
+        // курс 90°: скорость вдоль курса — мировая Y
+        world.bodies[tank.body].set_rotation(Rotation::from_angle(deg_to_rad(90.0)), true);
+        world.bodies[tank.body].set_linvel(Vector::new(7.0, -30.0), true);
+
+        let state = tank.hit_state(&world.bodies[tank.body], &bits, None, &rules);
+
+        assert_eq!((state.forward, state.back), (false, true));
+        assert_eq!(state.throttle, 0.4);
+        assert!((state.speed + 30.0).abs() < 1e-4, "{state:?}");
+        assert_eq!(state.mix, SurfaceMix::NEUTRAL);
+        assert_eq!(state.level_state, tank.level_state);
+    }
+
+    #[test]
+    fn hit_state_reads_the_oil_without_touching_the_level_state() {
+        let mut world = PhysicsWorld::new();
+        let mut tank = make_tank(&mut world);
+        let (map, rules) = oil_map();
+        let bits = key_bits();
+        let body = &mut world.bodies[tank.body];
+
+        body.set_translation(Vector::new(25.0, 50.0), true);
+
+        let on_oil = tank.hit_state(body, &bits, Some(&map), &rules).mix;
+
+        assert!((on_oil.grip - 0.08).abs() < 1e-6, "{on_oil:?}");
+        assert!((on_oil.brake - 0.1).abs() < 1e-6, "{on_oil:?}");
+        assert_eq!(tank.level_state.slick_left, 0.0, "остаток ставится только на копии");
+
+        // съехал с масла, остаток — половина `slickTime`: коэффициенты
+        // посередине между маслом и асфальтом
+        tank.level_state.slick_left = 0.75;
+        tank.level_state.slick_type = 1;
+        body.set_translation(Vector::new(75.0, 50.0), true);
+
+        let residue = tank.hit_state(body, &bits, Some(&map), &rules).mix;
+
+        assert!((residue.grip - 0.54).abs() < 1e-6, "{residue:?}");
+        assert!((residue.brake - 0.55).abs() < 1e-6, "{residue:?}");
+        assert_eq!(tank.level_state.slick_left, 0.75, "с `dt` 0 остаток не спадает");
     }
 
     #[test]

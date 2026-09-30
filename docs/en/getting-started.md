@@ -125,10 +125,12 @@ npm run dev             # Vite dev server, opens the tab
 The tab enters as a guest (`Tanker`, nickname override in
 `localStorage.vimp_dev_nick`), votes itself into `team1` and asks for four
 bots — `index.html` and `src/standalone.js` hold every option
-(`startStandaloneGame`, map, `assetsBase`). The map is `pool mini` by
-default; pick another one without editing the file:
+(`startStandaloneGame`, map, `assetsBase`). The map is the game's default
+one (`currentMap` in `src/config/game.js`, now `downtown`); pick another one
+without editing the file:
 
 ```bash
+VITE_MAP='pool mini' npm run dev    # the small arena
 VITE_MAP='overpass' npm run dev    # the two-level 2.5D demo map
 VITE_MAP='terraces' npm run dev    # the three-level one
 ```

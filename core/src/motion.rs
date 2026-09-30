@@ -153,7 +153,7 @@ pub fn drive_accel_on(
     let limit = model.max_forward_speed
         * (1.0 - rules.climb_max_speed_factor * grade.max(0.0)).max(0.25)
         * mix.max_speed;
-    let traction = (mix.accel_l + mix.accel_r) * 0.5;
+    let traction = mix.traction();
     let mut accel = 0.0;
 
     if throttle > 0.0 {

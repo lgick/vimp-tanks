@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use vimp_engine_core::config::FieldValue;
 use vimp_engine_core::events::CoreEvent;
 use vimp_engine_core::snapshot::Block;
+use vimp_tanks_core::body_tag::BodyTag;
 use vimp_tanks_core::bots::brain::{BotMode, BotStats};
 use vimp_tanks_core::bots::BotBrain;
 use vimp_tanks_core::config::BotSkill;
@@ -989,6 +990,241 @@ fn config_json_with_bullet(range: f32, impulse: f32) -> String {
     flat["weapons"]["w1"]["impulseMagnitude"] = serde_json::json!(impulse);
 
     wrap_config(flat)
+}
+
+/// Конфиг с блоком `hitResponse` у `m1`; `Null` — без блока.
+fn config_json_with_hit_response(response: serde_json::Value) -> String {
+    let mut flat = flat_config_json();
+
+    flat["models"]["m1"]["hitResponse"] = response;
+
+    wrap_config(flat)
+}
+
+/// Поза тела танка без округления кадра: `[x, y, angle]`.
+fn tank_pose(core: &GameCore, game_id: u32) -> [f32; 3] {
+    let state = core.state();
+    let body = state
+        .world
+        .bodies
+        .iter()
+        .map(|(_, body)| body)
+        .find(|body| {
+            matches!(
+                BodyTag::decode(body.user_data),
+                Some(BodyTag::Player { game_id: id, .. }) if id == game_id
+            )
+        })
+        .expect("тело танка");
+    let position = body.translation();
+
+    [position.x, position.y, body.rotation().angle()]
+}
+
+/// Выстрел `w1` стрелка `1` (курс 0) по танку `2` другой команды: поза цели
+/// до выстрела и через 180 шагов после. `drive` — цель держит `forward`,
+/// выстрел на 150-м шаге; `fire` — стрелять ли (без выстрела — тот же заезд
+/// для сравнения).
+fn hit_target(
+    config: &str,
+    map: Option<&str>,
+    shooter: (f32, f32),
+    target: (f32, f32, f32),
+    drive: bool,
+    fire: bool,
+) -> ([f32; 3], [f32; 3]) {
+    let mut core = GameCore::new(config).unwrap();
+
+    if let Some(map) = map {
+        core.load_map(map).unwrap();
+    }
+
+    core.spawn_actor(1, "m1", 1, shooter.0, shooter.1, 0.0).unwrap();
+    core.spawn_actor(2, "m1", 2, target.0, target.1, target.2).unwrap();
+
+    // прогрев: broad-phase узнаёт о новых телах на шаге мира
+    core.step(DT);
+
+    if drive {
+        core.apply_input(2, 1, "down", "forward");
+        steps(&mut core, 150);
+    }
+
+    let before = tank_pose(&core, 2);
+
+    if fire {
+        core.apply_input(1, 1, "down", "fire");
+    }
+
+    steps(&mut core, 180);
+
+    (before, tank_pose(&core, 2))
+}
+
+/// Сдвиг и модуль поворота корпуса (градусы) между двумя позами.
+fn pose_change(before: [f32; 3], after: [f32; 3]) -> (f32, f32) {
+    let shift = (after[0] - before[0]).hypot(after[1] - before[1]);
+    let turn = after[2] - before[2];
+
+    (shift, turn.sin().atan2(turn.cos()).abs().to_degrees())
+}
+
+#[test]
+fn hit_without_response_keeps_point_impulse() {
+    let config = config_json_with_hit_response(serde_json::Value::Null);
+    // борт к стрелку, пуля входит у кормы (плечо 3 при полудлине 4)
+    let (before, after) = hit_target(&config, None, (0.0, 0.0), (60.0, 3.0, 90.0), false, true);
+    let (_, turn) = pose_change(before, after);
+
+    assert!(turn > 2.0, "импульс в точке попадания доворачивает корпус, {turn}°");
+}
+
+#[test]
+fn hit_response_scales_hull_axes() {
+    let plain = config_json_with_hit_response(serde_json::Value::Null);
+    let scaled = config_json_with_hit_response(serde_json::json!({
+        "lateralFactor": 2, "idleFactor": 0.5, "spinFactor": 0
+    }));
+    let shift = |config: &str, target: (f32, f32, f32)| {
+        let (before, after) = hit_target(config, None, (0.0, 0.0), target, false, true);
+
+        pose_change(before, after)
+    };
+
+    // лоб: без хода продольная часть × idleFactor
+    let (front, _) = shift(&plain, (60.0, 0.0, 180.0));
+    let (front_scaled, _) = shift(&scaled, (60.0, 0.0, 180.0));
+
+    assert!(
+        (front_scaled / front - 0.5).abs() < 0.5 * 0.05,
+        "лоб: {front_scaled} против {front}"
+    );
+
+    // борт через центр: боковая часть × lateralFactor
+    let (side, _) = shift(&plain, (60.0, 0.0, 90.0));
+    let (side_scaled, _) = shift(&scaled, (60.0, 0.0, 90.0));
+
+    assert!(
+        (side_scaled / side - 2.0).abs() < 2.0 * 0.1,
+        "борт: {side_scaled} против {side}"
+    );
+
+    // борт у кормы: spinFactor 0 — корпус не доворачивается
+    let (_, turn) = shift(&scaled, (60.0, 3.0, 90.0));
+
+    assert!(turn < 0.05, "доворот {turn}°");
+}
+
+#[test]
+fn hit_response_idle_factor_skips_driving_tank() {
+    let run = |idle: f32| {
+        let config = config_json_with_hit_response(serde_json::json!({
+            "lateralFactor": 1, "idleFactor": idle, "spinFactor": 1
+        }));
+
+        hit_target(&config, None, (0.0, 0.0), (400.0, 0.0, 180.0), true, true).1
+    };
+    let half = run(0.5);
+    let full = run(1.0);
+
+    for axis in 0..3 {
+        assert!(
+            (half[axis] - full[axis]).abs() < 1e-4,
+            "на ходу idleFactor не действует: {half:?} против {full:?}"
+        );
+    }
+}
+
+#[test]
+fn hit_response_on_oil_matches_asphalt() {
+    let oil = surface_map_json(80, |_, _| 44, serde_json::json!({ "surfaces": { "0": { "44": "oil" } } }));
+    let asphalt = surface_map_json(80, |_, _| 44, serde_json::Value::Null);
+    let shift = |response: serde_json::Value, map: &str| {
+        let config = config_json_with_hit_response(response);
+        // борт к стрелку, пуля через центр
+        let (before, after) = hit_target(&config, Some(map), (100.0, 320.0), (160.0, 320.0, 90.0), false, true);
+
+        pose_change(before, after).0
+    };
+
+    let (oil_plain, asphalt_plain) = (shift(serde_json::Value::Null, &oil), shift(serde_json::Value::Null, &asphalt));
+
+    assert!(
+        oil_plain > 3.0 * asphalt_plain,
+        "без блока на масле дальше: {oil_plain} против {asphalt_plain}"
+    );
+
+    let response = serde_json::json!({ "lateralFactor": 1, "idleFactor": 1, "spinFactor": 0 });
+    let (oil_scaled, asphalt_scaled) = (shift(response.clone(), &oil), shift(response, &asphalt));
+
+    assert!(
+        (oil_scaled / asphalt_scaled - 1.0).abs() < 0.25,
+        "с блоком масло как асфальт: {oil_scaled} против {asphalt_scaled}"
+    );
+}
+
+// тяга масла (0.35) не держит потолок: без блока толчок гасит одно
+// демпфирование, и танк теряет в разы больше пути, чем на асфальте. С блоком
+// ядро подгоняет толчок под путь эталона (`hit`)
+#[test]
+fn hit_response_on_oil_evens_a_driving_tank() {
+    let oil = surface_map_json(80, |_, _| 44, serde_json::json!({ "surfaces": { "0": { "44": "oil" } } }));
+    let asphalt = surface_map_json(80, |_, _| 44, serde_json::Value::Null);
+    let knock = |response: serde_json::Value, map: &str| {
+        let mut flat = flat_config_json();
+
+        flat["models"]["m1"]["hitResponse"] = response;
+        // толчок ~100 ед/с (масса 9600), как у игрового попадания: от
+        // импульса фикстуры (~780 ед/с) путь почти линеен при любой тяге
+        flat["weapons"]["w1"]["impulseMagnitude"] = serde_json::json!(960000);
+
+        let config = wrap_config(flat);
+        // цель едет к стрелку по карте
+        let ride = |fire| hit_target(&config, Some(map), (100.0, 320.0), (1200.0, 320.0, 180.0), true, fire).1;
+        let (free, hit) = (ride(false), ride(true));
+
+        (hit[0] - free[0]).hypot(hit[1] - free[1])
+    };
+
+    let (oil_plain, asphalt_plain) = (knock(serde_json::Value::Null, &oil), knock(serde_json::Value::Null, &asphalt));
+
+    assert!(asphalt_plain > 0.5, "выстрел попал: {asphalt_plain}");
+    assert!(
+        oil_plain > 2.0 * asphalt_plain,
+        "без блока на масле дальше: {oil_plain} против {asphalt_plain}"
+    );
+
+    let response = serde_json::json!({ "lateralFactor": 1, "idleFactor": 1, "spinFactor": 0 });
+    let (oil_scaled, asphalt_scaled) = (knock(response.clone(), &oil), knock(response, &asphalt));
+
+    assert!(
+        (oil_scaled / asphalt_scaled - 1.0).abs() < 0.25,
+        "с блоком масло как асфальт: {oil_scaled} против {asphalt_scaled}"
+    );
+}
+
+#[test]
+fn hit_response_leaves_props_alone() {
+    // ящик перед стрелком, как в `hitscan_impulse_independent_of_weapon_range`
+    let displacement = |response: serde_json::Value| {
+        let mut core = GameCore::new(&config_json_with_hit_response(response)).unwrap();
+
+        core.load_map(&map_with_box_json(200.0, 84.0)).unwrap();
+        core.spawn_actor(1, "m1", 1, 100.0, 100.0, 0.0).unwrap();
+        core.step(DT);
+
+        let before = dynamic_box_x(&core);
+
+        core.apply_input(1, 1, "down", "fire");
+        steps(&mut core, 10);
+
+        dynamic_box_x(&core) - before
+    };
+    let plain = displacement(serde_json::Value::Null);
+    let scaled = displacement(serde_json::json!({ "lateralFactor": 7, "idleFactor": 0.25, "spinFactor": 0.1 }));
+
+    assert!(plain > 0.0, "ящик должен сдвинуться, Δx = {plain}");
+    assert!((plain - scaled).abs() < 1e-6, "{plain} против {scaled}");
 }
 
 /// Карта из map_json() с одним динамическим ящиком 32×32 в позиции (x, y).

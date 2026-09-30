@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `hitResponse` model block (`lateralFactor`, `idleFactor`, `spinFactor`):
+  a hitscan hit on a tank is applied in the hull's axes — the lateral part
+  is scaled and follows the resistance under the tracks, the longitudinal
+  one is fitted by replaying the tank's own longitudinal step (throttle,
+  thrust or idle braking, surface `drag`, a boost hold) so that the shift
+  matches a standing or a full-speed tank on asphalt, and the spin is scaled
+  on its own; without the block a hit pushes at the hit point as before
+  (`core/src/hit.rs`, `TanksSim::process_hitscan`).
+
+### Changed
+
+- A `w1` hit now shoves a tank about 5 units whether it stands, starts off
+  or drives (forward or in reverse), whichever side it is hit on and on any
+  surface, and turns it by at most about a degree instead of knocking a
+  driving tank off its course (`impulseMagnitude` 1750000, `hitResponse` in
+  `src/data/models.js`).
+- A surface type whose `drag` is below `−damping.linear` of a model is now a
+  config load error, as `angularDrag` already was: a negative total drag
+  would accelerate the tank on its own (`TanksConfig::validate`).
+- Prop ramming is retuned for the slower tank: `ramThreshold` is halved and
+  `ramDamagePerSpeed` doubled, so a ram at the same share of top speed deals
+  the same damage as before — a barrel rammed at full speed explodes again and
+  a crate breaks on the second ram (`coreParams.props`, `src/config/game.js`).
+- `npm run dev` starts on the game's default map (`currentMap`, now
+  `downtown`) instead of a hard-coded `pool mini`; `VITE_MAP` still picks
+  another one (`src/standalone.js`).
+
 ## [0.22.15] - 2026-09-30
 
 ### Added

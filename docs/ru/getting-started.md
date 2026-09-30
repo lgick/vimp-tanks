@@ -125,10 +125,12 @@ npm run dev             # dev-сервер Vite, открывает вкладк
 Вкладка входит гостем (`Tanker`, ник переопределяется в
 `localStorage.vimp_dev_nick`), голосует за `team1` и просит четырёх ботов —
 все опции лежат в `index.html` и `src/standalone.js`
-(`startStandaloneGame`, карта, `assetsBase`). Карта по умолчанию —
-`pool mini`; другую выбирают без правки файла:
+(`startStandaloneGame`, карта, `assetsBase`). Карта по умолчанию — карта
+игры по умолчанию (`currentMap` в `src/config/game.js`, сейчас `downtown`);
+другую выбирают без правки файла:
 
 ```bash
+VITE_MAP='pool mini' npm run dev    # маленькая арена
 VITE_MAP='overpass' npm run dev    # демо-карта 2.5D на два уровня
 VITE_MAP='terraces' npm run dev    # на три уровня
 ```

@@ -106,7 +106,7 @@ Key layout is configured in `src/config/client.js` (`modules.controls`), command
 
 The tank carries two weapons (switch with `n`/`p`, the active one is highlighted on the panel):
 
-- **`w1` — bullet (hitscan)**: an instant ray, 40 damage, 1500 range, 200 ammo, one shot per 0.3 s. The hit is computed by the host as a ray; the client draws the tracer instantly, with a tank-gun muzzle flash and, on a hit, a shell burst (flame, smoke and debris) at the hit point. A hit on a dynamic map body applies an impulse of `1500000` along the normalized shot direction — it does **not** scale with the weapon's range.
+- **`w1` — bullet (hitscan)**: an instant ray, 40 damage, 1500 range, 200 ammo, one shot per 0.3 s. The hit is computed by the host as a ray; the client draws the tracer instantly, with a tank-gun muzzle flash and, on a hit, a shell burst (flame, smoke and debris) at the hit point. A hit shoves a tank about 5 units — standing, starting off or driving (forward or in reverse), front, rear or side, on any surface — and turns it by at most a degree; a dynamic map body gets an impulse of `1750000` at the hit point. The impulse does **not** scale with the weapon's range.
 - **`w2` — bomb (explosive)**: a physical projectile, planted and detonating on a 1 s timer; 70 damage at the epicenter falling off over a 50 radius, 100 ammo. The blast impulse (`2000000`, with the same falloff) applies to every dynamic body in the radius — tanks and dynamic map objects alike; ordinary map objects take the push without damage, destructible ones take damage too (see [Destructible objects](#destructible-objects)).
 
 Health is 100. The tank's `condition` visually degrades with damage (smoke), and it's destroyed at 0. Stats — [configuration.md](configuration.md#weaponsjs).
@@ -310,12 +310,14 @@ A map may make some of its objects destructible:
 - **Fence** — little health: a bullet or ramming it at speed breaks it. The
   debris does not block the way.
 - **Crate** — sturdy: bullets do half damage, blasts one and a half. It shows
-  a "damaged" stage before it breaks; the debris does not block the way.
+  a "damaged" stage before it breaks; the debris does not block the way. A
+  ram at full speed damages a crate, a second one breaks it.
 - **Barrel** — little health; destroyed, it explodes: damage and a push around
   it and a camera shake. A barrel caught in another blast goes off after a
   short delay (0.15 s), so barrels standing together make a chain reaction.
   The blast does not care about teams, and a death from it counts as a
-  suicide — nobody gets the frag.
+  suicide — nobody gets the frag. Ramming a barrel at full speed blows it
+  up, and the blast hits the rammer too.
 
 Ramming counts only the impact speed along the contact at the moment it
 starts: driving into a fence at speed breaks it, pushing it slowly does not,

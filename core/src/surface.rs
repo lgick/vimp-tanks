@@ -303,6 +303,11 @@ impl SurfaceMix {
         belt_x: 0.0,
         belt_y: 0.0,
     };
+
+    /// Тяга танка: среднее тяги гусениц (`motion::drive_accel_on`).
+    pub fn traction(&self) -> f32 {
+        (self.accel_l + self.accel_r) * 0.5
+    }
 }
 
 /// Параметры одной точки сэмплинга.

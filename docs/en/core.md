@@ -557,6 +557,70 @@ Because the contact is now honest, `brakingFactor` no longer has to
 compensate for it — hence the low value in
 [configuration.md](configuration.md#modelsjs).
 
+### Hit response (hitResponse)
+
+Host only (`core/src/hit.rs`). When a hitscan hit lands on a tank whose
+model has a `hitResponse` block, `TanksSim::process_hitscan` does not push
+the body at the hit point: `Tank::hit_impulse` hands it to
+`hit::hit_impulse`, which splits the impulse `J = dir · impulseMagnitude`
+along the hull's axes (`fwd` — the heading, `right` — its perpendicular):
+
+```
+linear = fwd · (J·fwd) · along
+       + right · (J·right) · lateralFactor · (D' + G·grip + drag) / (D + G)
+torque = ((impact − com) × J) · spinFactor
+```
+
+`D` is `damping.linear` (`D'` — the same, but zero while a boost hold
+compensates it), `G` is `lateralGrip`. `along` is fitted by a run (below).
+The hull state comes from `Tank::hit_state` — everything `Tank::update`
+will absorb the push with: the surface under the tracks (the same
+`surface::tank_mix` + oil residue as in `update`, one helper
+`Tank::track_mix`, computed on a copy of the level state with `dt` 0), the
+level state (the boost hold, flight), the grade along the heading, the held
+drive keys, the throttle and the speed along the heading.
+
+Why: a single impulse at the hit point moves a tank very differently
+depending on its state. Along the hull with no drive keys the damping and
+the idle braking absorb it (a shift of about Δv / 3.3), while on the move
+the engine gives the lost speed back — a standing tank is 5–7 times
+"lighter" than a driving one; one that has just started still has little
+throttle and speed, and the push is absorbed almost by the damping alone.
+Sideways the lateral grip plus the damping absorb it (about Δv / 23),
+several times more than lengthwise, hence `lateralFactor`; that part is
+linear, and it is scaled by the current resistance relative to asphalt.
+
+The longitudinal part is fitted by a run: `hit::Paths` replays along the
+heading the same step `Tank::update` makes (the boost hold and its decay,
+`motion::step_throttle`, `motion::drive_accel_on` with its thrust, ceiling
+and idle braking, the surface `drag`, the damping compensation) plus the
+Rapier damping `v / (1 + D · dt)`, with and without the push, from the
+current speed and throttle; the extra path is the difference. The push is
+fitted (regula falsi, Illinois) so that the path equals the reference:
+
+- no drive key — a standing tank on asphalt, from the push × `idleFactor`;
+- a drive key held — a tank driving forward on asphalt at its ceiling with
+  full throttle, from the same push against the drive.
+
+So standing, driving forward or in reverse, starting off, holding both
+keys, on any surface and on a boost hold, the longitudinal shift is the
+reference one; the run keeps the surface, the belt and the grade of the
+moment of the hit. A tank in flight gets nothing but the damping — the
+branch is defensive: a hitscan ray cannot reach a flying tank (flight
+collision groups, `LevelState::collision_mask`). A push the run cannot fit
+(a degenerate model) keeps the plain factor: `idleFactor` standing, 1 on
+the move.
+
+The spin is scaled on its own (`spinFactor`): a driving tank does not turn
+back after a hit — the engine drives it along the new heading, and 1°
+drifts the path by ~3 units over 1.5 s.
+
+Without the block the hit is `apply_impulse_at_point` as before, bit for
+bit; props and other bodies are always pushed at the hit point. The
+replica and the snapshot do not change: one's own tank receives the
+velocity after the hit in the authoritative frame, and the predictor
+continues from it with the same code.
+
 ## 2.5D levels (`core/src/level.rs`)
 
 On a layered map (the engine's `levels`/`ramps` fields, see
@@ -1548,10 +1612,21 @@ Covered by `crate_on_conveyor`, `crate_hits_boost_once`,
 
 | Layer | Where | Covers |
 | --- | --- | --- |
-| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence), surface formulas (`motion.rs`: the neutral mix bit for bit, sand, oil, the track yaw sign, a belt) and the surface table (`surface.rs`: validation, sampling points inside the hull, the boost entry rule, the oil residue's linear fade, no residue without `slickTime`, decay without effect in flight, the boost hold: none without `boostTime`, the raised ceiling and its expiry, the compensation cancelling one damping step), props (`props.rs`: transitions and `damagedAt`, the multiplier by cause, priming only a blast type and only by a blast, detonation order) and the `coreParams.props` validation; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT) |
+| Rust unit | `core/src/*` (`#[cfg(test)]`) | BodyTag, frame layout; level ballistics (`level.rs`: the fall time derived from `fallTime`, drift in flight, a jump back onto one's own level dealing no damage, clearing walls above `jumpClearance`), tilt (`motion.rs`: no tilt on the flat, the angle against the grade, the cap, the smoothing's convergence), surface formulas (`motion.rs`: the neutral mix bit for bit, sand, oil, the track yaw sign, a belt) and the surface table (`surface.rs`: validation, sampling points inside the hull, the boost entry rule, the oil residue's linear fade, no residue without `slickTime`, decay without effect in flight, the boost hold: none without `boostTime`, the raised ceiling and its expiry, the compensation cancelling one damping step), props (`props.rs`: transitions and `damagedAt`, the multiplier by cause, priming only a blast type and only by a blast, detonation order) and the `coreParams.props` validation; the predictor (replay/visualError/freeze, the contact pass against walls and predicted bodies), the predicted-world framework (capture, error, return to interpolation, reconciliation), map dynamics (origin ↔ centre, capture and its closure, the two box views), remote tanks (capture with lookahead, extrapolation without damping, the render row), shots (gates/dedup/RTT), hit response (`hit.rs`: the standing path, the path following the speed and the throttle, the boost hold, the fitted push matching the reference for any drive, surface, start and boost, the plain factor for a degenerate push, the lateral resistance, the hull axes and the spin; `tank.rs`: `hit_state` — the keys, the throttle, the speed, the oil residue on a copy) and the `drag` bound by the model damping |
 | Predictor parity | `core/src/client/predictor.rs` (`mod parity`) | the predictor's motion replica against the Rapier world (6 scenarios, 2 on a map; surfaces: 10 scenarios from `sand_straight_run` to `boost_against_arrow_does_nothing`, boost reconciliation, the boost hold at full speed and its reconciliation, equal cell size; map bodies: `crate_on_conveyor`, `crate_hits_boost_once`, `crate_in_sand_slows`, the crate's boost reconciliation) — **required to run for any edit to motion in the core or `models.js`** |
-| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots (a bridge shot over the ground, a ground shot under the slab's edge, a shot down a ramp standing on a terrace staying on it) and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, the oil residue still skidding after leaving the patch and expiring after `slickTime`, the boost hold keeping the speed above `maxForwardSpeed` and expiring after `boostTime`, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre) |
+| Rust integration | `core/tests/sim.rs` | simulation scenarios: driving, walls, hitscan kills, hit impulse independent of `range`, friendly fire, a bomb, weapon switching, bots (patrol and combat), clears, handoff, 2.5D levels (ramp, fall damage, a ramp jump — `terraces_ramp_launches_the_tank`, the tilt in the frame — `tank_row_carries_tilt`, cross-level shots (a bridge shot over the ground, a ground shot under the slab's edge, a shot down a ramp standing on a terrace staying on it) and explosions), surfaces (the sand speed ceiling, one boost impulse per entry including a 2×3 plate and entry from off the grid, a belt under a bridge, the oil skid, the oil residue still skidding after leaving the patch and expiring after `slickTime`, the boost hold keeping the speed above `maxForwardSpeed` and expiring after `boostTime`, a flat map moving bit for bit as before; crates: a belt carries a crate along the arrow, a belt under a bridge moves only the ground crate, one boost push, a destroyed crate takes no forces, the handoff dump on surfaces bit for bit), destructible props (shots break a fence and take a crate through the damaged stage with the `state` byte in the frame, ramming at speed vs a slow push, a shot barrel — `w2e` and a suicide, the chain delay, a barrel on level 1 shielded from the ground, rays, tanks and blasts through a destroyed body, restoration on map reload, an unknown prop, the handoff dump with a pending detonation, a bomb pushing a box from its centre); hit response: the point impulse without the block, hull axes with it, no idle factor while driving, oil equal to asphalt standing and driving, props untouched |
 | JS↔WASM harness | `tests/core/core.test.js` + `tests/core/clientCore.test.js` | the ABI on a real config/maps, frame round-trips via `decode_frame`; e2e for the client core: interpolation, seq reordering, predictor convergence with the core on a real config, try_fire and duplicate suppression |
+
+The Rust fixtures — `flat_config_json()` in `core/tests/sim.rs`,
+`config_json()` in `core/src/client/predictor.rs`, the `model()` helpers in
+`motion.rs`, `tank.rs` and `bots/test_support.rs`, `surface_model()` in
+`config.rs`, the models in `client/mod.rs`, `client/remote_tanks.rs` and
+`client/shot.rs` — **deliberately** describe a 260 tank (`size` 2): they check the
+formulas and the host↔replica parity, not the balance. The game values
+(`models.js`, `weapons.js`, `game.js`) are checked by the JS harness
+`tests/core/core.test.js` (the boost jump on `downtown`, the `w1` knockback
+calibration: standing and driving, forward and in reverse, on every
+surface). The fixtures need not be synced with `models.js`.
 
 `tests/core/` tests are part of `npm test` and **are skipped** if
 `core/pkg-node/` isn't built (JS development is possible without the Rust
