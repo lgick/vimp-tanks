@@ -251,7 +251,10 @@ print numbers for tuning:
 - `bot_skill_report` — preset strength (kills, time to kill, accuracy of a
   bot against a still tank at 200/300/450 units):
   `cargo test -q -p vimp-tanks-core --test sim bot_skill_report -- --ignored --nocapture`.
-  After editing `coreParams.bots.presets`, run it before and after the edit;
+  The test config has no `bots` section, so the report measures the core's
+  defaults (`default_bot_presets` in `core/src/config.rs`): after editing
+  `coreParams.bots.presets`, carry the numbers there (the fixture tests
+  require it anyway) and run the report before and after the edit;
 - `replan_causes_report` — route re-plans per bot and per cause in the
   4×4 matches of `bot_replans_are_bounded_*`:
   `cargo test -q -p vimp-tanks-core --test sim replan_causes_report -- --ignored --nocapture`.

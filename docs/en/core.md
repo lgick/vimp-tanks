@@ -1102,15 +1102,20 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   and a start snapped to the nearest walkable cell. Every query spends one
   unit of a per-tick budget shared by all bots (`BotView::route_budget`).
   Each tick the next bot in turn spends the budget first
-  (`TanksSim::ai_turn`, carried in the dump), so the bots updated last do
-  not always wait; the waits are counted in `BotStats::route_waits`.
+  (`TanksSim::ai_order()`: the bots' map order shifted by `ai_turn`, both
+  carried in the dump), so the bots updated last do not always wait. The
+  waits are counted in `BotStats::route_waits`.
   The route is re-planned when the goal moves far or changes level, every
   2 s for a moving target, when the bot leaves the route or the expected
   level, and when it makes no progress for 1.5 s. Mid-way along a run that
   crosses a level (`0 → 2`) the tank's level flips to the intermediate one,
   which the route does not have, so on a ramp the level check compares the
   run's ends instead, and a start or a goal on such a run is snapped to its
-  nearest end before the query. Re-plans are counted per cause in
+  nearest end before the query (only the intermediate level is: a level
+  above the run, a bridge over the ramp, stays). `route_cost` has no chain
+  of attempts, so a goal whose nearest end has no walkable cell there (the
+  upper half of the run) is also moved to the nearest walkable cell of that
+  level. Re-plans are counted per cause in
   `BotStats::replan_causes` and printed by the `replan_causes_report`
   test. Each leg keeps its kind
   (`Walk`/`Ramp`/`Ledge`): a ramp top counts as reached within a tile, a
@@ -1140,8 +1145,9 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   constant), `last_damage_at` and `last_attacker` (the nearest visible enemy
   aiming at the bot, else the nearest visible, else the nearest) with
   `last_attacked_at`, when it was named. Self-inflicted damage — within
-  0.3 s (`SELF_DAMAGE_WINDOW`) of a fall, or of the blast of the bot's own
-  bomb with friendly fire on (the weapon's `time` after the drop) — counts
+  0.3 s (`SELF_DAMAGE_WINDOW`) after a fall, or after the blast of the bot's
+  own bomb with friendly fire on (the weapon's `time` after the drop; a hit
+  during the fuse is an enemy's) — counts
   towards `damage_recent`/`last_damage_at` but changes neither
   `last_attacker` nor `last_attacked_at`: an old attacker does not become a
   fresh one. The RNG is drawn only on a radar tick, contact by contact in id
@@ -1152,9 +1158,13 @@ geometry in `levels: Option<&MapLevels>` (`None` on a flat map) plus
   muzzle with the hitscan's filter: `Ally(id)` (a teammate first), `Prop`
   (a crate, barrel or fence first), `Wall` (map statics) or `Clear` (the
   target or another enemy first). The bot fires only on `Clear`.
-- `bots/team.rs` — `TeamBoard`, what a team knows on this AI tick. A
-  derived structure: it is not in the dump, `TanksSim::rebuild_team_boards`
-  rebuilds it every 0.1 s (before the bots' loop in `on_ai_tick`) and a
+- `bots/team.rs` — `TeamBoard`, what a team knows on this AI tick.
+  `TanksSim::rebuild_team_boards` rebuilds it every 0.1 s (before the
+  bots' loop in `on_ai_tick`); the boards go into the dump together with
+  the AI clock and the rebuild timer, since the focus and the roles are
+  held with hysteresis (`focus_since`, `roles_at`) — without them a restored
+  host would pick both anew (a dump without boards still loads, they are
+  rebuilt on the first AI tick). A
   bot gets its own team's board as `BotView::team`. Per team (by
   `team_id`): `members` — living tanks with a body, humans too, by id, with
   `strength` from the hull condition (3/2/1 → 1/0.6/0.3) and a bot's mode
@@ -1516,7 +1526,13 @@ Covered by `crate_on_conveyor`, `crate_hits_boost_once`,
   built-in SplitMix64 PRNG seeded from the config (`seed`), no
   `Math.random`;
 - a handoff dump restores the simulation bit-for-bit (locked in by the
-  `state_dump_restores_identical_simulation` tests in both Rust and JS).
+  `state_dump_restores_identical_simulation` tests in both Rust and JS;
+  with bots — by `bot_dump_restores_identical_simulation` and, with ten
+  bots, `bot_dump_restores_ten_bots_identically`). The dump goes through
+  JSON, whose object keys sort as strings (`1, 10, 2, …`), while tanks are
+  updated and fire in their map's order: `TanksDump` therefore writes its
+  maps (tanks, bots, shots, team boards) as `[key, value]` pairs
+  (`core/src/ordered_map.rs`); an older dump with objects still loads.
 
 ## Tests
 

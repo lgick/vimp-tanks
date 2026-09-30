@@ -252,7 +252,10 @@ npm registry, а не из workspace-симлинка).
 - `bot_skill_report` — сила пресетов (убийства, время убийства, меткость
   бота против неподвижного танка на 200/300/450 ед.):
   `cargo test -q -p vimp-tanks-core --test sim bot_skill_report -- --ignored --nocapture`.
-  После правки `coreParams.bots.presets` отчёт стоит прогнать до и после;
+  Секции `bots` в тестовом конфиге нет, поэтому отчёт меряет дефолты ядра
+  (`default_bot_presets` в `core/src/config.rs`): после правки
+  `coreParams.bots.presets` числа нужно перенести туда (этого и так требуют
+  фикстурные тесты) и прогнать отчёт до и после правки;
 - `replan_causes_report` — перестроения маршрута по ботам и причинам в
   матчах 4×4 из `bot_replans_are_bounded_*`:
   `cargo test -q -p vimp-tanks-core --test sim replan_causes_report -- --ignored --nocapture`.

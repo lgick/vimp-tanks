@@ -1,8 +1,9 @@
 //! Доска команды: где союзники (и боты, и люди), общий фокус, роли ботов,
-//! центр группы. Производная структура: в дамп не едет, пересобирается
-//! `TanksSim::rebuild_team_boards` раз в 0.1 с.
+//! центр группы. Пересобирается `TanksSim::rebuild_team_boards` раз в 0.1 с
+//! и едет в дамп: фокус и роли держатся с гистерезисом (`focus_since`,
+//! `roles_at`), без него восстановленный хост раздал бы их заново.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::brain::BotMode;
 use super::geom::dist;
@@ -17,14 +18,14 @@ const ROLES_INTERVAL: f32 = 2.0;
 const SUPPORT_HEALTH: f32 = 50.0;
 
 /// Роль бота в команде.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     Assault,
     Flanker,
     Support,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Member {
     pub id: u32,
     pub pos: [f32; 2],
@@ -57,9 +58,10 @@ pub(crate) struct BotInfo {
     pub sees: Vec<u32>,
 }
 
-/// Общие сведения команды на текущий тик ИИ. Производная структура: в дамп не
-/// едет, пересобирается `TanksSim::rebuild_team_boards` раз в 0.1 с.
-#[derive(Clone, Debug, Default)]
+/// Общие сведения команды на текущий тик ИИ. Пересобирается
+/// `TanksSim::rebuild_team_boards` раз в 0.1 с; едет в дамп вместе с часами
+/// ИИ (гистерезис фокуса и ролей).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamBoard {
     pub team: u8,
     /// По возрастанию id.

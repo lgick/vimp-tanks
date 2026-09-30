@@ -26,17 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   driving up or down a ramp that spans two levels.
 - A bot chasing a target that is half-way up or down a ramp spanning two
   levels no longer loses its route to it (the search failed, and the bot
-  stood waiting a second before trying again), and no longer takes such a
-  target for unreachable when choosing whom to attack.
+  stood waiting a second before trying again); when choosing whom to
+  attack it now weighs such a target by its real route instead of the
+  straight-line estimate, and a retreat point there is no longer skipped
+  as unreachable.
 - With many bots on the map, the bots updated last no longer wait
   noticeably longer than the others for their routes.
 - A retreating bot no longer stalls itself and the bots after it by
   re-costing unreachable retreat points on every tick: a pick is settled for
   a second once any candidate is costed.
 - Damage from a bot's own fall or bomb no longer makes an earlier attacker
-  "fresh" again, and the bomb's self-damage window now ends shortly after its
-  blast instead of a second later, so an enemy hitting the bot right after it
-  is blamed.
+  "fresh" again, and the bomb's self-damage window now covers only the moment
+  of its blast — not the fuse before it or a second after — so an enemy
+  hitting the bot around it is blamed.
+- A host handoff now carries the match on exactly: bots keep their team's
+  focus and roles instead of picking them anew, and with ten or more
+  players the tanks keep their update order (it changed, so a hit could
+  push a tank differently than on the old host).
 - With friendly fire on, a bot no longer drops a bomb while a teammate could
   drive into the blast before it goes off (before, only a teammate within
   one and a half blast radii counted).

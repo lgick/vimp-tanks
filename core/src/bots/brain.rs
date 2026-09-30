@@ -5,7 +5,7 @@ use super::aim::{fire_tolerance, Aim, PRE_AIMED_ANGLE};
 use super::geom::{angle_of, dist, dist_sq, normalize_angle, rotate};
 use super::keys::{HeldKey, KeyPad};
 use super::navigator::{
-    AvoidMark, NavParams, NavStatus, Navigator, REPLAN_CAUSES, Waypoint, flank_zone,
+    AvoidMark, NavParams, NavStatus, Navigator, ReplanCause, Waypoint, flank_zone,
 };
 use super::perception::{Contact, FireLine, Perception, fire_line};
 use super::profile::BotProfile;
@@ -41,6 +41,12 @@ const ENGAGE_RANGE_FACTOR: f32 = 1.3;
 /// Обидчик «свежий» (ему бот отвечает огнём за дистанцией боя), пока ранил
 /// бота не дольше стольких секунд назад.
 const RETALIATE_TIME: f32 = 3.0;
+/// Выбор цели: обидчик, ранивший бота не дольше стольких секунд назад, —
+/// вдвое приоритетнее.
+const ATTACKER_PRIORITY_TIME: f32 = 2.0;
+/// Выбор цели: обидчик, ранивший бота не дольше стольких секунд назад,
+/// перебивает удержание текущей цели (`TARGET_HOLD`).
+const ATTACKER_SWITCH_TIME: f32 = 1.0;
 /// `Engage` → `Hunt`: цель не видна дольше, с.
 const LOST_SIGHT_TIME: f32 = 1.0;
 /// `Engage` → `Hunt`: линия огня не чиста дольше, с.
@@ -252,12 +258,59 @@ pub struct BotStats {
     pub shots_fired: u32,
     pub watchdog_resets: u32,
     pub mode_changes: u32,
-    /// Перестроения маршрута по причинам (`ReplanCause as usize`).
+    /// Перестроения маршрута по причинам.
     #[serde(default)]
-    pub replan_causes: [u32; REPLAN_CAUSES],
+    pub replan_causes: ReplanCauses,
     /// Сколько раз поиск маршрута ждал общего бюджета (`plan` → `Waiting`).
     #[serde(default)]
     pub route_waits: u32,
+}
+
+/// Перестроения маршрута по причинам (`ReplanCause`), счётчик на причину.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplanCauses {
+    pub goal: u32,
+    pub moving: u32,
+    pub level: u32,
+    pub off_route: u32,
+    pub stall: u32,
+    pub retry: u32,
+    pub requested: u32,
+}
+
+impl ReplanCauses {
+    /// Учесть перестроение. `match` без `_`: новая причина не скомпилируется
+    /// без своего счётчика.
+    pub(crate) fn add(&mut self, cause: ReplanCause) {
+        let count = match cause {
+            ReplanCause::GoalMoved => &mut self.goal,
+            ReplanCause::MovingGoal => &mut self.moving,
+            ReplanCause::WrongLevel => &mut self.level,
+            ReplanCause::OffRoute => &mut self.off_route,
+            ReplanCause::Stall => &mut self.stall,
+            ReplanCause::Retry => &mut self.retry,
+            ReplanCause::Requested => &mut self.requested,
+        };
+
+        *count += 1;
+    }
+}
+
+impl std::fmt::Display for ReplanCauses {
+    /// `"goal 40, moving 55, …"` — для отчётов и сообщений тестов.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "goal {}, moving {}, level {}, off-route {}, stall {}, retry {}, requested {}",
+            self.goal,
+            self.moving,
+            self.level,
+            self.off_route,
+            self.stall,
+            self.retry,
+            self.requested
+        )
+    }
 }
 
 /// Снимок мозга бота для тестов и отладки.
@@ -769,10 +822,17 @@ impl BotBrain {
 
     /// Свежий урон — от себя: приземление после падения или своя бомба при
     /// огне по своим (взрыв через `fuse` после закладки). Обидчика у такого
-    /// урона нет.
+    /// урона нет. Урон во время запала — от врага: бомба ещё не взорвалась.
     fn self_inflicted_damage(&self, game: &BotView<'_>) -> bool {
+        // окно `SELF_DAMAGE_WINDOW` открывается через `delay` после `at`:
+        // клавиша срабатывает на следующем шаге, а запал округляется до шагов
+        // вверх, так что бомба взрывается не раньше
         let within = |at: Option<f32>, delay: f32| {
-            at.is_some_and(|at| self.clock - at < delay + SELF_DAMAGE_WINDOW)
+            at.is_some_and(|at| {
+                let since = self.clock - at;
+
+                since >= delay && since < delay + SELF_DAMAGE_WINDOW
+            })
         };
         let fuse = bomb_weapon(game).map_or(0.0, |bomb| bomb.fuse);
 
@@ -822,7 +882,7 @@ impl BotBrain {
                 };
             }
 
-            if contact.aiming_at_me || recent_attacker(contact.id, 2.0) {
+            if contact.aiming_at_me || recent_attacker(contact.id, ATTACKER_PRIORITY_TIME) {
                 score *= 0.5;
             }
 
@@ -861,7 +921,7 @@ impl BotBrain {
             self.perception.contact(target).is_some() && clock - self.target_since < TARGET_HOLD
         });
 
-        if holding && !recent_attacker(best_id, 1.0) {
+        if holding && !recent_attacker(best_id, ATTACKER_SWITCH_TIME) {
             return;
         }
 
@@ -1918,9 +1978,9 @@ impl BotBrain {
             level: me.level,
         };
         let ramp_ends = game
-            .tank_on_ramp(me.id)
-            .then(|| game.levels?.ramp_at(me_point.pos[0], me_point.pos[1]))
-            .flatten()
+            .levels
+            .filter(|_| game.tank_on_ramp(me.id))
+            .and_then(|levels| levels.ramp_at(me_point.pos[0], me_point.pos[1]))
             .map(|ramp| [ramp.from, ramp.to]);
         let mut status = None;
 
@@ -2640,7 +2700,7 @@ impl BotBrain {
             return false;
         }
 
-        if game.friendly_fire && ally_in_blast(game, me, &bomb) {
+        if game.friendly_fire && ally_in_blast(game, me, bomb) {
             return false;
         }
 
@@ -2794,21 +2854,21 @@ fn bomb_weapon(game: &BotView<'_>) -> Option<BombWeapon> {
 /// плюс путь на своей полной скорости за время до взрыва. Своя бомба при огне
 /// по своим ранила бы его. Плита моста взрыв экранирует — чужой уровень не в
 /// счёт.
-fn ally_in_blast(game: &BotView<'_>, me: &SelfState, bomb: &BombWeapon) -> bool {
+fn ally_in_blast(game: &BotView<'_>, me: &SelfState, bomb: BombWeapon) -> bool {
     let Some(team) = game.tank_team(me.id) else {
         return false;
     };
 
     game.tanks.iter().any(|(&id, tank)| {
-        let reach = bomb.radius + game.max_forward_speed(id) * bomb.fuse;
-
         id != me.id
             && tank.team_id == team
             && tank.is_alive()
             && game.tank_level(id) == me.level
-            && game
-                .tank_position_rounded(id)
-                .is_some_and(|pos| dist_sq(pos, me.pos_array()) < reach * reach)
+            && game.tank_position_rounded(id).is_some_and(|pos| {
+                let reach = bomb.radius + game.max_forward_speed(id) * bomb.fuse;
+
+                dist_sq(pos, me.pos_array()) < reach * reach
+            })
     })
 }
 
@@ -3576,6 +3636,12 @@ mod tests {
         fixture.friendly_fire = true;
         assert!(brain.self_inflicted_damage(&fixture.view()));
 
+        brain.bomb_dropped_at = Some(10.0 - 0.5 * fuse);
+        assert!(
+            !brain.self_inflicted_damage(&fixture.view()),
+            "запал ещё горит: урон — от врага"
+        );
+
         brain.bomb_dropped_at = Some(10.0 - fuse - 2.0 * SELF_DAMAGE_WINDOW);
         assert!(
             !brain.self_inflicted_damage(&fixture.view()),
@@ -4069,9 +4135,8 @@ mod tests {
         grid[0] = vec![1; 20];
         grid[19] = vec![1; 20];
 
-        for x in 5..=11 {
-            grid[5][x] = 1;
-            grid[11][x] = 1;
+        for y in [5, 11] {
+            grid[y][5..=11].fill(1);
         }
 
         let mut fixture = Fixture::new();
@@ -4097,7 +4162,8 @@ mod tests {
             );
         }
 
-        // тики ИИ по 2 поиска маршрута; вход в отход — выбор сразу
+        // тики ИИ по 2 поиска маршрута; вход в отход — выбор сразу. Через
+        // `drive_retreat`: когда выбирать точку, решает он
         brain.retreat_picked_at = brain.clock - RETREAT_REPICK;
 
         let mut spent = 0;
@@ -4105,10 +4171,7 @@ mod tests {
         for _ in 0..10 {
             fixture.route_budget = 2;
             brain.clock += 1.0 / 120.0;
-
-            if brain.retreat_pick_due() {
-                brain.pick_retreat_point(&mut fixture.view(), &me);
-            }
+            brain.drive_retreat(&mut fixture.view(), &me, 1.0 / 120.0);
 
             spent += 2 - fixture.route_budget;
         }

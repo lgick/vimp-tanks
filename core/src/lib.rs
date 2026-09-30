@@ -14,6 +14,7 @@ pub mod config;
 pub mod level;
 pub mod map_game;
 pub mod motion;
+mod ordered_map;
 pub mod props;
 pub mod shot_height;
 pub mod shot_levels;

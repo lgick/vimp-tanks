@@ -35,7 +35,7 @@ pub(crate) struct AvoidMark {
     pub ttl: f32,
 }
 
-/// Причина перестроения маршрута (счётчики `BotStats::replan_causes`, индекс — `as usize`).
+/// Причина перестроения маршрута (счётчики `BotStats::replan_causes`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ReplanCause {
     /// Новая цель, её сдвиг дальше 3 тайлов или смена уровня (`set_goal`).
@@ -54,9 +54,6 @@ pub(crate) enum ReplanCause {
     /// Запрос мозга (`request_replan`, выход из застревания).
     Requested,
 }
-
-/// Сколько причин у `ReplanCause`.
-pub(crate) const REPLAN_CAUSES: usize = 7;
 
 /// Результат шага навигатора.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,7 +372,7 @@ impl Navigator {
                 self.stall_time = 0.0;
                 self.lookahead_timer = 0.0;
                 stats.replans += 1;
-                stats.replan_causes[self.cause as usize] += 1;
+                stats.replan_causes.add(self.cause);
 
                 return NavStatus::Moving;
             }
@@ -404,7 +401,8 @@ impl Navigator {
 
     /// Стоимость маршрута до точки тем же запросом, что у `plan` (для выбора
     /// цели и точки отхода), с добавочными зонами `extra`. Стоит единицу
-    /// общего бюджета тика; `None` — бюджета нет, `Some(None)` — маршрута нет.
+    /// общего бюджета тика; `None` — бюджета нет, `Some(None)` — маршрута нет
+    /// (и без нав-графа — тогда бюджет не тратится).
     pub(crate) fn route_cost(
         &self,
         game: &mut BotView<'_>,
@@ -413,6 +411,10 @@ impl Navigator {
         params: &NavParams,
         extra: &[PenaltyZone],
     ) -> Option<Option<f32>> {
+        let Some(nav) = game.nav.as_ref() else {
+            return Some(None);
+        };
+
         if *game.route_budget == 0 {
             return None;
         }
@@ -420,8 +422,26 @@ impl Navigator {
         *game.route_budget -= 1;
 
         let start = on_ramp_end(game, start);
-        let end = on_ramp_end(game, end);
-        let nav = game.nav.as_ref()?;
+        let ramp_end = on_ramp_end(game, end);
+        // верхний конец прогона: клетки его уровня под серединой рампы нет —
+        // точка прижимается к ближайшей проходимой, как попытка (в) у `plan`
+        // (цепочки попыток здесь нет, а прижатие поиском не считается)
+        let end = if ramp_end.level != end.level
+            && !nav.is_walkable_on(ramp_end.level, ramp_end.pos[0], ramp_end.pos[1])
+        {
+            nav.nearest_walkable_on(
+                ramp_end.level,
+                ramp_end.pos,
+                params.hull_width,
+                4.0 * params.tile,
+            )
+            .map_or(ramp_end, |pos| PathPoint {
+                pos,
+                level: ramp_end.level,
+            })
+        } else {
+            ramp_end
+        };
         let zones = self.zones(extra);
         let query = path_query(params, &zones);
 
@@ -604,7 +624,9 @@ fn on_ramp_end(game: &BotView<'_>, me: PathPoint) -> PathPoint {
         return me;
     };
 
-    if me.level == ramp.from || me.level == ramp.to {
+    // только промежуточный уровень: у концов прогона он свой, а уровень выше
+    // прогона (мост над рампой) — не середина рампы
+    if me.level <= ramp.from.min(ramp.to) || me.level >= ramp.from.max(ramp.to) {
         return me;
     }
 
@@ -648,8 +670,19 @@ mod tests {
     }
 
     #[test]
-    fn replan_causes_count_matches_enum() {
-        assert_eq!(ReplanCause::Requested as usize + 1, REPLAN_CAUSES);
+    fn replan_causes_count_each_cause() {
+        let mut causes = crate::bots::brain::ReplanCauses::default();
+
+        causes.add(ReplanCause::WrongLevel);
+        causes.add(ReplanCause::WrongLevel);
+        causes.add(ReplanCause::Requested);
+
+        assert_eq!(causes.level, 2);
+        assert_eq!(causes.requested, 1);
+        assert_eq!(
+            causes.to_string(),
+            "goal 0, moving 0, level 2, off-route 0, stall 0, retry 0, requested 1"
+        );
     }
 
     #[test]
@@ -832,16 +865,26 @@ mod tests {
             );
         }
 
-        // стоимость (без цепочки попыток `plan`): точка в нижней половине
-        // прогона, её ближайший конец — уровень 0
-        let nav = Navigator::default();
-        let mut view = fixture.view();
+        // стоимость (без цепочки попыток `plan`): в нижней половине прогона
+        // ближайший конец — уровень 0, в верхней — уровень 2, точка на нём
+        // прижимается к проходимой клетке
+        for x in [709.5, 690.0] {
+            let nav = Navigator::default();
+            let mut view = fixture.view();
 
-        assert!(
-            nav.route_cost(&mut view, me, point(709.5, 274.8, 1), &params, &[])
-                .is_some_and(|cost| cost.is_some()),
-            "стоимость до цели посередине прогона не считается"
-        );
+            assert!(
+                nav.route_cost(&mut view, me, point(x, 274.8, 1), &params, &[])
+                    .is_some_and(|cost| cost.is_some()),
+                "стоимость до цели посередине прогона на x = {x} не считается"
+            );
+        }
+
+        // уровень выше прогона (мост над рампой) — не середина рампы
+        let view = fixture.view();
+        let above = point(709.5, 274.8, 3);
+
+        assert_eq!(on_ramp_end(&view, above).level, 3);
+        assert_eq!(on_ramp_end(&view, point(709.5, 274.8, 1)).level, 0);
     }
 
     #[test]

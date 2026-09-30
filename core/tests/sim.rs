@@ -18,8 +18,11 @@ const DT: f32 = 1.0 / 120.0;
 /// `{engine: {...}, game: {...}}` (PLAN.md §3.4) с одним и тем же объектом
 /// по обе стороны — каждая половина деэерилизует лишние для себя поля молча.
 fn config_json() -> String {
-    let flat = flat_config_json();
+    wrap_config(flat_config_json())
+}
 
+/// Плоский конфиг → `{engine: {...}, game: {...}}` с ним по обе стороны.
+fn wrap_config(flat: serde_json::Value) -> String {
     serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
 }
 
@@ -373,7 +376,7 @@ fn make_core_seeded(seed: u64) -> GameCore {
 
     flat["seed"] = serde_json::json!(seed);
 
-    GameCore::new(&serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()).unwrap()
+    GameCore::new(&wrap_config(flat)).unwrap()
 }
 
 fn steps(core: &mut GameCore, count: usize) {
@@ -708,6 +711,9 @@ fn duel_winner(
 /// Сиды дуэлей `hard_bots_beat_easy_bots_more_often`.
 const DUEL_SEEDS: [u64; 3] = [42, 7, 2026];
 
+/// Минимальная доля завершившихся дуэлей (победитель есть; замер: 36 из 36).
+const DUEL_DECIDED_SHARE: f32 = 0.8;
+
 /// Минимальная доля побед `hard` среди завершившихся дуэлей (замер: 32 из 36).
 const HARD_WIN_SHARE: f32 = 0.75;
 
@@ -749,8 +755,9 @@ fn hard_bots_beat_easy_bots_more_often() {
     }
 
     assert!(
-        decided >= 29,
-        "завершились {decided} дуэлей из 36: {results:?}"
+        decided as f32 >= DUEL_DECIDED_SHARE * results.len() as f32,
+        "завершились {decided} дуэлей из {}: {results:?}",
+        results.len()
     );
     assert!(
         hard_wins as f32 >= HARD_WIN_SHARE * decided as f32,
@@ -981,7 +988,7 @@ fn config_json_with_bullet(range: f32, impulse: f32) -> String {
     flat["weapons"]["w1"]["range"] = serde_json::json!(range);
     flat["weapons"]["w1"]["impulseMagnitude"] = serde_json::json!(impulse);
 
-    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+    wrap_config(flat)
 }
 
 /// Карта из map_json() с одним динамическим ящиком 32×32 в позиции (x, y).
@@ -1437,7 +1444,7 @@ fn config_json_with_landing_shake(min_impact: f32, full_impact: f32) -> String {
         "fullImpact": full_impact
     });
 
-    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+    wrap_config(flat)
 }
 
 /// Роняет танк с уровня 1 на землю и отдаёт тряски, случившиеся за падение.
@@ -3091,7 +3098,7 @@ fn make_core_with_held_boost() -> GameCore {
         "boostDv": 220, "boostMaxSpeed": 480, "minEntrySpeed": 20, "boostTime": 1.2, "boostSpeedFactor": 1.8
     });
 
-    GameCore::new(&serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()).unwrap()
+    GameCore::new(&wrap_config(flat)).unwrap()
 }
 
 /// Разгон по асфальту до полной скорости и въезд на поперечную полосу
@@ -3524,7 +3531,7 @@ fn config_json_with_body_state() -> String {
         flat["snapshot"]["keys"][key]["fields"] = fields.clone();
     }
 
-    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+    wrap_config(flat)
 }
 
 /// Конфиг с другим уроном взрыва бочки.
@@ -3533,7 +3540,7 @@ fn config_json_with_barrel_damage(damage: f64) -> String {
 
     flat["props"]["barrel"]["blast"]["damage"] = serde_json::json!(damage);
 
-    serde_json::json!({ "engine": flat.clone(), "game": flat }).to_string()
+    wrap_config(flat)
 }
 
 /// Байты состояния тел карты (`map_body_state` дампа).
@@ -4481,12 +4488,25 @@ fn spawn_bot_teams(core: &mut GameCore, map_json: &str, per_team: usize) -> Vec<
 
 /// То же, что `spawn_bot_teams`; `with_ai: false` — танки без ИИ.
 fn spawn_teams(core: &mut GameCore, map_json: &str, per_team: usize, with_ai: bool) -> Vec<(u32, u8)> {
+    spawn_teams_in_order(core, map_json, per_team, with_ai, [1, 2])
+}
+
+/// То же, что `spawn_teams`, команды спавнятся в порядке `order` (id — по
+/// порядку спавна).
+fn spawn_teams_in_order(
+    core: &mut GameCore,
+    map_json: &str,
+    per_team: usize,
+    with_ai: bool,
+    order: [u8; 2],
+) -> Vec<(u32, u8)> {
     let parsed: serde_json::Value = serde_json::from_str(map_json).unwrap();
     let scale = parsed["scale"].as_f64().unwrap() as f32;
     let mut bots = Vec::new();
 
-    for (team, key) in [(1u8, "team1"), (2u8, "team2")] {
-        let points = parsed["respawns"][key].as_array().unwrap();
+    for team in order {
+        let key = format!("team{team}");
+        let points = parsed["respawns"][key.as_str()].as_array().unwrap();
 
         assert!(points.len() >= per_team, "на карте мало респаунов {key}");
 
@@ -4627,27 +4647,6 @@ fn assert_use_levels(map: &'static str) {
     assert!(came_down, "{map}: ни один бот не спустился на уровень 0");
 }
 
-/// Имена причин перестроения в порядке `ReplanCause` (сам enum `pub(crate)`).
-const REPLAN_CAUSE_NAMES: [&str; 7] = [
-    "goal",
-    "moving",
-    "level",
-    "off-route",
-    "stall",
-    "retry",
-    "requested",
-];
-
-/// Причины перестроений бота строкой: `"goal 40, moving 55, …"`.
-fn causes(stats: &BotStats) -> String {
-    REPLAN_CAUSE_NAMES
-        .iter()
-        .zip(stats.replan_causes)
-        .map(|(name, count)| format!("{name} {count}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn assert_replans_bounded(map: &'static str) {
     let log = match_on(map);
     let minutes = log.seconds / 60.0;
@@ -4660,7 +4659,7 @@ fn assert_replans_bounded(map: &'static str) {
             replans as f32 <= 90.0 * minutes,
             "{map}: бот {id} перестроил маршрут {replans} раз за {} с ({})",
             log.seconds,
-            causes(&log.stats[log.index(id)])
+            log.stats[log.index(id)].replan_causes
         );
         assert!(
             (failures as f32) / (replans.max(1) as f32) < 0.1,
@@ -4747,16 +4746,20 @@ fn bot_match_is_deterministic() {
     assert_eq!(run(), run(), "два прогона матча разошлись");
 }
 
-#[test]
-fn bot_dump_restores_identical_simulation() {
-    let map = terraces_map_json();
+/// Матч ботов `per_team` на `per_team`, дамп на шаге `before` и
+/// восстановление в новом ядре: (исходное ядро, восстановленное, боты).
+fn dump_and_restore(
+    map: &str,
+    per_team: usize,
+    before: usize,
+) -> (GameCore, GameCore, Vec<(u32, u8)>) {
     let mut core = make_core();
 
     core.load_map(map).unwrap();
 
-    let bots = spawn_bot_teams(&mut core, map, 2);
+    let bots = spawn_bot_teams(&mut core, map, per_team);
 
-    steps(&mut core, 20 * 120);
+    steps(&mut core, before);
     core.pack_body().unwrap(); // дренаж накопителей перед дампом
     core.take_events();
 
@@ -4765,10 +4768,20 @@ fn bot_dump_restores_identical_simulation() {
 
     restored.deserialize_state(&dump).unwrap();
 
-    steps(&mut core, 20 * 120);
-    steps(&mut restored, 20 * 120);
+    (core, restored, bots)
+}
 
-    for &(id, _) in &bots {
+/// Оба ядра идут `count` шагов, боты в них совпадают побитово.
+fn assert_bots_stay_identical(
+    core: &mut GameCore,
+    restored: &mut GameCore,
+    bots: &[(u32, u8)],
+    count: usize,
+) {
+    steps(core, count);
+    steps(restored, count);
+
+    for &(id, _) in bots {
         assert_eq!(core.position_of(id), restored.position_of(id), "бот {id}");
         assert_eq!(
             core.state().sim.bot_debug(id).unwrap().mode,
@@ -4778,14 +4791,49 @@ fn bot_dump_restores_identical_simulation() {
     }
 }
 
-/// Ожидания общего бюджета поисков маршрута (`route_waits`) по порядку спавна.
-fn route_waits_downtown(per_team: usize, seconds: usize) -> Vec<u32> {
+#[test]
+fn bot_dump_restores_identical_simulation() {
+    let (mut core, mut restored, bots) = dump_and_restore(terraces_map_json(), 2, 20 * 120);
+
+    assert_bots_stay_identical(&mut core, &mut restored, &bots, 20 * 120);
+}
+
+#[test]
+fn bot_dump_restores_ten_bots_identically() {
+    // 5×5: id переходят через 9 → 10, а ключи JSON-объекта идут как строки
+    // (`1, 10, 2, …`) — порядок танков и ботов держит `ordered_map`. Дамп — на
+    // шаге, не кратном числу ботов (очередь `ai_turn` не с нуля), и посреди
+    // периода досок команд (гистерезис фокуса и ролей)
+    let (mut core, mut restored, bots) = dump_and_restore(downtown_map_json(), 5, 10 * 120 + 3);
+    let sim_dump = |core: &GameCore| {
+        let dump: serde_json::Value =
+            serde_json::from_slice(&core.serialize_state().unwrap()).unwrap();
+
+        dump["sim"].clone()
+    };
+
+    assert_eq!(
+        core.state().sim.ai_order(),
+        restored.state().sim.ai_order(),
+        "очередь бюджета маршрутов после восстановления другая"
+    );
+    assert!(
+        sim_dump(&core) == sim_dump(&restored),
+        "состояние игры после восстановления другое"
+    );
+
+    assert_bots_stay_identical(&mut core, &mut restored, &bots, 10 * 120);
+}
+
+/// Ожидания общего бюджета поисков маршрута (`route_waits`) по порядку
+/// спавна; команды спавнятся в порядке `order`.
+fn route_waits_downtown(per_team: usize, seconds: usize, order: [u8; 2]) -> Vec<u32> {
     let map = downtown_map_json();
     let mut core = make_core();
 
     core.load_map(map).unwrap();
 
-    let bots = spawn_teams(&mut core, map, per_team, true);
+    let bots = spawn_teams_in_order(&mut core, map, per_team, true, order);
 
     steps(&mut core, seconds * 120);
 
@@ -4796,18 +4844,29 @@ fn route_waits_downtown(per_team: usize, seconds: usize) -> Vec<u32> {
 
 #[test]
 fn route_budget_is_shared_fairly() {
-    // 5×5 на downtown, 30 с. Порядок обхода без очереди — порядок спавна:
-    // тогда вторая половина ждала вдвое дольше первой (65 против 32)
+    // 5×5 на downtown, 30 с, дважды: команды спавнятся в прямом и обратном
+    // порядке. Половины по спавну — это команды, поэтому перекос от карты в
+    // сумме двух прогонов гасится, а перекос от порядка обхода — нет. Без
+    // очереди (порядок спавна) последние ждали вдвое дольше: 122 против 58;
+    // с очередью — 94 против 89
     const K: f32 = 1.5;
 
-    let waits = route_waits_downtown(5, 30);
-    let (first, last) = waits.split_at(waits.len() / 2);
-    let first: u32 = first.iter().sum();
-    let last: u32 = last.iter().sum();
+    let mut first = 0;
+    let mut last = 0;
+    let mut runs = Vec::new();
+
+    for order in [[1, 2], [2, 1]] {
+        let waits = route_waits_downtown(5, 30, order);
+        let (head, tail) = waits.split_at(waits.len() / 2);
+
+        first += head.iter().sum::<u32>();
+        last += tail.iter().sum::<u32>();
+        runs.push((order, waits));
+    }
 
     assert!(
         last as f32 <= K * first.max(1) as f32,
-        "последние по порядку ждут бюджет дольше первых: {last} против {first}, по ботам {waits:?}"
+        "последние по порядку ждут бюджет дольше первых: {last} против {first}, по прогонам {runs:?}"
     );
 }
 
@@ -4910,6 +4969,8 @@ fn kill_run(skill: BotSkill, distance: f32, seed: u64) -> (Option<f32>, u32, u32
 
 /// Сила пресетов для подбора `coreParams.bots.presets`: бот против неподвижного
 /// танка человека на 200/300/450 ед., 8 сидов на дистанцию, не дольше 60 с.
+/// Секции `bots` в тестовом конфиге нет: меряются дефолты ядра
+/// (`default_bot_presets`), правку `game.js` сначала перенести туда.
 /// `cargo test -q -p vimp-tanks-core --test sim bot_skill_report -- --ignored --nocapture`
 #[test]
 #[ignore]
@@ -4961,8 +5022,7 @@ fn replan_causes_report() {
 
             println!(
                 "{map} бот {id} (команда {team}): всего {}; {}",
-                stats.replans,
-                causes(stats)
+                stats.replans, stats.replan_causes
             );
         }
     }

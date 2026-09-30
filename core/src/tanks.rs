@@ -313,14 +313,16 @@ pub struct TanksSim {
     bots: IndexMap<u32, BotBrain>,
     /// Правила ботов (coreParams.bots).
     bot_rules: BotRules,
-    /// Доски команд ботов по `team_id`. Производные: в дамп не едут,
-    /// пересобираются раз в 0.1 с (`rebuild_team_boards`).
+    /// Доски команд ботов по `team_id`, пересобираются раз в 0.1 с
+    /// (`rebuild_team_boards`). Едут в дамп: фокус и роли держатся с
+    /// гистерезисом по `ai_clock`.
     team_boards: IndexMap<u8, TeamBoard>,
-    /// Часы ИИ и таймер пересборки досок, с (после `deserialize` — с нуля).
+    /// Часы ИИ и таймер пересборки досок, с (едут в дамп вместе с досками).
     ai_clock: f32,
     team_timer: f32,
-    /// Очередь бюджета маршрутов: с какого бота начинается следующий тик ИИ.
-    /// Едет в дамп, иначе восстановленный хост пошёл бы с другого бота.
+    /// Очередь бюджета маршрутов (`ai_order`): с какого бота начинается
+    /// следующий тик ИИ. Едет в дамп, иначе восстановленный хост пошёл бы с
+    /// другого бота.
     ai_turn: u32,
 
     shots: IndexMap<u32, Bomb>,
@@ -809,12 +811,8 @@ impl GameSim<TanksGame> for TanksSim {
             self.rebuild_team_boards(ctx.world);
         }
 
-        let mut ids: Vec<u32> = self.bots.keys().copied().collect();
-        // очередь бюджета маршрутов: каждый тик первым ходит следующий бот, иначе
-        // первые по порядку всегда забирали бы весь бюджет
-        let first = self.ai_turn as usize % ids.len();
+        let ids = self.ai_order();
 
-        ids.rotate_left(first);
         self.ai_turn = self.ai_turn.wrapping_add(1);
 
         let mut route_budget = BOT_ROUTE_BUDGET_PER_TICK;
@@ -1028,6 +1026,9 @@ impl GameSim<TanksGame> for TanksSim {
             current_step_tick: self.current_step_tick,
             props: &self.props,
             ai_turn: self.ai_turn,
+            team_boards: &self.team_boards,
+            ai_clock: self.ai_clock,
+            team_timer: self.team_timer,
         };
 
         serde_json::to_value(dump).unwrap_or(serde_json::Value::Null)
@@ -1047,7 +1048,16 @@ impl GameSim<TanksGame> for TanksSim {
         self.props = dump.props;
         self.ai_turn = dump.ai_turn;
         self.pre_step_vel.clear();
-        self.reset_team_boards();
+
+        match dump.team_boards {
+            Some(boards) => {
+                self.team_boards = boards;
+                self.ai_clock = dump.ai_clock;
+                self.team_timer = dump.team_timer;
+            }
+            // дамп без досок: пересоберутся на первом тике ИИ
+            None => self.reset_team_boards(),
+        }
 
         self.new_tracers.clear();
         self.new_bombs.clear();
@@ -1107,8 +1117,24 @@ impl TanksSim {
         self.team_boards.get(&team).map(|board| board.role(id))
     }
 
-    /// Сброс досок команд и их часов: доски производные и пересоберутся на
-    /// первом тике ИИ.
+    /// Порядок обхода ботов на следующем тике ИИ: порядок карты со сдвигом
+    /// очереди бюджета маршрутов — каждый тик первым ходит следующий бот
+    /// (`ai_turn`), иначе первые по порядку всегда забирали бы весь бюджет.
+    /// Порядок карты переживает дамп (`ordered_map`).
+    pub fn ai_order(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.bots.keys().copied().collect();
+
+        if !ids.is_empty() {
+            let first = self.ai_turn as usize % ids.len();
+
+            ids.rotate_left(first);
+        }
+
+        ids
+    }
+
+    /// Сброс досок команд и их часов (смена карты, дамп без досок): доски
+    /// пересоберутся на первом тике ИИ, фокус и роли — заново.
     fn reset_team_boards(&mut self) {
         self.team_boards.clear();
         self.ai_clock = 0.0;
@@ -2247,20 +2273,32 @@ impl TanksSim {
 
 #[derive(Serialize)]
 struct TanksDump<'a> {
+    // карты — парами по порядку (`ordered_map`): танки обновляются и
+    // стреляют по порядку карты
+    #[serde(serialize_with = "crate::ordered_map::serialize")]
     tanks: &'a IndexMap<u32, Tank>,
+    #[serde(serialize_with = "crate::ordered_map::serialize")]
     bots: &'a IndexMap<u32, BotBrain>,
+    #[serde(serialize_with = "crate::ordered_map::serialize")]
     shots: &'a IndexMap<u32, Bomb>,
     shots_at_time: &'a Vec<Vec<u32>>,
     current_shot_id: u32,
     current_step_tick: usize,
     props: &'a Props,
     ai_turn: u32,
+    #[serde(serialize_with = "crate::ordered_map::serialize")]
+    team_boards: &'a IndexMap<u8, TeamBoard>,
+    ai_clock: f32,
+    team_timer: f32,
 }
 
 #[derive(Deserialize)]
 struct TanksDumpOwned {
+    #[serde(deserialize_with = "crate::ordered_map::deserialize")]
     tanks: IndexMap<u32, Tank>,
+    #[serde(deserialize_with = "crate::ordered_map::deserialize")]
     bots: IndexMap<u32, BotBrain>,
+    #[serde(deserialize_with = "crate::ordered_map::deserialize")]
     shots: IndexMap<u32, Bomb>,
     shots_at_time: Vec<Vec<u32>>,
     current_shot_id: u32,
@@ -2269,4 +2307,18 @@ struct TanksDumpOwned {
     props: Props,
     #[serde(default)]
     ai_turn: u32,
+    /// Доски команд с часами ИИ; `None` — дамп без них.
+    #[serde(default, deserialize_with = "deserialize_team_boards")]
+    team_boards: Option<IndexMap<u8, TeamBoard>>,
+    #[serde(default)]
+    ai_clock: f32,
+    #[serde(default)]
+    team_timer: f32,
+}
+
+/// `team_boards` дампа — парами по порядку (`ordered_map`); нет поля — `None`.
+fn deserialize_team_boards<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<IndexMap<u8, TeamBoard>>, D::Error> {
+    crate::ordered_map::deserialize(deserializer).map(Some)
 }
