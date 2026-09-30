@@ -155,8 +155,7 @@ export default {
     // после mapScale (максимальная скорость танка 130). damagedAt — доля HP,
     // ниже которой тело «повреждено» (0 — стадии нет); bulletFactor/
     // blastFactor — множители урона выстрела и взрыва; ramThreshold —
-    // скорость удара вдоль нормали, ниже которой таран урона не наносит
-    // (пороги — под потолок 130);
+    // скорость удара вдоль нормали, ниже которой таран урона не наносит;
     // ramDamagePerSpeed — урон за единицу превышения; chainDelay — задержка
     // детонации от чужого взрыва, с (обязательна при blast)
     props: {
@@ -165,24 +164,24 @@ export default {
         damagedAt: 0,
         bulletFactor: 1.0,
         blastFactor: 1.0,
-        ramThreshold: 30,
-        ramDamagePerSpeed: 1.0,
+        ramThreshold: 60,
+        ramDamagePerSpeed: 0.5,
       },
       crate: {
         hp: 120,
         damagedAt: 0.5,
         bulletFactor: 0.5,
         blastFactor: 1.5,
-        ramThreshold: 70,
-        ramDamagePerSpeed: 1.2,
+        ramThreshold: 140,
+        ramDamagePerSpeed: 0.6,
       },
       barrel: {
         hp: 40,
         damagedAt: 0,
         bulletFactor: 1.0,
         blastFactor: 1.0,
-        ramThreshold: 75,
-        ramDamagePerSpeed: 2.0,
+        ramThreshold: 150,
+        ramDamagePerSpeed: 1.0,
         chainDelay: 0.15,
         blast: { radius: 70, damage: 80, impulse: 2500000, cameraShake: { intensity: 30, duration: 400 } },
       },

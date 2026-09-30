@@ -310,14 +310,12 @@ A map may make some of its objects destructible:
 - **Fence** — little health: a bullet or ramming it at speed breaks it. The
   debris does not block the way.
 - **Crate** — sturdy: bullets do half damage, blasts one and a half. It shows
-  a "damaged" stage before it breaks; the debris does not block the way. A
-  ram at full speed damages a crate, a second one breaks it.
+  a "damaged" stage before it breaks; the debris does not block the way.
 - **Barrel** — little health; destroyed, it explodes: damage and a push around
   it and a camera shake. A barrel caught in another blast goes off after a
   short delay (0.15 s), so barrels standing together make a chain reaction.
   The blast does not care about teams, and a death from it counts as a
-  suicide — nobody gets the frag. Ramming a barrel at full speed blows it
-  up, and the blast hits the rammer too.
+  suicide — nobody gets the frag.
 
 Ramming counts only the impact speed along the contact at the moment it
 starts: driving into a fence at speed breaks it, pushing it slowly does not,

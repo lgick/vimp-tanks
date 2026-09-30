@@ -28,10 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A surface type whose `drag` is below `−damping.linear` of a model is now a
   config load error, as `angularDrag` already was: a negative total drag
   would accelerate the tank on its own (`TanksConfig::validate`).
-- Prop ramming is retuned for the slower tank: `ramThreshold` is halved and
-  `ramDamagePerSpeed` doubled, so a ram at the same share of top speed deals
-  the same damage as before — a barrel rammed at full speed explodes again and
-  a crate breaks on the second ram (`coreParams.props`, `src/config/game.js`).
 - `npm run dev` starts on the game's default map (`currentMap`, now
   `downtown`) instead of a hard-coded `pool mini`; `VITE_MAP` still picks
   another one (`src/standalone.js`).
