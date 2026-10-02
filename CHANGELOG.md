@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `gameConfig.lobbyInfo: 'map'`: the room's lobby card shows the current map
+  again on engines where the card text is set by the game. Older engines
+  ignore the field.
+- Chat texts for the engine's host-migration messages `s:7` ("Host
+  changed"), `s:8` ("You are no longer the host (connection lost)") and
+  `s:9`–`s:11` ("Host changed: the previous host was lagging / went
+  inactive / had a poor connection").
+- Chat texts for the engine's "Change host" vote notices `v:6`–`v:15`
+  ("Usage: /changehost" … "Host vote cancelled").
+- System message code `TIME_LEFT` (`t:0`, "Time left: {0}").
+
+### Changed
+
+- `/timeleft` answers with the `TIME_LEFT` code and `/mapname` with the
+  engine's `MAP_CURRENT` ("Current map: {0}") instead of a raw text.
+
 ## [0.22.16] - 2026-09-30
 
 ### Added

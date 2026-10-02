@@ -466,6 +466,11 @@ export default {
             '⚔️  {0} killed {1}', // 4
             '⚡ {0} joined the game', // 5
             '👋  {0} left the game', // 6
+            'Host changed', // 7
+            'You are no longer the host (connection lost)', // 8
+            'Host changed: the previous host was lagging', // 9
+            'Host changed: the previous host went inactive', // 10
+            'Host changed: the previous host had a poor connection', // 11
           ],
           // vote
           v: [
@@ -475,6 +480,16 @@ export default {
             'Voting is temporarily unavailable',
             'Vote passed',
             'Vote failed',
+            'Usage: /changehost', // 6
+            'You are the host — use “Hand over host” in the room menu', // 7
+            'No connection to the master server', // 8
+            'A host vote was held recently', // 9
+            'No other player can host', // 10
+            'A host vote is already in progress', // 11
+            'A host vote is not possible right now', // 12
+            'Vote to change host passed ({0}/{1})', // 13
+            'Vote to change host failed ({0}/{1})', // 14
+            'Host vote cancelled', // 15
           ],
           // map
           m: ['Current map: {0}', 'Next map: {0}'],
@@ -492,6 +507,8 @@ export default {
             '{0} bot(s) created',
             'All bots removed',
           ],
+          // time
+          t: ['Time left: {0}'],
         },
       },
     },

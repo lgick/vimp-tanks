@@ -43,9 +43,9 @@ describe('HostPlugin танков: поверхность', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it('systemMessages — игровая группа кодов b:*', () => {
+  it('systemMessages — игровые группы кодов b:* (боты) и t:* (время)', () => {
     for (const code of Object.values(hostPlugin.systemMessages)) {
-      expect(code.startsWith('b:')).toBe(true);
+      expect(/^[bt]:\d+$/.test(code)).toBe(true);
     }
   });
 

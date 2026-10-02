@@ -4,7 +4,8 @@
 // может делать разное или отсутствовать вовсе — танкам нужны все пять.
 //
 // Коды системных сообщений здесь движковые (RANK, COMMANDS_NOT_FOUND — группа
-// 'c'), тексты лежат в modules.chat.params.messages (src/config/client.js).
+// 'c', MAP_CURRENT — 'm') и свой TIME_LEFT (группа 't', ./systemMessages.js);
+// тексты лежат в modules.chat.params.messages (src/config/client.js).
 //
 // ctx — контекст меты движка: participants, chat, scripted, roundManager,
 // voteCoordinator, timerManager, playerDataSync, teams, spectatorTeam,
@@ -47,7 +48,7 @@ export const timeLeftCommand = {
   name: '/timeleft',
 
   handler(ctx, gameId) {
-    ctx.chat.pushSystemByUser(gameId, [
+    ctx.chat.pushSystemByUser(gameId, 'TIME_LEFT', [
       formatTime(ctx.timerManager.getMapTimeLeft()),
     ]);
   },
@@ -58,7 +59,9 @@ export const mapNameCommand = {
   name: '/mapname',
 
   handler(ctx, gameId) {
-    ctx.chat.pushSystemByUser(gameId, [ctx.roundManager.currentMap]);
+    ctx.chat.pushSystemByUser(gameId, 'MAP_CURRENT', [
+      ctx.roundManager.currentMap,
+    ]);
   },
 };
 

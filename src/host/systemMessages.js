@@ -1,4 +1,4 @@
-// Игровые коды системных сообщений танков (группа b:* — боты).
+// Игровые коды системных сообщений танков (группа b:* — боты, t:* — время).
 // Merge в движковый реестр через registerCodes; в этапе 6 приедут через
 // HostPlugin.systemMessages. Тексты шаблонов — на клиенте (конфиг чата).
 export default {
@@ -9,4 +9,6 @@ export default {
   BOT_REMOVED_FROM_TEAM: 'b:4', // All bots removed from {0}
   BOT_CREATED: 'b:5', // {0} bot(s) created
   BOT_REMOVED: 'b:6', // All bots removed
+
+  TIME_LEFT: 't:0', // Time left: {0} (/timeleft)
 };

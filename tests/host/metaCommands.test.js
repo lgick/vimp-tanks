@@ -46,20 +46,24 @@ describe('metaCommands', () => {
     );
   });
 
-  it('/timeleft форматирует остаток времени карты как mm:ss', () => {
+  it('/timeleft отвечает кодом TIME_LEFT с остатком карты как mm:ss', () => {
     const ctx = makeCtx();
 
     timeLeftCommand.handler(ctx, 'u', []);
 
-    expect(ctx.chat.pushSystemByUser).toHaveBeenCalledWith('u', ['01:05']);
+    expect(ctx.chat.pushSystemByUser).toHaveBeenCalledWith('u', 'TIME_LEFT', [
+      '01:05',
+    ]);
   });
 
-  it('/mapname отдаёт текущую карту', () => {
+  it('/mapname отвечает движковым кодом MAP_CURRENT', () => {
     const ctx = makeCtx();
 
     mapNameCommand.handler(ctx, 'u', []);
 
-    expect(ctx.chat.pushSystemByUser).toHaveBeenCalledWith('u', ['pool mini']);
+    expect(ctx.chat.pushSystemByUser).toHaveBeenCalledWith('u', 'MAP_CURRENT', [
+      'pool mini',
+    ]);
   });
 
   it('/rank отвечает лично игроку движковым кодом', () => {
