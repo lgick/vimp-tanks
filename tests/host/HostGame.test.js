@@ -303,14 +303,13 @@ describe.skipIf(!coreAvailable)("HostGame: эстафета Worker'ов (5.2)", 
     // заметный счёт — должен пережить эстафету
     host._stat.updateUser(p1, host._participants.get(p1).teamId, { score: 7 });
 
-    let meta = null;
-
-    host.requestHandoff(m => {
-      meta = m;
-    });
+    // мета отдаётся асинхронно — после финальной синхронизации профилей
+    const metaPromise = new Promise(resolve => host.requestHandoff(resolve));
 
     // граница раунда — единая воронка initiateNewRound
     host._roundManager.initiateNewRound();
+
+    const meta = await metaPromise;
 
     return { host, socket, core, meta, p1, p2, p3 };
   };
@@ -319,19 +318,25 @@ describe.skipIf(!coreAvailable)("HostGame: эстафета Worker'ов (5.2)", 
     const { host, meta, p1, p2, p3 } = await collectHandoffFixture();
 
     expect(meta).not.toBeNull();
-    expect(meta.version).toBe(3);
+    expect(meta.version).toBe(4);
+    expect(meta.kind).toBe('boundary');
+    expect(meta.mode).toBe('soft');
     expect(meta.gameId).toBe('tanks');
     expect(meta.seq).toBe(host._seq);
-    expect(meta.currentMap).toBe(host._roundManager.currentMap);
-    expect(meta.mapTimeLeft).toBeGreaterThan(0);
+    expect(meta.map.name).toBe(host._roundManager.currentMap);
+    expect(meta.map.data).toBeDefined();
+    expect(meta.timers.mapTimeLeft).toBeGreaterThan(0);
+    expect(typeof meta.localTokens).toBe('object');
 
     // переносятся только завершившие хендшейк люди и боты
-    const socketIds = meta.humans.map(h => h.socketId).sort();
+    const { humans, scripted, dropped } = meta.participants;
+    const socketIds = humans.map(h => h.socketId).sort();
 
     expect(socketIds).toEqual(['s1', 's2']);
-    expect(meta.humans.map(h => h.gameId).sort()).toEqual([p1, p2].sort());
-    expect(meta.humans.find(h => h.gameId === p3)).toBeUndefined();
-    expect(meta.scripted).toHaveLength(1);
+    expect(humans.map(h => h.gameId).sort()).toEqual([p1, p2].sort());
+    expect(humans.find(h => h.gameId === p3)).toBeUndefined();
+    expect(dropped).toContain(p3);
+    expect(scripted).toHaveLength(1);
 
     // игра остановлена: цикл, раунд, карта, idle
     expect(host._timerManager._hasTimer('gameLoop')).toBe(false);
@@ -407,7 +412,7 @@ describe.skipIf(!coreAvailable)("HostGame: эстафета Worker'ов (5.2)", 
   it('completeHandoff кикает не переподключившихся и стартует раунд', async () => {
     const old = await collectHandoffFixture();
     const meta = structuredClone(old.meta);
-    const botId = meta.scripted[0].gameId;
+    const botId = meta.participants.scripted[0].gameId;
 
     vi.resetModules();
 
@@ -429,7 +434,7 @@ describe.skipIf(!coreAvailable)("HostGame: эстафета Worker'ов (5.2)", 
 
     // карта продолжается с остатком времени, не заново
     expect(host._timerManager.getMapTimeLeft()).toBeLessThanOrEqual(
-      meta.mapTimeLeft,
+      meta.timers.mapTimeLeft,
     );
 
     socket.clear();
@@ -466,15 +471,29 @@ describe.skipIf(!coreAvailable)("HostGame: эстафета Worker'ов (5.2)", 
     );
   });
 
-  it('карта, ушедшая из каталога, валит init с внятной ошибкой', async () => {
+  it('карта, ушедшая из каталога, поднимается из JSON в мете', async () => {
     const old = await collectHandoffFixture();
     const meta = structuredClone(old.meta);
 
-    meta.currentMap = 'ghost-map';
+    meta.map.name = 'ghost-map';
+    vi.resetModules();
+
+    const { host } = await createHost({ opts: { handoff: meta } });
+
+    expect(host._roundManager.currentMap).toBe('ghost-map');
+    expect(host._roundManager.baseMapData).toEqual(meta.map.data);
+  });
+
+  it('карты нет ни в каталоге, ни в мете — init падает с внятной ошибкой', async () => {
+    const old = await collectHandoffFixture();
+    const meta = structuredClone(old.meta);
+
+    meta.map.name = 'no-such-map';
+    meta.map.data = null;
     vi.resetModules();
 
     await expect(createHost({ opts: { handoff: meta } })).rejects.toThrow(
-      /missing from catalog/,
+      /handoff map missing/,
     );
   });
 });
