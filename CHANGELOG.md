@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.17] - 2026-10-05
+
 ### Added
 
 - `gameConfig.lobbyInfo: 'map'`: the room's lobby card shows the current map
